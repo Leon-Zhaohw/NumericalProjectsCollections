@@ -1,0 +1,40 @@
+%DIRICHLET.DAT  data file for Dirichlet-boundary.
+% Input-file of boundary-elements for Dirichlet-boundary for mesh shown
+% in Fig. 7 of the paper "Matlab-Implementation of the Finite Element
+% Method in Elasticity" by J. Alberty, C. Carstensen, S. A. Funken, and
+% R. Klose.
+%
+% 1-node  /  2-node
+% 
+  3  175
+175   52
+ 52  176
+176   17
+ 17  181
+181   53
+ 53  182
+182    2
+  2  266
+266   78
+ 78  269
+269   26
+ 26  276
+276   81
+ 81  279
+279    1
+  7  465
+465  129
+129  460
+460   39
+ 39  443
+443  124
+124  436
+436    6
+  6  265
+265   77
+ 77  262
+262   25
+ 25  253
+253   74
+ 74  252
+252    5

@@ -1,0 +1,8 @@
+%NEUMANN.DAT  data file for Neumann-boundary.
+% Input-file of boundary-elements for Neumann-boundary for mesh shown in
+% Fig. 5 of the paper "Matlab-Implementation of the Finite Element Method
+% in Elasticity" by J. Alberty, C. Carstensen, S. A. Funken, and
+% R. Klose. 
+%
+% 1-node  /  2-node
+% 

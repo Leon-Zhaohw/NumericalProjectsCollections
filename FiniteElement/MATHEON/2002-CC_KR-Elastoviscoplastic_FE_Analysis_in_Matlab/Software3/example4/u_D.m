@@ -1,0 +1,10 @@
+function [W,M]=u_D(x,t)
+M=zeros(3*size(x,1),3);
+W=zeros(3*size(x,1),1);
+M(1:3:3*size(x,1)-2,1)=ones(size(x,1),1);
+M(2:3:3*size(x,1)-1,2)=ones(size(x,1),1);
+M(3:3:3*size(x,1),3)=ones(size(x,1),1);
+value=zeros(size(x,1),3);
+W(1:3:3*size(x,1)-2,1)=value(:,1);
+W(2:3:3*size(x,1)-1,1)=value(:,2);
+W(3:3:3*size(x,1),1)=value(:,3);

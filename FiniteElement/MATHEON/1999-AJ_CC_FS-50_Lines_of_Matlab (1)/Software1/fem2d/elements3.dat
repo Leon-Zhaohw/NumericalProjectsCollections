@@ -1,0 +1,10 @@
+% Input-file of triangles for mesh shown in Fig. 1 and Fig. 3 of  
+% the paper "Remarks around 50 lines of Matlab: Short finite element 
+% implementation" by J. Alberty, C. Carstensen and S. A. Funken.
+%
+% element-number  /  1-node  /  2-node  /  3-node
+%
+1      2      3      13
+2      3      4      13
+3      4      5	     15
+4      5      6	     15

@@ -1,0 +1,15 @@
+% Input-file of boundary-elements for Dirichlet-boundary mesh shown  
+% in Fig. 1 and Fig. 3 of the paper "Remarks around 50 lines of Matlab: 
+% Short finite element implementation" by J. Alberty, C. Carstensen 
+% and S. A. Funken.
+%
+% boundary-element  /  1-node  /  2-node  
+%
+1        3	 4 
+2        4	 5
+3	 7	 8 
+4	 8	 9 
+5	 9	10
+6       10	11
+7       11	12
+8       12	 1

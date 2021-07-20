@@ -1,0 +1,12 @@
+% Input-file of parallelograms for mesh shown in Fig. 1 and Fig. 3  
+% of the paper "Remarks around 50 lines of Matlab: Short finite  
+% element implementation" by J. Alberty, C. Carstensen and S. A. Funken.
+%
+% element-number  /  1-node  /  2-node  /  3-node  /  4-node
+%
+1      1      2     13   12
+2     12     13     14   11
+3     13      4     15   14
+4     11     14      9   10
+5     14     15      8    9
+6     15      6	     7    8
