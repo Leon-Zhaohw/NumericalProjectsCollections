@@ -1,0 +1,21 @@
+
+计算平板单元线性分布面载荷等效结点载荷的MATLAB程序函数Equivalent_Load_Thin_Plate：
+
+1.	syms   a  b  q1  q2  q3  q4
+2.	syms  x e  xi  ei 
+3.	g0=(1+xi*x)*(1+ ei*e)/4;
+4.	Ni=g0*(2+ xi*x + ei*e -x^2-e^2) /2;          %形函数，见式 （9.20）
+5.	Nxi=-b*ei*g0*(1-e^2) /2;
+6.	Nyi=a*xi*g0*(1-x^2) /2;
+7.	N=[Ni,  Nxi,  Nyi];
+8.	N1=(1-x)*(1-e)/4;
+9.	N2=(1+x)*(1-e)/4;
+10.	N3=(1+x)*(1+e)/4;
+11.	N4=(1-x)*(1+e)/4;
+12.	q=N1*q1+N2*q2+N3*q3+N4*q4;
+13.	G=transpose(N)*q;
+14.	Pe=int(int(G,x,-1,1),e,-1,1)*a*b ;           %积分函数
+15.	Pe=expand(Pe)                          %扩展函数
+16.	Pe=subs(Pe,{xi^2,ei^2},{1,1})
+17.	Pe=simple(Pe)
+

@@ -1,0 +1,52 @@
+本程序为求解平面桁架结构有限元方程功能函数
+
+1.	function U = Truss_Solve_Model(file_out,ZK,ZQ)
+2.	%  求解有限元模型,得到总的结点位移向量
+3.	% 输入参数：ZK----总刚， ZQ----总载荷向量, file_out结果输出文件
+4.	%  返回值：总的结点位移向量U, 支座反力R
+5.	global  E  nA  nd  ne  ng  A  X  Y  EL  BC  QJ    %定义全局变量
+6.	    U=zeros(2*nd,1); R=zeros(ng,1); CF= zeros(ng,2*nd);
+7.	 disp('   正在计算结点位移，请稍候... ... ') 
+8.	  for r=1:1:ng                          %  ng ——位移约束的个数；
+9.	     i0=2*BC(r,1)-BC(r,2);             %根据约束位置和方向，计算在总刚主对角线位置
+10.	      CF(r,:) = ZK(i0,:);                    %将总刚约束对应行的元素保存到临时数组中
+11.	     F(r,1)= ZQ(i0) ;                      %将总载荷向量约束对应行的元素保存到临时数组中
+12.	     ZK(i0,i0) = ZK(i0,i0)*1.0e20 ;         %总刚度矩阵主对角线元素乘以1.0e20
+13.	  end
+14.	      U = ZK\ZQ ;                  %求解方程组，ZK—总刚；ZQ—总载荷向量；总位移存于U向量
+15.	     R= CF*U - F ; 
+16.	    disp('     正在计算 支座约束反力，请稍候... ...     ')             
+17.	      fid=fopen(file_out,'wt');                               %打开存储计算结果的文件    
+18.	    fprintf(fid,'\n   平面桁架结构有限元分析结果 \n');                % 设定输出到文件
+19.	    fprintf(fid,'\n   桁架结构中：结点总数：%i， 杆件总数：%i， 杆件截面类型数： %i,   \n', nd,ne,nA); 
+20.	    fprintf(fid,'\n   结点位移计算结果 \n') ;               
+21.	    fprintf (fid,'    Node           Ux             Uy     \n');  
+22.	  for j=1:1:nd                                             %将结点位移计算结果存储到文件
+23.	      fprintf(fid,'%8i%20.6e%20.6e \n', j, U(2*j-1,1),U(2*j,1)) ;         
+24.	  end
+25.	    fprintf(fid,' \n        支座约束反力\n') ;                       %将支座反力存储到文件
+26.	    fprintf (fid,'\n    结点号   方向(1/x, 0/y)      大小  \n') ; 
+27.	   for j=1:1:ng                                        
+28.	      fprintf(fid,'%8i%8i %20.4f \n', BC(j,1),BC(j,2),R(j,1)); 
+29.	   end     
+30.	fd=100;                                              %以下显示变形图,初定变形显示比例为100倍
+31.	while fd>0                           
+32.	    figure('NAME','显示变形图')
+33.	    title( ['桁架结构变形图   变形放大系数为   ', num2str(fd)] );
+34.	    axis equal ;
+35.	    hold on; 
+36.	for i=1:nd
+37.	  X0(i)=X(i)+U(2*i-1,1)*fd;
+38.	  Y0(i)=Y(i)+U(2*i,1)*fd;
+39.	end
+40.	 for ie=1:1:ne                           %对单元循环
+41.	    i=EL(ie,1); j=EL(ie,2);                    %单元的2个结点
+42.	     plot([X(i),X(j)],[Y(i),Y(j)], '-');              %未变形结构用实线
+43.	     plot([X0(i),X0(j)],[Y0(i),Y0(j)], 'r--');           %变形后结构用红虚线
+44.	   end
+45.	 fd = input( sprintf( '现图形的变形比例为 %10.2f ,请输入新的比例系数，若不再调整请输入(-1）',fd) );
+46.	end
+47.	return
+
+
+     

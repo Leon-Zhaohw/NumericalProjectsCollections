@@ -1,0 +1,28 @@
+本程序为计算平面桁架结构总刚度矩阵功能函数
+
+
+1.	function ZK= Truss_Stiff_Matrix
+2.	% 计算平面桁架结构总刚度矩阵
+3.	%需要调用的函数：杆件长度及方位，杆单元刚度矩阵，
+4.	%返回量：总刚度矩阵ZK(2*nd,2*nd )
+5.	global  E  nA  nd  ne  ng  A  X  Y  EL  BC  QJ    %定义全局变量
+6.	ZK = zeros(2*nd,2*nd ) ;            % 结构的总刚度矩阵 
+7.	for ie=1:1:ne                                     %对单元循环
+8.	 i= EL(ie,1);  j= EL(ie,2) ;  n= EL(ie,3);          %前两个为杆元二结点号，第3个为杆件截面类别号
+9.	[L,c,s] = Bar_Length_Angle(X(i),Y(i),X(j),Y(j));      %调用函数，计算杆件长度及方位
+10.	 Ke =Bar_Element_Stiff(E,A(n),L, c,s);              % 调用函数，计算杆元在整体下下的单刚    
+11.	%  将单元刚度矩阵KE集成到整体刚度矩阵ZK
+12.	  for r=1:2
+13.	     i0=2* EL(ie,r);
+14.	     m0 = 2*r ;
+15.	   for s=1:2
+16.	      j0=2* EL(ie,s);
+17.	       n0 =2*s;
+18.	       ZK([i0-1,i0],[j0-1,j0]) = ZK([i0-1,i0],[j0-1,j0]) + Ke([m0-1,m0],[n0-1,n0]) ;
+19.	   end
+20.	  end
+21.	end
+22.	return
+
+
+     

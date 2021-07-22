@@ -1,0 +1,24 @@
+
+根据形函数推导薄板单元刚度子阵Kij的程序段Thin_Plate_Stiff_Matrix：
+1.	syms  nv   a  b  D  H                   
+2.	syms  x  e  xi  ei  xj  ej  x0  e0
+3.	Db=[1, nv, 0;  nv, 1, 0;  0, 0, (1-nv)/2]*D;    %薄板弹性矩阵
+4.	g0=(1+xi*x)*(1+ ei*e)/4;                   %平面问题矩形元的形函数
+5.	Ni=g0*(2+ xi*x + ei*e -x^2-e^2)/2;          %形函数，见式 （9.20）
+6.	Nxi=-b*ei*g0*(1-e^2) /2;
+7.	Nyi=a*xi*g0*(1-x^2) /2;
+8.	N1=[Ni,  Nxi,  Nyi];                    %结点i的形函数子阵，3×3
+9.	N2=subs(N1,{xi,ei},{xj,ej});              %替换函数：将N1中的下标i 替换为j
+10.	Bi=-[diff(N1,x,2)/a/a;  diff(N1,e,2)/b/b;  diff(diff(N1,x,1),e,1)/a/b*2];   %求导函数，几何矩阵
+11.	Bj=-[diff(N2,x,2)/a/a;  diff(N2,e,2)/b/b;  diff(diff(N2,x,1),e,1)/a/b*2] ;
+12.	G=transpose(Bi)*Db*Bj;
+13.	Kij=int(int(G,x,-1,1),e,-1,1) *a*b;            %积分函数，单刚子阵
+14.	Kij= subs(Kij,D,H) *a*b*60；              %引入系数H=D/(a*b*60)
+15.	Kij=expand(Kij) ；                        %扩展函数
+16.	Kij=subs(Kij, {xi^2,xj^2}, {1,1});            % xi^2=xj^2=1   
+17.	Kij=subs(Kij, {ei^2,ej^2}, {1,1});            % ei^2=ej^2=1
+18.	Kij=subs(Kij, {ej,xj}, {e0/ei,x0/xi})          % x0=xi* xj;  e0= ei*ej
+19.	Kij=simple(Kij)
+
+
+程序中，用变量x、e表示无量纲ξ、η ，字符变量xi、ei、xj、ej表示 ，x0=xi*xj，e0=ei*ej，即表示 ，nv为泊松比，D为板的抗弯刚度。

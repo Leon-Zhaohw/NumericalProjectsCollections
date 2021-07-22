@@ -1,0 +1,11 @@
+本程序为平面桁架结构的单元刚度矩阵函数
+
+
+1.	function Ke =Bar_Element_Stiff(E,Ai,L, c,s)
+2.	%计算杆元在平面整体坐标系下的单元刚度矩阵，Ke 4*4 
+3.	% 输入量：弹性模量E，杆件面积Ai，杆长L，方位c=cosα,s=sinα。 
+4.	Ke = [c*c,  c*s,  -c*c,  -c*s ;  c*s ,  s*s,  -c*s,  -s*s;     %按式（8.3.18）
+5.	     -c*c,  -c*s,  c*c,  c*s;   -c*s,  -s*s ,  c*s ,  s*s];
+6.	Ke = Ke*E*Ai/L;
+7.	return
+

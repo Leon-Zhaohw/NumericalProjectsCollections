@@ -1,0 +1,43 @@
+本程序是置“1”法解有限元方程
+
+1.	function U= Solve_1_Model(file_out,ndim,ZK,ZQ)
+2.	%  采用置“1”法解有限元方程，得到总的结点位移向量
+3.	% 输入参数：file_out,——与模型文件相应的txt计算结果输出文件名
+4.	% ndim-弹性体维数: 平面问题—2, 轴对称问题—2 , 空间问题—3； 
+5.	% ZK----总刚， ZQ----总载荷向量
+6.	%  返回值：总的结点位移向量 
+7.	 global  pm  nd ne ng  BC   %全局变量pm—问题属性，nd—结点总数，ng—约束总数，BC数组—边界条件    
+8.	     U=zeros(ndim*nd,1);
+9.	  [n1 n2]=size(BC);
+10.	     for r=1:1:ng
+11.	     i0= ndim *(BC(r,1)-1) + BC(r,2);    
+12.	       ZK(i0,:) = 0.0 ;  ZK(:,i0) = 0.0 ;   
+13.	      ZK(i0,i0) = 1.0 ;                     
+14.	      ZQ(i0,1)= 0.0;
+15.	      if  n2==3   &  BC(r,3)~=0      % 给定的位移为非零值
+16.	          ZQ(i0,1)= BC(r,3) ;                              
+17.	      end
+18.	   end
+19.	      disp('正在求解有限元方程，请稍候......') 
+20.	     U = ZK\ZQ ;             
+21.	     ty={'平面应力问题','平面应变问题','轴对称问题','空间问题'};  
+22.	       fid=fopen(file_out,'wt');
+23.	    fprintf(fid,'         有限元计算结果 \n');             
+24.	  fprintf(fid,' 问题属性：%s,   结点总数：%i，   单元总数：%i \n',ty{pm},nd,ne);
+25.	    fprintf(fid,'    结点位移计算结果 \n') ;               % 设定输出到文件    
+26.	    fprintf(fid,'\n    Node        Ux          Uy     \n') ;     
+27.	  for j=1:1:nd                                  %将结点位移计算结果存储到文件
+28.	      fprintf(fid,'\n %8i%20.6e%20.6e\n',j, U(2*j-1,1),U(2*j,1));               
+29.	  end
+30.	 return
+
+
+
+
+
+
+
+
+
+
+

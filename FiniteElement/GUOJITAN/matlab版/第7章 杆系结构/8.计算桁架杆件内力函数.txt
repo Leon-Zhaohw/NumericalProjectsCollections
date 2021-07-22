@@ -1,0 +1,30 @@
+本程序为平面桁架结构中计算杆件内力及变形率
+
+1.	function  Truss_Internal_Force(file_out,U)
+2.	%  求桁架结构杆件轴力、杆件伸长率、应力
+3.	%  输入参数：U----总的结点位移向量； file_out—字符串，预定存储计算结果的文件名
+4.	 global  E  nA  nd  ne  ng  A  X  Y  EL BC QJ   %定义全局变量
+5.	 fid=fopen(file_out,'at');            %在已有数据文件，追加存储计算结果的文件 ，“at”不能用“wt”
+6.	  ZL=zeros(2*ne,3);
+7.	  disp('   正在计算 杆件内力，请稍候... ...     ')     
+8.	 fprintf(fid,'\n          桁架结构杆件内力计算结果 \n')   
+9.	 fprintf(fid,'\n 杆件号       伸长率%%         应力         轴力    \n');
+10.	  for ie=1:1:ne                                     %对单元循环
+11.	   i= EL(ie,1);  j= EL(ie,2);  n= EL(ie,3);          %前两个为杆元二结点号，第3个为杆件截面积
+12.	[L,c,s] = Bar_Length_Angle(X(i),Y(i),X(j),Y(j));      %调用函数，计算杆件长度及方位
+13.	  ui=U(2*i-1,1)*c+U(2*i,1)*s;                             %沿杆元轴线方向位移
+14.	  uj=U(2*j-1,1)*c+U(2*j,1)*s; 
+15.	   du=(uj-ui)/L;
+16.	    ZL(ie,1)= du*100;                               %杆件伸长率（%）  
+17.	    ZL(ie,2)=du*E;                                  %杆件应力
+18.	    ZL(ie,3)= du*E*A(n);                             %杆件轴力
+19.	   fprintf(fid, '%8i%20.6e %20.6f%20.6e \n', ie, ZL(ie,:));              %输出格式
+20.	 end
+21.	  [yd,nyd]=max(ZL(:,2)); [yx,nyx]=min(ZL(:,2));          %杆件的最大应力、最小应力
+22.	  [zd,nzd]=max(ZL(:,3)); [zx,nzx]=min(ZL(:,3));         %杆件的最大轴力、最小轴力   
+23.	  fprintf(fid,'\n   杆件最大应力：%20.6f, 杆件号：%i, 最小应力：%20.6f, 杆件号：%i,    \n', yd,nyd, yx,nyx);
+24.	  fprintf(fid,'\n   杆件最大轴力：%20.6f, 杆件号：%i, 最小轴力：%20.6f, 杆件号：%i,    \n', zd,nzd, zx,nzx);
+25.	fclose all;
+26.	return
+
+     

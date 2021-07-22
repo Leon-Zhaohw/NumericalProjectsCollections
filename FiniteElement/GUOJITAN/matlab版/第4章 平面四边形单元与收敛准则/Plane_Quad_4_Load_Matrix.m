@@ -1,0 +1,142 @@
+
+
+function ZQ= Plane_Quad_4_Load_Matrix
+%高斯积分法计算平面四点等参元竖向重力等效结点载荷向量、组装总载荷向量；
+%返回量：体力的总载荷向量ZQ
+global  t0  lou  nd  ne  nj  nt md  mx   XY  EL  QJ TL QMD  QMX
+%全局变量： t0  lou ----实数： 厚度、密度；
+%   nd ne ng nj md mx----整数：结点数nd、单元数ne、约束总数ng、集中力个数nj、有表面力的结点个数md及线段个数mx
+%  XY、 EL----数组： 节点坐标、单元信息；
+ZQ = zeros(2*nd,1 ) ;      % 结构的总载荷列阵
+%step1：高斯积分法计算体力的等效结点载荷，并组装到总的载荷向量中
+if lou~=0  | nt~=0                                 %计算重力或存在体力的等效结点载荷
+    for ie=1:1:ne                                 %对单元循环
+        QE= zeros(8,1 ) ;
+        X0(1:4,1)=XY(EL(ie,1:4),1);         %将单元ie的4个结点x坐标值，赋予列向量X0(4)
+        Y0(1:4,1)=XY(EL(ie,1:4),2);         % y坐标值，赋予列向量Y0(4)
+        gx = [-0.577350269189626,  0.577350269189626] ;       % 2×2  高斯积分点和权系数
+        w = [1, 1] ;                     %将gs、w输入不同阶次数据，适用相应阶次高斯积分
+        n0=length(w);     %确定积分阶数，可根据w的元素个数，自行调整积分阶次
+        for i=1: n0
+            cxi= gx(i);
+            for j=1: n0
+                eta= gx(j);
+                N=[(1-cxi) *(1-eta),  (1+cxi) *(1-eta),  (1+cxi) *(1+eta),  (1-cxi)*(1+eta)]/4;
+                N_cxi = [-(1-eta),  (1-eta),  (1+eta),  -(1+eta)]/4;      %形函数对无量纲局部坐标偏导数
+                N_eta =[-(1-cxi),  -(1+cxi),  (1+cxi),  (1-cxi)]/4;
+                %  计算雅克比矩阵
+                JA =  [ N_cxi*X0,  N_cxi*Y0
+                    N_eta*X0,   N_eta*Y0 ];
+                %  计算雅克比行列式
+                dt=det(JA);
+                if lou~=0
+                    for r=1:1:4
+                        QE(2*r,1)= QE(2*r,1)-t0*lou*N(r)*dt *w(i)*w(j);       %一个高斯点的体力等效结点载荷
+                    end
+                end
+                if   nt~=0
+                    ih=EL(ie,5);
+                    LT(1:2,1)=TL(ih,1:2);
+                    for r=1:1:4
+                        QE((2*r-1):2*r,1)= QE((2*r-1):2*r,1)+ LT(1:2,1)*N(r)*dt *w(i)*w(j);       %一个高斯点的体力等效结点载荷
+                    end
+                end
+            end
+        end
+        for s=1:1:4
+            i0= 2*EL(ie,s);              %根据结点编号，确定重力在总载荷向量的位置（轴向）
+            j0=2*s;
+            ZQ((i0-1):i0,1) = ZQ((i0-1):i0,1) + QE((j0-1):j0,1);
+        end
+    end
+end
+
+%将结点集中力组装到总的载荷向量中
+% 集中力：QJ(:,1)作用的结点号， QJ(:,2)方向（x向—1，y向—2），QJ(:,3)大小
+if nj>0
+    for s=1:1:nj
+        i0=2*QJ(s,1);
+        ZQ(i0-1,1) = ZQ(i0-1,1) + QJ(s,2);
+        ZQ(i0,1) = ZQ(i0,1) + QJ(s,3);
+    end
+end
+% step3：计算线性分布压力的等效结点载荷，并组装到总的载荷向量中
+if  mx>0
+    mx1=0;mx2=0;mx3=0;
+    index = (QMX(:,3) ==1);              %将面力分类，有法向面力作用的边界
+    if  ~isnan(index)
+        QMX1=QMX(index,:);
+        [mx1,m0]=size(QMX1);              %法向面力作用边界的数量
+        row_index =( QMD(:,2) ==1);          %法向面力的结点
+        if ~isnan(row_index)
+            QMD1=QMD(row_index,:);
+            [md1,m0]=size(QMD1);               %有法向面力值的结点数量
+        else
+            disp('面力数据存在错误，缺少法向面力的结点值')
+        end
+    end
+    index = (QMX(:,3) ==2);              %有切向面力作用的边界
+    if  ~isnan(index)
+        QMX2=QMX(index,:);
+        [mx2,m0]=size(QMX2);               %切向面力作用边界的数量
+        row_index =( QMD(:,2) ==2);             %切向面力
+        if ~isnan(row_index)
+            QMD2=QMD(row_index,:);
+            [md2,m0]=size(QMD2);               %有切向面力值的结点数量
+        else
+            disp('面力数据存在错误，缺少切向面力的结点值')
+        end
+    end
+    index = (QMX(:,3) ==3);               %存在以坐标分量表示的斜向面力
+    if  ~isnan(index)
+        QMX3=QMX(index,:);
+        [mx3,m0]=size(QMX3);               %存在以坐标分量表示斜向面力的数量
+        row_index =( QMD(:,2) ==3);           %以坐标分量表示的斜向面力
+        if ~isnan(row_index)
+            QMD3=QMD(row_index,:);
+            [md3,m0]=size(QMD3);               %有斜向（体力分量）面力值的结点数量
+        else
+            disp('面力数据存在错误，缺少以面力分量表示的结点值')
+        end
+    end
+    
+    if  mx1>0
+        for s=1:1:mx1
+            i1=QMX1(s,1);i2= QMX1(s,2);
+            [Q1,Q2]=Equivalent_Nodal_Force_Surface(i1,i2,md1,QMD1,1);
+            ZQ([2*i1-1,2*i1],1) =  ZQ([2*i1-1,2*i1],1) + Q1;
+            ZQ([2*i2-1,2*i2],1) =  ZQ([2*i2-1,2*i2],1) + Q2;
+        end
+    end
+    if  mx2>0
+        for s=1:1:mx2
+            i1=QMX2(s,1);i2= QMX2(s,2);
+            [Q1,Q2]=Equivalent_Nodal_Force_Surface(i1,i2,md2,QMD2,2);
+            ZQ([2*i1-1,2*i1],1) =  ZQ([2*i1-1,2*i1],1) + Q1;
+            ZQ([2*i2-1,2*i2],1) =  ZQ([2*i2-1,2*i2],1) + Q2;
+        end
+    end
+    if  mx3>0                                    % nx3----有斜向线性分布表面力的线段个数
+        for s=1:1:mx3
+            i1=QMX3(s,1);i2= QMX3(s,2);
+            [Q1,Q2]=Equivalent_Nodal_Force_Surface(i1,i2,md3,QMD3,3);
+            ZQ([2*i1-1,2*i1],1) =  ZQ([2*i1-1,2*i1],1) + Q1;
+            ZQ([2*i2-1,2*i2],1) =  ZQ([2*i2-1,2*i2],1) + Q2;
+        end
+    end
+end
+return
+
+
+
+
+
+
+
+
+
+
+
+
+
+

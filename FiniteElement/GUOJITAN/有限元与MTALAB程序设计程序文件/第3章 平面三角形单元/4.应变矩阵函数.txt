@@ -1,0 +1,20 @@
+本程序为计算三角形单元几何矩阵B、面积A的函数
+
+1.	function [B, A] =  Plane_B3_Matrix( ie)
+2.	%  计算单元几何矩阵B、面积A
+3.	%  输入参数:ie ----  单元号,
+4.	%  返回量：几何矩阵B和三角形单元面积A    
+5.	 global  XY  EL       %全局变量：结点坐标、单元信息 
+6.	  i=EL(ie,1);j=EL(ie,2);m=EL(ie,3);       %单元的3个结点
+7.	    bi = XY(j,2) - XY(m,2); 
+8.	    bj = XY(m,2) - XY(i,2);
+9.	    bm = XY(i,2) - XY(j,2);
+10.	    ci = XY(m,1) - XY(j,1);
+11.	    cj = XY(i,1) - XY(m,1);
+12.	    cm = XY(j,1) - XY(i,1);
+13.	   A = (bj * cm - bm * cj )/2;            %单元面积
+14.	 B = [bi  0  bj  0  bm  0 ;               %几何矩阵
+15.	     0   ci  0  cj  0  cm ;
+16.	     ci  bi  cj  bj  cm  bm]/(2*A);          
+17.	 return
+

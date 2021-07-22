@@ -1,0 +1,21 @@
+本程序是计算主应力、Mises应力函数
+
+1.	function  Sig12 = Main_Strees(a1,a2,a3) 
+2.	%计算主应力、Mises应力
+3.	%输入量：3个应力分量---sigmx、sigmy、tauxy
+4.	%输出量：第一主应力、第二主应力、Mises应力
+5.	   b=sqrt((a1- a2)^2 + 4* a3^2 )/2;  
+6.	   Sig12(1) = (a1+a2)/2+b;                      %第一主应力
+7.	   Sig12(2) = (a1+a2)/2-b;                        %第二主应力
+8.	   Sig12(3) = sqrt(a1^2 + a2^2 -a1*a2 +3*a3^2);    % Mises应力，
+9.	  return
+
+
+
+
+
+
+
+
+
+

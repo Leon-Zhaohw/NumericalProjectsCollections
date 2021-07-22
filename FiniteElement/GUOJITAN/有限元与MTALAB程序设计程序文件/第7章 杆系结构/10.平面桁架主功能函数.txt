@@ -1,0 +1,14 @@
+本程序为平面桁架结构分析的主功能函数
+
+1.	function  Plane_Truss_Element
+2.	% 本程序应用杆单元分析平面桁架结构，确定各结点的位移、计算杆件轴力或应力、以及支座反力。
+3.	%  计算结果存储到文本文件（*.txt）。
+4.	% 调用6个功能函数：
+5.	   % [file_in,file_out] = File_Name ;       %输入文件名及计算结果输出文件名
+6.	   file_out='hengjia_RES.txt'
+7.	   Plane_Truss_Model                % 读入有限元模型数据并图形显示
+8.	   ZK= Truss_Stiff_Matrix;                 %计算结构总刚
+9.	  ZQ= Plane_Truss_LoadMatrix;              %计算总的载荷向量 
+10.	   U = Truss_Solve_Model(file_out,ZK,ZQ);      %求解有限元方程，得到结点位移
+11.	   Truss_Internal_Force(file_out,U);     %计算杆件内力及支座反力，并保存到文件中 
+12.	   end

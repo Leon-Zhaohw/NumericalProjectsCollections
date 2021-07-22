@@ -1,0 +1,9 @@
+本程序为平面桁架结构总的载荷向量
+
+1.	function ZQ =Plane_Truss_LoadMatrix
+2.	global  E  nA  nd  ne  ng  nj  A  X  Y  EL  BC  QJ    %定义全局变量
+3.	ZQ = zeros(2*nd,1 ) ;            % 结构的总刚度矩阵 
+4.	for s=1:1:nj                                   
+5.	i0=2*(QJ(s,1)-1)+QJ(s,2);                 %根据结点编号和方向，确定总载荷向量的位置                            
+6.	ZQ(i0,1) = ZQ(i0,1) + QJ(s,3);           %结点集中力的等效结点载荷  
+7.	end

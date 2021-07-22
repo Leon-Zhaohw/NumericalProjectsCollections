@@ -1,0 +1,12 @@
+本程序为平面桁架结构中计算杆元长度及方位
+
+
+1.	function [L,c,s] = Bar_Length_Angle(x1,y1,x2,y2)
+2.	 %计算杆元长度及方位
+3.	 % 输入二结点坐标值, (x1,y1)和(x2,y2)。
+4.	 %返回值：杆元长度L ，方位c=cosα,s=sinα 。 
+5.	  dx= x2-x1;   dy= y2-y1;
+6.	  L= sqrt(dx*dx+ dy*dy)  ;
+7.	 s= dy/L ;  c= dx/L;
+8.	  return
+

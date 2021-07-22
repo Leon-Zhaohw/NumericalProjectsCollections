@@ -1,0 +1,27 @@
+本程序为计算轴对称三角形单元几何矩阵B、形心坐标、面积A
+
+1.	function [B, rc, A] =  Axisym_B3_Matrix( ie)
+2.	%  采用形心法计算单元几何矩阵B、面积A，形心rc
+3.	%  输入参数: ie ——单元号
+4.	%返回量：几何矩阵B、形心rc、面积A，
+5.	% 全局变量
+6.	global    XY  EL   
+7.	
+8.	 i=EL(ie,1); j=EL(ie,2); m=EL(ie,3);        %单元的3个结点
+9.	  xi=XY(i,1); xj=XY(j,1); xm=XY(m,1);
+10.	  yi=XY(i,2); yj=XY(j,2); ym=XY(m,2);
+11.	ai= xj*ym - xm*yj;  aj=xm*yi - xi*ym;  am=xi*yj-xj*yi; 
+12.	bi = yj-ym;  bj = ym-yi;  bm = yi-yj;
+13.	ci = xm-xj;  cj = xi-xm;  cm = xj-xi;
+14.	rc=(xi+xj+xm)/3 ;
+15.	zc=(yi+yj+ym)/3 ;
+16.	gi= (ai+bi*rc+ci*zc)/rc ;
+17.	gj= (aj+bj*rc+cj*zc)/rc ;
+18.	gm= (am+bm*rc+cm*zc)/rc ;
+19.	A = (bj * cm - bm * cj)/2;             %单元面积
+20.	B = [bi  0  bj  0  bm  0 ;                       %几何矩阵
+21.	    gi  0  gj  0  gm  0 ; 
+22.	    0   ci  0  cj  0  cm ;
+23.	    ci  bi  cj  bj  cm  bm]/(2*A); 
+24.	return
+

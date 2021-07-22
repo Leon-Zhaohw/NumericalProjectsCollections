@@ -1,0 +1,20 @@
+1.0 1.0 8 1.0 0.7  !Heat inflow, conductivity, number of points (P,Q), radius RQ, radius RP
+18                 ! Number of internal points
+0. -5.             !x, y
+0. -4.5            !x, y
+0. -4.             !etc.
+0. -3.5
+0. -3.
+0. -2.5
+0. -2.
+0. -1.5
+0. -1.
+0. 1.
+0. 1.5
+0. 2.
+0. 2.5
+0. 3.
+0. 3.5
+0. 4.
+0. 4.5
+0. 5.

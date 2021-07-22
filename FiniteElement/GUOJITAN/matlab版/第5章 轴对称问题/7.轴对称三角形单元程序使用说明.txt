@@ -1,0 +1,17 @@
+轴对称三角形单元程序使用说明：
+
+ 主功能函数名：“Axisymmetric_Tri_3_Element”
+ 该函数为简版轴对称三角形程序，具有计算结点位移、单元应力，并将结果输出到文本文件。
+
+1. 自行定义结果文件名及路径
+   结果文件名可在“Axisymmetric_Tri_3_Element”函数中第一行修改，        如：'zhouduichensjxdy_RES.txt'，可以加路径，
+    若不加路径默认在调用函数所在的目录下生成结果文件。
+
+2.模型数据以函数文件形式“ Axisym_Tri3_Model_Data ”
+   在执行主功能函数之前，先打开“  Axisym_Tri3_Model_Data ”函数，按实际模型数据修改相应内容数据。
+
+3.点击:“Axisymmetric_Tri_3_Element”
+ 
+
+4.查看结果文件 
+

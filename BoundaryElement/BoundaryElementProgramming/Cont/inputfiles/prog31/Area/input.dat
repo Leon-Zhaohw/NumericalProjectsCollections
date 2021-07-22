@@ -1,0 +1,8 @@
+2 4 1 1		       ! dimension, nr. of Nodes of element,nr of elements, integration order
+1 2 3 4		       !incidencies
+0.0 0.0 0.0	       !coordinates x,y,z of first node
+3.0 0.0 0.0	       !all other nodes
+4.0 5.0 0.0
+0.0 3.0 0.0
+
+

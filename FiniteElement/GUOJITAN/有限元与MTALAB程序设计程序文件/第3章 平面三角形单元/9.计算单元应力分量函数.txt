@@ -1,0 +1,81 @@
+本程序是计算单元应力分量及主应力、Mises应力
+
+1.	function Stress_nd = Plane_Tri_Strees(file_out,U)
+2.	%  求单元应力分量及主应力、Mises应力
+3.	%  输入参数：U----总的结点位移向量； file_out—字符串，存储计算结果的文件名
+4.	% 返回量：绕点平均后的结点应力分量、主应力、Mises应力
+5.	 global pm E nv t0  lou nd ne ng nj    XY EL    BC  QJ    
+6.	%全局变量：结点数、单元数、结点坐标、单元信息 、弹性矩阵 
+7.	     fid=fopen(file_out,'at');                %打开并追加存储应力计算结果的文件   
+8.	    %计算单元应力
+9.	  Stress = zeros(ne,6);         
+10.	  AA=zeros(ne,1);              
+11.	   ES=zeros(3,1);              
+12.	   De=zeros(6,1);             
+13.	fprintf(fid,'\n          单元应力计算结果 \n') ;  
+14.	fprintf(fid,'\n Element    sigx        sigy         tau         sig1         sig3         Mises \n'); 
+15.	  D = Elastic_Matrix (pm, E, nv);
+16.	 for ie=1:1:ne
+17.	      for r=1:1:3                               
+18.	       i0=2* EL(ie,r);r2=2*r;
+19.	       De([r2-1,r2],1)=U([i0-1,i0],1); 
+20.	      end
+21.	
+22.	   [B, A] =  Plane_B3_Matrix( ie);           
+23.	   AA(ie,1)=A;
+24.	   S = D * B ;                                    
+25.	   ES=S*De  ;                      
+26.	   Stress(ie,1:3)=ES(1:3,1);                        
+27.	    Sig12 = Main_Strees(ES(1,1),ES(2,1),ES(3,1)); 
+28.	     Stress(ie,4:6) = Sig12(1:3);                      
+29.	   fprintf(fid,[repmat('%5d ', 1, 1) repmat('%12.4f ',1,6)],ie, Stress(ie,:));  
+30.	  fprintf(fid,' \n');  
+31.	 end  
+32.	  fprintf(fid,' \n  应力结果统计分析 \n'); 
+33.	  s_Max=max(Stress);
+34.	  fprintf(fid,[repmat('%s ', 1, 1) repmat('%12.4f ',1,6)],'最大值', s_Max);     %输出应力各个量的最大值
+35.	  fprintf(fid,' \n'); 
+36.	   s_Min=min(Stress);
+37.	  fprintf(fid,[repmat('%s ', 1, 1) repmat('%12.4f ',1,6)],'最小值', s_Min);     %输出应力各个量的最小值
+38.	  fprintf(fid,' \n'); 
+39.	 
+40.	  %计算绕结点的应力，以下部分可调用函数Node_Stress(Stress，AA)实现
+41.	fprintf(fid,'\n          绕结点应力计算结果 \n')  ; 
+42.	fprintf(fid,'Node    sigx        sigy         tau         sig1         sig3         Mises \n'); 
+43.	 Stress_nd = zeros(nd,6 ) ;           
+44.	   for  i=1:1:nd                                
+45.	     Sd = zeros( 1, 3 ) ;                        
+46.	     A_tol = 0 ;
+47.	   for ie=1:1:ne
+48.	     for k=1:1:3
+49.	        if EL(ie,k) == i                    
+50.	           Sd = Sd + Stress(ie, 1:3 ) * AA(ie); 
+51.	           A_tol = A_tol + AA(ie);
+52.	        end
+53.	      end
+54.	    end
+55.	      Stress_nd(i,1:3) = Sd / A_tol ;             
+56.	      Sig12 = Main_Strees(Stress_nd(i,1),Stress_nd(i,2),Stress_nd(i,3));
+57.	      Stress_nd(i,4:6) = Sig12(1:3);                             
+58.	     fprintf(fid,[repmat('%5i ', 1, 1) repmat('%12.4f ',1,6)],i,Stress_nd(i,:));
+59.	     fprintf(fid,' \n');
+60.	   end
+61.	      fprintf(fid,' \n  绕点平均应力结果统计分析 \n');
+62.	     s_Max=max(Stress_nd);
+63.	  fprintf(fid,[repmat('%s ', 1, 1) repmat('%12.4f ',1,6)],'最大值', s_Max);     %结点应力各个量的最大值
+64.	  fprintf(fid,' \n'); 
+65.	  s_Min=min(Stress_nd);
+66.	  fprintf(fid,[repmat('%s ', 1, 1) repmat('%12.4f ',1,6)],'最小值', s_Min);     %结点应力各个量的最小值
+67.	  fprintf(fid,' \n');
+68.	 
+69.	fclose all;
+70.	return
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,35 @@
+本程序为计算轴对称问题总刚度矩阵
+
+1.	function ZK= Axisym_Tri_Stiff_Matrix
+2.	% 计算轴对称三角元刚度矩阵，并组装为总刚度矩阵
+3.	% 调用函数Axial_B_Matrix：计算轴对称三角元几何矩阵、面积、形心rc 
+4.	%返回量：总刚度
+5.	global pm E nv  lou nd ne  XY  EL  
+6.	  %组装轴对称问题的矩阵ZK
+7.	%全局变量：
+8.	 D = [1-nv  nv  nv  0 ;   nv  1-nv  nv  0 ;
+9.	       nv  nv  1-nv  0 ;  0  0  0  (1-2*nv)/2]; 
+10.	  D =D*E/(1+nv)/(1-2*nv);
+11.	  ZK = zeros(2*nd,2*nd ) ;             % 存储结构的总刚度矩阵
+12.	for ie=1:1:ne                           %对单元循环
+13.	  [B, rc, A] =  Axisym_B3_Matrix( ie) ;     %调用函数，计算单元几何矩阵B及面积A、形心rc       
+14.	  S = D * B  ;                                    %应力矩阵
+15.	  KE = 2*pi*rc*A*transpose(S)*B ;                       %单元刚度矩阵
+16.	%  把单元刚度矩阵KE集成到整体刚度矩阵ZK
+17.	   for r=1:1:3
+18.	      i0=2*( EL(ie,r)-1);
+19.	     for s=1:1:3
+20.	      j0=2*( EL(ie,s)-1);
+21.	        for p=1:1:2
+22.	        for q=1:1:2
+23.	            m0 = (r-1)*2+p ;
+24.	            n0 = (s-1)*2+q ;
+25.	            ZK(i0+p,j0+q) = ZK(i0+p,j0+q) + KE(m0,n0) ;
+26.	        end
+27.	        end
+28.	     end
+29.	  end
+30.	end
+31.	return
+
+
