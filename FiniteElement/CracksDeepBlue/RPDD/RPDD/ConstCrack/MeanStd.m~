@@ -1,0 +1,18 @@
+function [X_mean, X_Std]=MeanStd(Xmarg, X_R)
+
+X_Rmid=[(X_R(2:end-1)+X_R(1:end-2))/2 X_R(end-1)];
+
+X_mean=sum(X_Rmid.*Xmarg');
+
+
+
+std_da_DDNeil(t)= (sum(da_Rmid.^2.*damarg_DDNeil{t}')-mu_da_DDNeil(t)^2);
+at_Rmid=[(at_R{t}(2:end-1)+at_R{t}(1:end-2))/2 at_R{t}(end-1)];
+mu_at_DDNeil(t)=sum(at_Rmid.*atmarg_DDNeil{t}');
+sigma2_at_DDNeil(t)=(sum(at_Rmid.^2.*atmarg_DDNeil{t}')-mu_at_DDNeil(t)^2);
+M_Rmid=[(M_R{t}(2:end-1)+M_R{t}(1:end-2))/2 M_R{t}(end-1)];
+mu_M_DDNeil(t)=sum(M_Rmid.*Mmarg_DDNeil{t}');
+sigma2_M_DDNeil(t)=(sum(M_Rmid.^2.*Mmarg_DDNeil{t}')-mu_M_DDNeil(t)^2);
+Iatc=find(at_R{t}==atc);
+FailProb_DDNeil(t)=sum(atmarg_DDNeil{t}(Iatc:end));
+Beta_DDNeil(t)=-norminv(FailProb_DDNeil(t));   

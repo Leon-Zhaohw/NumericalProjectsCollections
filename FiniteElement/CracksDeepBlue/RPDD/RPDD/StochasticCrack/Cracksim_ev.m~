@@ -1,0 +1,171 @@
+ %function Cracksim_ev
+clear all;
+clc;
+format long e
+T=50;
+
+%Choose if want to add the Measurement nodes(1) or not(2)
+MeasureNode=1;
+
+%Inspection DATA[slice;Crack Length]
+Inspect=[ 20 30;
+          1 15];
+
+%Choose slices to cal marginal prob. slices should be different with
+
+numnodes=4;
+
+ev=cell(1,T*numnodes);
+%Insert the evidence
+InpSize=size(Inspect);
+for i=1:InpSize(2)
+   ev{Inspect(1,i)*numnodes}=Inspect(2,i);
+end
+
+
+DeltaN=1E4; 
+DeltaS=60;
+m=3.59;
+C=1.42E-8/1000^(3.59/2);
+ac=60;
+%alphaY node
+alphaY_mean=1E4;
+alphaY_std=1E4;
+%Y node
+Y_mean=1.2;
+Y_std=1;
+%a node
+a0_mean=1;
+%M node
+M_sigma=2;
+
+%alphaY_R=[0 10.^(1:0.1:6)];
+alphaY_R=[0 10^1:(10^6-10^1)/6:10^6];
+Y_R=[0.0:3:15 inf];
+
+%at_R=[0 exp(log(0.01):(log(ac)-log(0.01))/300:log(ac)) inf];
+at_R=[0:ac/4:ac inf];
+TotalIter=14;
+DDFlag=1;
+disp('Static Bayesian Network Inference, has measure nodes')
+atAdd=[];
+atMerg=[];
+YAdd=[];
+YMerg=[];
+alphaYAdd=[];
+alphaYMerg=[];
+for Iter=1:TotalIter
+    disp('********************* DD Algorithm **********************');
+    at_R=DDStep(atAdd, atMerg,at_R);
+    Y_R=DDStep(YAdd, YMerg,Y_R);
+    alphaY_R=DDStep(alphaYAdd,alphaYMerg,alphaY_R);
+    LalphaY(Iter)=length(alphaY_R)-1
+    LY(Iter)=length(Y_R)-1
+    Lat(Iter)=length(at_R)-1
+    figure(2)
+    subplot(TotalIter,1,Iter);
+    DDCheck(at_R);
+    title('discretization of at');
+    figure(3)
+    subplot(TotalIter,1,Iter);
+    DDCheck(Y_R);
+    title('discretization of Y');
+    figure(4)
+    subplot((TotalIter+mod(TotalIter,2))/2,2,Iter);
+    DDCheck(alphaY_R);
+    title('discretization of alphaY');
+    [SBNengine alphaY_CPD Y1_CPD Ytc_CPD a1_CPD at_CPD M_CPD]=Crack_SBNengine_M(T,alphaY_R,Y_R,at_R,alphaY_mean,alphaY_std,Y_mean,Y_std,a0_mean,M_sigma,DeltaN,DeltaS,m,C,ac);
+    ev_R=FindInt(at_R,ev);
+    [SBNengine_ev, loglik_ev] = enter_evidence(SBNengine, ev_R);
+    alphaYmarg_Jtree=zeros(LalphaY(Iter),T);
+    Ymarg_Jtree=zeros(LY(Iter),T);
+    atmarg_Jtree=zeros(Lat(Iter),T);
+    Mmarg_Jtree=zeros(Lat(Iter),T);
+    for t=1:T
+        marg_ev=marginal_nodes(SBNengine_ev,t*4-3);
+        alphaYmarg_Jtree(:,t)=marg_ev.T;
+        marg_ev=marginal_nodes(SBNengine_ev,t*4-2);
+        Ymarg_Jtree(:,t)=marg_ev.T;
+        marg_ev=marginal_nodes(SBNengine_ev,t*4-1);
+        atmarg_Jtree(:,t)=marg_ev.T;
+        marg_ev=marginal_nodes(SBNengine_ev,t*4);
+        if length(marg_ev.T)==1
+            marg_ev.T=zeros(Lat(Iter),1);
+        end
+        Mmarg_Jtree(:,t)=marg_ev.T;
+    end
+
+    FailProb_Jtree(:,Iter)=atmarg_Jtree(end,:);
+    Beta_Jtree=norminv(FailProb_Jtree(:,Iter));
+    %Beta_Jtree(Inspect(1,:))=0;
+    figure(1)
+    plot(1:T,Beta_Jtree,'--b'); 
+    hold on
+    load Beta_JtreeFine.mat;
+    plot(1:T,Beta_JtreeFine,'-r'); 
+    BetaError_DD(Iter)=sum(abs(Beta_JtreeFine-Beta_Jtree))
+    if DDFlag==1
+        atmarg2_Jtree=cell(1);
+        Ymarg2_Jtree=cell(1);
+        alphaYmarg2_Jtree=cell(1);
+        Count1=1;
+        for t=!
+            ev2=ev_R;
+            ev2{1,t*4}=Lat(Iter);
+            [engine_ev,loglik_ev]=enter_evidence(SBNengine,ev2);
+            Count2=1;
+            Count3=1;
+            for tt=1:t
+                if tt<=t
+                    marg_ev=marginal_nodes(engine_ev,tt*4-2);
+                    Ymarg2_Jtree{Count1}(:,Count3)=marg_ev.T;
+                    marg_ev=marginal_nodes(engine_ev,tt*4-3);
+                    alphaYmarg2_Jtree{Count1}(:,Count3)=marg_ev.T;
+                    Count3=Count3+1;
+                end
+                if  tt<=t
+                    marg_ev=marginal_nodes(engine_ev,tt*4-1);
+                    atmarg2_Jtree{Count1}(:,Count2)=marg_ev.T;
+                    Count2=Count2+1;
+                end
+            end
+            Count1=Count1+1;
+        end
+
+        %%%%%%%%%%%%%%%%%%%%%% partition step %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ 
+        [alphaYAdd_Smooth alphaYE_Smooth]=AddStep_Smooth(alphaYmarg2_Jtree);
+        [YAdd_Smooth YE_Smooth]=AddStep_Smooth(Ymarg2_Jtree);
+        [atAdd_Smooth atE_Smooth]=AddStep_Smooth(atmarg2_Jtree);
+        [YAdd_Predict YE_Predict atAdd_Predict atE_Predict]=AddStep_Predict(atmarg_Jtree,Ymarg_Jtree,at_CPD,T);
+        atAdd_Smooth=sort(unique(atAdd_Smooth),'ascend')
+        atAdd_Predict=sort(unique(atAdd_Predict),'ascend')
+        atError_Smooth(Iter)=max(atE_Smooth)
+        atError_Predict(Iter)=max(atE_Predict)
+        atError(Iter)=max(atE_Smooth(1:end-1)+atE_Predict(1:end-1))
+        atAdd=[atAdd_Predict atAdd_Smooth];
+        atMerg=[];        
+        YAdd_Smooth=sort(unique(YAdd_Smooth),'ascend')
+        YAdd_Predict=sort(unique(YAdd_Predict),'ascend')        
+        YAdd=[YAdd_Predict YAdd_Smooth];
+        YError_Smooth(Iter)=max(YE_Smooth(1:end-1))
+        YError_Predict(Iter)=max(YE_Predict(1:end-1))
+        YError(Iter)=max(YE_Smooth(1:end-1)+YE_Predict(1:end-1))
+        alphaYAdd=[alphaYAdd_Smooth];
+        atAdd=sort(unique(atAdd),'ascend');
+        if atAdd(end)==Lat(Iter)
+            atAdd(end)=[];
+        end  
+        YAdd=sort(unique(YAdd),'ascend')
+        if YAdd(end)==LY(Iter)
+            YAdd(end)=[];
+        end  
+        alphaYMerg=[];  
+        alphaYAdd=sort(unique(alphaYAdd),'ascend')
+        if alphaYAdd(end)==LalphaY(Iter)
+            alphaYAdd(end)=[];
+        end    
+    
+    end
+end
+

@@ -1,0 +1,138 @@
+clc
+clear all
+format long
+% T is the time slice
+T=20;
+% mean and std value of initial crak size
+mu_a0=7;
+sigma_a0=3;
+% mean and std of da
+mu_da=1;
+sigma_da=0.3;
+% measurment error
+sigma_error=2;
+atc=30;
+
+% Inspection data
+% [t1 Cracksize1]
+ Evidence=[5 10;
+           10 14
+           15 25];
+
+% discretization range for at and da
+
+daLimit=5;
+atLimit=50;
+Lda=4;
+Lat=4;
+LM=4;
+
+TotalIter=9;
+
+% Initial discretization
+% the discretization limit for at, different with atc which is the
+% critical crack size;
+da_R_Init=[0:daLimit/(Lda-1):daLimit inf];
+at_R_Init=[0:atc/(Lat-1):atc atc+atc/(Lat-1):atc/(Lat-1):atLimit inf];
+M_R_Init=[0:atc/(Lat-1):atc inf];
+
+% Bayesian Linear Regression Method
+load FailProb_BLR
+ %[FailProb_BLR mu_at_BLR sigma2_at_BLR mu_da_BLR sigma2_da_BLR]=ConstCrack_BLR(Evidence,T,mu_a0,sigma_a0,mu_da,sigma_da,sigma_error,atc)
+Beta_BLR=-norminv(FailProb_BLR);
+% Kalman Smoother 
+load FailProb_KS
+%[FailProb_KS mu_at_KS sigma2_at_KS]=ConstCrack_KF(Evidence,T,mu_a0,sigma_a0,mu_da,sigma_da,sigma_error,atc)
+
+da_R_myDD=da_R_Init;
+at_R_myDD=at_R_Init;
+M_R_myDD=M_R_Init;
+da_R_myDDKL=da_R_Init;
+at_R_myDDKL=at_R_Init;
+M_R_myDDKL=M_R_Init;
+for t=1:T
+    da_R_DDNeil{t}=da_R_Init;
+    at_R_DDNeil{t}=at_R_Init;
+    M_R_DDNeil{t}=M_R_Init;
+end
+a0_R_DDNeil=at_R_Init;
+
+for Iter=1:TotalIter
+    Iter    
+    Lda(Iter)=length(da_R_myDD)-1;
+    Lat(Iter)=length(at_R_myDD)-1;
+    LM(Iter)=length(M_R_myDD)-1;
+    disp('**** RPDD ****');
+    time0=cputime;
+    [damarg_myDD, atmarg_myDD, Mmarg_myDD, da_R_myDD2, at_R_myDD2, M_R_myDD2]=ConstCrack_myDD (mu_a0, sigma_a0, mu_da, sigma_da, sigma_error,Evidence, atc,T, da_R_myDD,at_R_myDD,M_R_myDD);
+    time_RPDD(Iter)=cputime-time0
+   
+
+    damarg_CellmyDD{Iter}={damarg_myDD};
+    atmarg_CellmyDD{Iter}={atmarg_myDD};
+    Mmarg_CellmyDD{Iter}={Mmarg_myDD};
+    da_R_CellmyDD{Iter}={da_R_myDD};
+    at_R_CellmyDD{Iter}={at_R_myDD};
+    M_R_CellmyDD{Iter}={M_R_myDD}; 
+    
+    da_R_myDD=da_R_myDD2;
+    at_R_myDD=at_R_myDD2;
+    M_R_myDD=M_R_myDD2;  
+    for t=1:T
+        Beta_myDD(t)=ReliabIndex(atmarg_CellmyDD{Iter}{1}(:,t),at_R_CellmyDD{Iter}{1},atc);
+    end   
+    BetaError_myDD(Iter)=sum(abs(Beta_BLR-Beta_myDD))/T;
+end
+for Iter=1:20 
+    disp('**** Uniform ****');
+    Lda_Unif(Iter)=Iter*10;
+    Lat_Unif(Iter)=Iter*10;
+    da_R_Unif=[0:daLimit/(Lda_Unif(Iter)-1):daLimit inf];
+    at_R_Unif=[0:atLimit/(Lat_Unif(Iter)-1):atLimit inf];
+    [V Iatc]=min(abs(at_R_Unif-atc));
+    at_R_Unif(Iatc(1))=atc;     
+    M_R_Unif=[at_R_Unif(1:Iatc(1)) inf];
+    time0=cputime;
+    [damarg_Unif, atmarg_Unif, Mmarg_Unif]=ConstCrack_Unif(mu_a0, sigma_a0, mu_da, sigma_da, sigma_error,Evidence, atc, T,da_R_Unif, at_R_Unif,M_R_Unif);
+    time_Unif(Iter)=cputime-time0
+    damarg_CellUnif{Iter}={damarg_Unif};
+    atmarg_CellUnif{Iter}={atmarg_Unif};
+    Mmarg_CellUnif{Iter}={Mmarg_Unif};
+    da_R_CellUnif{Iter}={da_R_Unif};
+    at_R_CellUnif{Iter}={at_R_Unif};
+    M_R_CellUnif{Iter}={M_R_Unif};    
+    for t=1:T
+        Beta_Unif(t)=ReliabIndex(atmarg_CellUnif{Iter}{1}(:,t),at_R_CellUnif{Iter}{1},atc);
+    end
+    
+    BetaError_Unif(Iter)=sum(abs(Beta_BLR-Beta_Unif))/T;   
+    
+end
+
+
+%% Plot the Beta Error
+h2=figure('visible','off'); 
+hold on;
+plot(Lat,log10(BetaError_myDD),'--sr','linewidth',2);
+plot(Lat_Unif(1:18),log10(BetaError_Unif),'--<b','linewidth',2);
+legend('RPDD','Uniform');
+xlabel('Number of intervals for A_t','fontsize',15)
+ylabel('log_1_0(\epsilon_\beta)','fontsize',15);
+set(gca,'fontsize',15)
+grid on 
+saveas(h2,'figures/ConstCrackBetaError4Time','fig');
+print(h2,'-depsc','figures/ConstCrackBetaError.eps');
+
+
+
+
+
+
+
+
+
+
+
+
+
+

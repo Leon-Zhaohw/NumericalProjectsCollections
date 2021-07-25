@@ -1,0 +1,53 @@
+C Copyright (c) 2014 David Patrick Hodapp
+C
+C Permission is hereby granted, free of charge, to any person obtaining a copy
+C of this software and associated documentation files (the "Software"), to deal
+C in the Software without restriction, including without limitation the rights   
+C to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+C copies of the Software, and to permit persons to whom the Software is
+C furnished to do so, subject to the following conditions:
+C
+C The above copyright notice and this permission notice shall be included in
+C all copies or substantial portions of the Software.
+C
+C THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+C IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+C FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+C AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+C LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+C OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+C THE SOFTWARE.
+C
+      REAL(KIND=8) FUNCTION CALC_DADN(KMAX,KMIN,KOP)
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC     
+C     PURPOSE:
+C     CALCULATE THE CYCLE-BY-CYCLE CRACK GROWTH RATE ACCORDING TO A 
+C     ZERO THRESHOLD MODIFIED PARIS LAW.
+C
+C     PARAMETERS:
+C     - KMAX: CYCLE MAXIMUM STRESS INTENSITY [MPa-m^(1/2)]
+C     - KMIN: CYCLE MINIMUM STRESS INTENSITY [MPa-m^(1/2)]
+C     - KOP:  CURRENT (i) INCREMENT OPENING STRESS INTENSITY [MPa-m^(1/2)]
+C     OUTPUT:
+C     - DADN: CRACK GROWTH [m] ASSOCIATED W/ INPUT PARAMETERS
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+C
+      IMPLICIT NONE
+C
+C     DECLARE CALLING PARAMETERS
+      REAL(KIND=8), INTENT(IN)  :: KMAX,KMIN,KOP
+C
+C     DECLARE LOCAL VARIABLES
+C     **PARIS LAW COEFFICIENT/1000, DADN [m/CYCLE]    
+      REAL(KIND=8), PARAMETER :: C=2.7E-12
+      REAL(KIND=8), PARAMETER :: M=3.8
+C
+      IF (KOP.LE.KMIN) THEN
+         CALC_DADN=C*(KMAX-KMIN)**M
+      ELSEIF (KOP.GE.KMAX) THEN
+         CALC_DADN=0.0
+      ELSE
+         CALC_DADN=C*(KMAX-KOP)**M
+      END IF
+C
+      END FUNCTION

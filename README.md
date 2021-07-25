@@ -18,9 +18,15 @@ GUOJIATONG
 
 《有限元与MTALAB程序设计程序文件》这本书的源代码
 
+cracksDeepBlue
+
+包括efficient optimization of reliability-constrained structural design problems including interval uncertainty以及Source code for proposed Multi-Scale FEM Crack Growth model 以及Software code for A dynamic discretization method for reliability inference in dynamic bayesian networks的源码
+
 ### BoundaryElement
 
 BoundaryElementProgramming
 
 The Boundary Element Method with Programming这本书的源代码
+
+### FluidSolidInteraction
 

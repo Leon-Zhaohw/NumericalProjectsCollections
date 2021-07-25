@@ -1,0 +1,18 @@
+Iter=14;
+Lda(Iter)=111;
+Lat(Iter)=146;
+da_R_Unif=[0:daLimit/(Lda(Iter)-1):daLimit inf];
+at_R_Unif=[0:atLimit/(Lat(Iter)-1):atLimit inf];
+[V Iatc]=min(abs(at_R_Unif-atc));
+at_R_Unif(Iatc(1))=atc;     
+M_R_Unif=[at_R_Unif(1:Iatc(1)) inf];
+time0=cputime;
+[damarg_Unif, atmarg_Unif, Mmarg_Unif]=ConstCrack_Unif(mu_a0, sigma_a0, mu_da, sigma_da, sigma_error,Evidence, atc, T,da_R_Unif, at_R_Unif,M_R_Unif);
+time_Unif(Iter)=cputime-time0;
+
+for t=1:T
+    Beta_Unif(t)=ReliabIndex(atmarg_Unif,at_R_Unif,atc);
+end
+BetaError_Unif(Iter)=sum(abs(Beta_BLR-Beta_Unif))/T;
+log10(BetaError_Unif)
+    

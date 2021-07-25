@@ -1,0 +1,18 @@
+1. To run the code, Matlab BNT toolbox must be included in the path. This can be downloaded at https://code.google.com/p/bnt/
+
+2. The stochastic crack growth model
+
+3. Running file lists:
+
+StochasticCrack_RUN.m: Run file for the stochastic crack growth model
+
+This run file inculdes following main function calls:
+
+
+StochasticCrack_myDD.m: major running file for proposed RPDD algorithm
+
+StochasticCrack_Unif_Log.m: stochastic crack growth model using uniform and logarithmic interval for comparision purposes. 
+
+StochasticCrack_myDDKL.m: stochastic crack growth model with proposed RPDD algorithm but have KL error judgement. 
+
+If you have any problem of running this code, please contact Jiandao Zhu (jiandaoz@gmail.com)

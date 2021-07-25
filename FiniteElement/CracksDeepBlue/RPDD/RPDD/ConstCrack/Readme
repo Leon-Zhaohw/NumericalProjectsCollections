@@ -1,0 +1,24 @@
+1. To run the code, Matlab BNT toolbox must be included in the path. This can be downloaded at https://code.google.com/p/bnt/
+
+2. This is the code for constant crack growth model by using RPDD
+
+3. Running file lists:
+
+ConstCrack_RUN.m: Run file for the constant crack growth model
+
+This run file inculdes following main function calls:
+
+Constcrack_BLR.m constant crack growth model solved by Bayesian linear regression
+
+ConstCrack_KF.m: Constant crack growth model solved by Kalman filter
+
+ConstCrack_myDD.m: major running file for proposed RPDD algorithm
+
+ConstCrack_Unif.m: Constant crack growth model using uniform interval for comparision purposes. 
+
+ConstCrack_DDNeil.m: Constant crack growth model by using Neil's dynamic discretization with no merge operations
+
+ConstCrack_myDDKL.m: Constant crack growth model with proposed RPDD algorithm but have KL error judgement. 
+
+
+If you have any problem of running this code, please contact Jiandao Zhu (jiandaoz@gmail.com)

@@ -1,0 +1,8 @@
+X1=[0:0.1:2]; P1=[]; N1=1; %(A) 
+X2=[ 0 1 2]; P2=[.3 .5 .2]; N2=1; %(B) 
+[S,P,C]=sumpdf(X1,P1,N1,X2,P2,N2); 
+subplot(2,1,1), plot(S,P), grid on 
+title('Probability distribution of total value') 
+subplot(2,1,2), plot(S,C), grid on 
+title('Number of combinations possible to obtain each outcome') 
+
