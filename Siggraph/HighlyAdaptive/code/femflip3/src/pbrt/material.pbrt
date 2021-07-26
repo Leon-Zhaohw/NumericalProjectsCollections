@@ -1,0 +1,3 @@
+#Material "matte" "color Kd" [.2 .2 .8 ]
+#Material "glass" "float index" [1.33] "color Kr" [1 1 1] "color Kt" [1 1 1] 
+Material "uber" "color Kd" [.2 .3 .8 ] "color Ks" [.05 .05 .05]

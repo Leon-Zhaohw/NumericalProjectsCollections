@@ -1,0 +1,5 @@
+Include "env.pbrt"
+
+WorldBegin
+
+Include "attributes.pbrt"

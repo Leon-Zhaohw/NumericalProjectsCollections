@@ -1,0 +1,13 @@
+#!/bin/bash
+
+BUILD_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+MAIN_DIR=$BUILD_DIR/..
+EXTERNAL_DIR=$BUILD_DIR/external
+BIN_DIR=$EXTERNAL_DIR/bin
+
+pushd $MAIN_DIR
+$BIN_DIR/configure-build -t Debug -p $EXTERNAL_DIR
+$BIN_DIR/configure-build -t Release -p $EXTERNAL_DIR
+popd
+
+

@@ -22,6 +22,10 @@ cracksDeepBlue
 
 包括efficient optimization of reliability-constrained structural design problems including interval uncertainty以及Source code for proposed Multi-Scale FEM Crack Growth model 以及Software code for A dynamic discretization method for reliability inference in dynamic bayesian networks的源码
 
+jburkardt
+
+https://people.sc.fsu.edu/~jburkardt/m_src/
+
 ### BoundaryElement
 
 BoundaryElementProgramming
@@ -30,3 +34,24 @@ The Boundary Element Method with Programming这本书的源代码
 
 ### FluidSolidInteraction
 
+
+
+### Siggraph
+
+Highly Adaptive Liquid Simulations on Tetrahedral Meshes
+
+
+
+### Gemotry
+
+BlueNoiseSampling
+
+http://graphics.uni-konstanz.de/publikationen/index.html#y2005
+
+Blue Noise Sampling With Controlled Aliasing
+
+### 未成功下载
+
+http://barbic.usc.edu/vega/form.php?VegaFEM-v3.1.zip
+
+姓名要填 anonymous

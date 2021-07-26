@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<scene version="0.4.0">
+	<integrator type="photonmapper"/>
+	<sensor type="perspective" id="Camera-camera">
+		<string name="fovAxis" value="smaller"/>
+		<float name="focusDistance" value="6.0"/>
+		<float name="fov" value="28.8415"/>
+		<transform name="toWorld">
+			<lookAt target="2.7, -3.0, 2.6" origin="3.4, -3.5, 3.1" up="0, 0, 1"/>
+		</transform>
+
+		<sampler type="ldsampler">
+			<integer name="sampleCount" value="64"/>
+		</sampler>
+
+		<film type="hdrfilm" id="film">
+			<integer name="width" value="1280"/>
+			<integer name="height" value="720"/>
+			<string name="pixelFormat" value="rgb"/>
+			<boolean name="banner" value="false"/>
+			<rfilter type="gaussian"/>
+		</film>
+	</sensor>
+	
+	<shape type="sphere">
+		<point name="center" x="3" y="3" z="5"/>
+		<float name="radius" value=".05"/>
+		
+		<emitter type="area">
+			<rgb name="radiance" value="30000, 30000, 30000"/>
+		</emitter>
+	</shape>
+
+	<bsdf type="diffuse" id="__diffmat">
+		<rgb name="reflectance" value="0.18 0.18 0.18"/>
+	</bsdf>
+	
+	<shape type="ply" id="liquid">
+		<string name="filename" value="88_scene.ply"/>
+		<integer name="shapeIndex" value="1"/>
+		<transform name="toWorld">
+			<scale value="3.0"/>
+			<translate y="-2.5" x="-2" z="-.2"/>
+			<rotate z="1" angle="45"/>
+		</transform>
+		
+		<medium type="homogeneous" name="interior">
+			<rgb name="sigmaS" value="0, 0, 0"/>
+			<rgb name="sigmaA" value="0.4, 0.4, 0.2"/>
+		</medium>
+		
+		<bsdf type="dielectric" id="mat_glass">
+			<float name="intIOR" value="1.33"/>
+			<float name="extIOR" value="1.0"/>
+			<float name="alpha" value="0.05"/>
+		</bsdf>
+	</shape>
+	
+	<texture type="checkerboard" id="__planetex">
+		<rgb name="color0" value="0.4"/>
+		<rgb name="color1" value="0.2"/>
+		<float name="uscale" value="18.0"/>
+		<float name="vscale" value="18.0"/>
+		<float name="uoffset" value="0.0"/>
+		<float name="voffset" value="0.0"/>
+	</texture>
+
+	<bsdf type="diffuse" id="__planemat">
+		<ref name="reflectance" id="__planetex"/>
+	</bsdf>
+
+	<shape type="serialized" id="Plane-mesh_0">
+		<string name="filename" value="transparent.serialized"/>
+		<integer name="shapeIndex" value="0"/>
+		<transform name="toWorld">
+			<rotate z="1" angle="-4.3"/>
+			<matrix value="3.38818 -4.06354 0 -1.74958 4.06354 3.38818 0 1.43683 0 0 5.29076 -0.0120714 0 0 0 1"/>
+		</transform>
+
+		<ref name="bsdf" id="__planemat"/>
+	</shape>
+</scene>

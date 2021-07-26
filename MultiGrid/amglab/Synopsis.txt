@@ -1,0 +1,46 @@
+File				Type			Status		Tested
+------------------------------------------------------------------------------
+AMGLab.m			Script			Completed	Yes
+AMGLab_GUI.fig			GUI			Subject		Yes
+AMGLab_GUI.m			GUI			Subject		Yes
+AMGeCoarsen.m			Setup			In Progress	No
+AMGmCoarsen.m			Setup       		Subject		Yes
+AccumulateMatrix.m		utility (terminal)	Completed	Yes
+GetEdgeElements_Schur.m		utility (terminal)	Completed	Yes
+NodeNeighbors.m			utility (terminal)	Completed	Yes
+NodeNeighborsEdges.m		utility (terminal)	Completed	Yes
+RugeStuebenCoarsen.m		Setup			Completed	Yes
+SOR_smoother.m			Smoother (terminal)	Completed	Yes
+SmoothAggregateCoarsen.m	Setup (terminal)	Completed	Yes
+amg_cycle.m			Multigrid		Completed	Yes
+amg_defaults.m			Script			Subject		Yes
+amg_example1.m			Script			Completed	Yes
+amg_globals.m			Script			Subject		Yes
+amg_setup.m			Switch			Subject		Yes
+amg_solve.m			Switch			Subject		Yes
+amg_usersetFD.m			Script			Completed	Yes
+amg_usersetFEM.m		Script			completed	Yes
+anisox_81.txt			FD Data			Completed	Yes
+coarse_solve.m			Switch			Completed	Yes
+e32_isb.txt			FEM Data		Completed	Yes
+gauss_elim.m			Solver (terminal)	Completed	Yes
+get_settings.m			GUI			Subject		Yes
+interpolate.m			Utility (terminal)	Completed	Yes
+jacobi_smoother.m		Smoother (terminal)	Completed	Yes
+residual.m			Utility (terminal)	Completed	Yes
+restrict.m			Utility (terminal	Completed	Yes
+richardson_smoother.m		Smoother (terminal)	In Progress	No
+settingsGUI.fig			GUI			Subject		Yes
+settingsGUI.m			GUI			Subject		Yes
+smooth.m			Switch			Subject		Yes
+spectral_radius.m		utility (terminal)	In Progress	No
+strong				utility (terminal)	Completed	Yes
+strongT				utility (terminal)	Completed	Yes
+
+
+Key
+---
+Completed - Finished and not likely to change
+Subject - Finished but likely to change
+In Progress - Not Finished
+Terminal - Does Not Call Any Other AMGLab Routines

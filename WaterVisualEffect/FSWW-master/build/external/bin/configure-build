@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# defaul parameters
+BUILD_DIR=build
+BUILD_TYPE=debug
+BUILD_CGET_PREFIX="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+SHOW_HELP=false
+
+#!/bin/bash
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+    key="$1"
+
+    case $key in
+	-d|--build-dir)
+	    BUILD_DIR="$2"
+	    shift # past argument
+	    shift # past value
+	    ;;
+	-t|--build-type)
+	    BUILD_TYPE="$2"
+	    shift # past argument
+	    shift # past value
+	    ;;
+	-p|--prefix)
+	    BUILD_CGET_PREFIX="$2"
+	    shift # past argument
+	    shift # past value
+	    ;;
+	-h|--help)
+	    SHOW_HELP=true
+	    shift # past argument
+	    ;;
+	*)    # unknown option
+	    POSITIONAL+=("$1") # save it in an array for later
+	    shift # past argument
+	    ;;
+    esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+if $SHOW_HELP; then
+    echo "Usage: `basename $0` [options] [<other-cmake-args>...]"
+    echo "" 
+    echo "This bash script configures c++ build. "
+    echo ""
+    echo "Examples:"
+    echo "   $ configure-build"
+    echo ""
+    echo "   This is equivalent to:"
+    echo "   $ configure-build -d build -t debug -p <configure-build-dir>/.."
+    echo ""
+    echo "   where <configure-build-dir> is directory where configure-build is"
+    echo ""
+    echo "   More complicated example:"
+    echo "   $ configure-build -d build-wasm -t release -p ~/local-wasm -DCMAKE_CXX_STANDARD=17"
+    echo ""   
+    echo "   Explanation:"
+    echo "      option: -d build-wasm   -- build directory, can be anything "
+    echo "      option: -t release      -- we want release"
+    echo "      option: -p ~/local-wasm -- this specifies sets CGET_PREFIX to ~/local-wasm"
+    echo "      option: -DCMAKE_CXX_STANDARD=17 -- all other arguments are passed to cmake configuration"
+    echo ""
+    echo "Options:"
+    echo "   -d, --build-dir    <dir-name> build directory e.g. build"
+    echo "   -t, --build-type <build-type> build type e.g. release"
+    echo "   -p, --prefix    <cget-prefix> cget prefix directory - this is directory which contains cget/cget.cmake"
+    echo "                                   also it should contain include/ lib/ ... you want to use"
+    echo ""
+    echo "Arguments:"
+    echo "   All other arguments are passed to cmake."
+    echo ""
+    echo "Passed arguments(defaults if not passed):"
+    echo "   build-dir  = $BUILD_DIR"
+    echo "   build-type = $BUILD_TYPE"
+    echo "   prefix     = $BUILD_CGET_PREFIX"
+    echo "   cmake-args = ${POSITIONAL[@]}"
+    
+    exit 0
+fi
+
+# configure build
+mkdir -p ${BUILD_DIR} && pushd ${BUILD_DIR}
+rm -f ${BUILD_TYPE}/ -R && mkdir -p ${BUILD_TYPE} && pushd ${BUILD_TYPE}
+
+cmake -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
+          -DCMAKE_TOOLCHAIN_FILE=${BUILD_CGET_PREFIX}/cget/cget.cmake \
+          ../../
+
+popd; popd;
+
+# set up emacs crap
+if [ ! -f `pwd`/dir-locals.el ]; then
+    echo "Creating new dir-locals.el!"
+    echo "((c++-mode (cmake-ide-build-dir . \"`pwd`/${BUILD_DIR}/${BUILD_TYPE}\")))" > .dir-locals.el
+fi
+

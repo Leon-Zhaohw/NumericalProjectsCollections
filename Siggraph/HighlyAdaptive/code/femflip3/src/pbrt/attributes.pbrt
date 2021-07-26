@@ -1,0 +1,44 @@
+Scale -1 1 1
+
+# lights
+AttributeBegin
+  AreaLightSource "area" "color L" [3 3 3] "integer nsamples" [4]
+  Translate 0 10 1
+  Rotate 90 1 0 0 
+  Material "matte" "color Kd" [ 0 0 0 ]
+  Shape "disk" "float radius" [15] 
+  
+  #AreaLightSource "area" "color L" [120 120 120] "integer nsamples" [4]
+  #Translate 5 2 1
+  #Rotate 90 1 0 0 
+  #Material "matte" "color Kd" [ 0 0 0 ]
+  #Shape "disk" "float radius" [1] 
+AttributeEnd
+		
+AttributeBegin
+  Material "substrate" "color Ks" [.2 .2 .2] "float uroughness" [.05] "float vroughness" [.05]	
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [-10 0 -10   10 0 -10   10 0 10   -10 0 10 ]
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [-10 0 -10   10 0 -10   10 9 -10   -10 9 -10 ]
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [-10 0 10   10 0 10   10 9 10   -10 9 10 ]
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [-10 0 -10   -10 0 10   -10 9 10   -10 9 -10 ]
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [10 0 -10   10 0 10   10 9 10   10 9 -10 ]
+  Shape "trianglemesh" "integer indices" [ 0 1 2 2 0 3 ]
+    "point P" [-10 11 -10   10 11 -10   10 11 10   -10 11 10 ]
+AttributeEnd
+
+#AttributeBegin
+#Translate 0 1 0
+#Rotate 60 1 1 1
+#Shape "sphere"
+#AttributeEnd
+
+Translate 0 0 -4.7
+Scale 3 3 3
+
+## FOR TEST UNCOMMNET THIS
+# Rotate 3 1 0 0 

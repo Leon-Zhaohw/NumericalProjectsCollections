@@ -1,0 +1,1 @@
+mosra/corrade@v2018.02 -DBUILD_DEPRICATED=OFF

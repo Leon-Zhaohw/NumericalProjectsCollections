@@ -1,0 +1,27 @@
+INSTALL:
+sudo apt-get install cmake git gcc python3 pip3 eigen libsdl2-dev
+sudo pip3 cget
+./build/install-dependencies
+./build/configure-builds
+cd ./build/Release/
+make
+cd ../..
+
+<optional> The sources contain a cuda implementation of part of this program. To use it you need to install cuda and make sure the macro USE_CUDA is defined before compiling.
+
+RUN:
+./build/Release/src/wawa <options>
+Options:
+     -l, -load <file>: load configuration file
+     -e, -export <name>: export amplitude grid for each frequencies in the file <name>.obj
+     -i, -import <name>: import amplitude grid for each frequencies in the file <name>.obj
+     -stop <t>: stop animation and exit at time t
+     -em <name>: export heightfields and render files in a set of files <name><frame number>.ong and <name><frame number>.xml
+     -es, -export_step <n>: export every n frames
+     -h, -help: print help				
+
+
+OPTION:
+You can use the macro defined in src/setting.hpp to switch between interactive or static waves (INTERACTIVE_), using or not the Cuda implementation (USE_CUDA), and using a projective grid or a fix one (PROJECTED_GRID).
+The number of threads used by the program is defined in the same file (src/setting.hpp) by the macro
+NTHREADS_.

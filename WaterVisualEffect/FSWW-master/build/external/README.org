@@ -1,0 +1,70 @@
+* This repository helps to set up my build enviroment
+  
+  The whole setup is based on [[https://github.com/pfultz2/cget][cget]]. You can install cget with =pip3 install cget=.
+
+* Build environment setup
+
+  First we have to pick a directory, I usually choose =~/local=.
+
+  #+BEGIN_SRC bash
+  mkdir -p ~/local; cd ~/local
+  git init; git remote add origin git@github.com:lecopivo/my-cget-recipes.git; git pull origin master;
+  #+END_SRC
+
+  Now you can easily install packages, e.g. to install the latest version of [[https://github.com/mosra/magnum][Magnum]] you just run =$cget --prefix ~/local install magnum=.
+  
+** Optional: Set up environment variables
+   You probably want to set up environmental variables such that install binaries and libraries can be found.
+
+   Add this to your =~/.profile= (you probably want to relogin to take an effect)
+   #+BEGIN_SRC bash
+    export PATH=${HOME}/local/bin:$PATH
+    export LD_LIBRARY_PATH=${HOME}/local/lib:$LD_LIBRARY_PATH
+
+    export CGET_PREFIX=${HOME}/local
+   #+END_SRC
+
+   Now you can install library just by calling =cget install magnum=
+
+** Emscripten build environment
+   
+   You need [[https://github.com/kripken/emscripten][Emscripten]] installed and environment variable =EMSCRIPTEN= has to be set to the directory where =em++= is e.g. =export EMSCIRPTEN=some path/emsdk/emscripten/1.37.36/=.
+
+   Now we pick a directory where to set up our environment, I usually choose =~/wasm-local/=. Then you run
+
+   #+BEGIN_SRC bash
+     mkdir -p ~/wasm-local; cd ~/wasm-local
+     git init; git remote add origin git@github.com:lecopivo/my-cget-recipes.git; git pull origin master;
+     cget init --prefix . --toolchain ./etc/toolchains/generic/Emscripten-wasm.cmake
+   #+END_SRC
+
+     Now you can easily install packages, e.g. to install the latest version of [[https://github.com/mosra/magnum][Magnum]] you just run =$cget --prefix ~/wasm-local install magnum=.
+
+* Package Installation
+
+  NOTE: All the following examples are for environment =~/wasm-local/=, change
+  the directory to the appropriate directory.
+  
+  To install package:
+  #+BEGIN_SRC bash
+     cget --prefix ~/wasm-local install magnum
+  #+END_SRC
+
+* Building project with in an environment
+
+  NOTE: All the following examples are for environment =~/wasm-local/=, change
+  the directory to the appropriate directory.
+
+  To run cmake for specific build environment just supply appropriate
+  toolchain file
+  #+BEGIN_SRC bash
+     cmake .. -DCMAKE_TOOLCHAIN_FILE=~/wasm-local/cget/cget.cmake
+  #+END_SRC
+
+  Or in the directory where =CMakeLists.txt= exists run 
+  #+BEGIN_SRC bash
+     ~/wasm-local/bin/configure-build 
+  #+END_SRC
+  
+
+
