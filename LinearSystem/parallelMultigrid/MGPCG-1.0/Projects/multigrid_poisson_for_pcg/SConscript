@@ -1,0 +1,11 @@
+# SConscript
+
+Import('env Automatic_Program')
+env=env.Copy()
+## uncomment this to use unoptimized version
+#env.Append(CPPDEFINES=['MGPCG_UNOPTIMIZED'])
+
+## uncomment this to write opengl output
+#env.Append(CPPDEFINES=['MGPCG_WRITE_OPENGL_OUTPUT'])
+
+Automatic_Program(env,"multigrid_poisson_for_pcg",["MULTIGRID_POISSON.cpp","main.cpp","MULTIGRID_POISSON_REFINEMENT.cpp"])

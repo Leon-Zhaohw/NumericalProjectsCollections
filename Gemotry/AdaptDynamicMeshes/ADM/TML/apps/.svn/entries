@@ -1,0 +1,46 @@
+8
+
+dir
+208
+svn+ssh://fdegoes@turing.liv.ic.unicamp.br/home/fdegoes/SVNrep/trunk/TML/apps
+svn+ssh://fdegoes@turing.liv.ic.unicamp.br/home/fdegoes/SVNrep
+
+
+
+2008-04-16T22:31:28.000428Z
+186
+fdegoes
+
+
+svn:special svn:externals svn:needs-lock
+
+
+
+
+
+
+
+
+
+
+
+9ab59a98-f02a-0410-8b90-8ac85719c5a6
+
+Conversor
+dir
+
+Viewer
+dir
+
+TMLmake.defs
+file
+
+
+
+
+2008-09-13T04:00:24.000000Z
+2b36460ffd0ea342b8afa9de53751ef5
+2007-08-17T11:30:31.209966Z
+115
+fdegoes
+

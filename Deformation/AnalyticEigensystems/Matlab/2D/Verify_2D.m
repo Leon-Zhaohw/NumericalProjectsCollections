@@ -1,0 +1,4 @@
+Verify_ARAP
+Verify_Corotational
+Verify_Symmetric_Dirichlet
+Verify_Symmetric_ARAP

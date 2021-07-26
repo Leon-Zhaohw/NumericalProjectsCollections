@@ -1,0 +1,37 @@
+# common stuff
+LDFLAGS_COMMON = -lglvuglvu -lglvucamera -lglvufileutils -lglvumath -framework GLUT -framework OpenGL -framework Cocoa -framework Accelerate -fopenmp -L${GLVU_LIB}
+#CFLAGS_COMMON = -O3 -c -Wall -I../../ -I../../src/util -I../../src/linearalgebra -I../../src/geometry -I../../src/material -I${GLVU_INCLUDE} -D_GLIBCXX_FULLY_DYNAMIC_STRING
+CFLAGS_COMMON = -O3 -c -Wall -I../../ -I../../src/util -I../../src/linearalgebra -I../../src/geometry -I../../src/material -I${GLVU_INCLUDE}
+
+# calls:
+CC         = g++
+CFLAGS     = ${CFLAGS_COMMON} -O3 -Wno-unused -fopenmp
+LDFLAGS    = ${LDFLAGS_COMMON}
+EXECUTABLE = ../../bin/OdeIsoStuffer
+
+LINALGEBRASRC = ../../src/linearalgebra/MATRIX3.cpp ../../src/linearalgebra/VECTOR.cpp ../../src/linearalgebra/MATRIX.cpp ../../src/linearalgebra/TENSOR3.cpp ../../src/linearalgebra/BLOCK_VECTOR.cpp ../../src/linearalgebra/BLOCK_MATRIX.cpp ../../src/linearalgebra/SPARSE_MATRIX.cpp ../../src/linearalgebra/QUATERNION.cpp
+GEOMETRYSRC = ../../src/geometry/TET.cpp ../../src/geometry/TRIANGLE.cpp ../../src/geometry/BOX.cpp ../../src/geometry/CYLINDER.cpp ../../src/geometry/SURFACE.cpp ../../src/geometry/COMPOUND.cpp ../../src/geometry/SPHERE.cpp  ../../src/geometry/OBJ.cpp ../../src/geometry/ISO_STUFFER.cpp ../../src/geometry/plyfile.cpp ../../src/geometry/PLANE.cpp
+UTILSRC = ../../src/util/SIMPLE_PARSER.cpp
+MATERIALSRC = ../../src/material/STVK.cpp ../../src/material/ARRUDA_BOYCE.cpp ../../src/material/MOONEY_RIVLIN.cpp ../../src/material/INVERTIBLE.cpp ../../src/material/NEO_HOOKEAN.cpp ../../src/material/MATERIAL.cpp ../../src/material/POLYNOMIAL_4_TERM.cpp
+OGDENSRC = ../../src/material/OGDEN.cpp \
+           ../../src/material/OGDEN_00000.cpp \
+           ../../src/material/OGDEN_00010.cpp \
+           ../../src/material/OGDEN_00100.cpp \
+           ../../src/material/OGDEN_00101.cpp \
+           ../../src/material/OGDEN_01000.cpp \
+           ../../src/material/OGDEN_01100.cpp \
+           ../../src/material/OGDEN_01101.cpp \
+           ../../src/material/OGDEN_10010.cpp
+SOURCES    = main.cpp $(LINALGEBRASRC) $(GEOMETRYSRC) $(UTILSRC) $(MATERIALSRC) $(OGDENSRC)
+OBJECTS    = $(SOURCES:.cpp=.o)
+
+all: $(SOURCES) $(EXECUTABLE)
+
+$(EXECUTABLE): $(OBJECTS) 
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+
+.cpp.o:
+	$(CC) $(CFLAGS) $< -o $@
+
+clean:
+	rm -f *.o

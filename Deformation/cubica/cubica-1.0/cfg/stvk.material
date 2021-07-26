@@ -1,0 +1,5 @@
+# constitutive model, plus material parameters,
+# StVK defaults to lambda = 10 and mu = 20
+material type = stvk
+stvk lambda = 400.0
+stvk mu = 2000.0

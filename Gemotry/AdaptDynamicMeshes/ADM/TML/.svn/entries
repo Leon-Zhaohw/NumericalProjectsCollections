@@ -1,0 +1,67 @@
+8
+
+dir
+208
+svn+ssh://fdegoes@turing.liv.ic.unicamp.br/home/fdegoes/SVNrep/trunk/TML
+svn+ssh://fdegoes@turing.liv.ic.unicamp.br/home/fdegoes/SVNrep
+
+
+
+2008-04-16T22:31:28.000428Z
+186
+fdegoes
+
+
+svn:special svn:externals svn:needs-lock
+
+
+
+
+
+
+
+
+
+
+
+9ab59a98-f02a-0410-8b90-8ac85719c5a6
+
+apps
+dir
+
+include
+dir
+
+TNT
+dir
+
+lib
+dir
+
+src
+dir
+
+Makefile
+file
+
+
+
+
+2008-09-13T04:00:30.000000Z
+ba94fc222e37ee3c0f09efb2d08eb1c0
+2007-05-10T18:31:41.514874Z
+45
+fdegoes
+
+README
+file
+
+
+
+
+2008-09-13T04:00:30.000000Z
+84d9ae1318a09c9ad210bf287b01251c
+2007-05-09T22:43:40.604487Z
+44
+fdegoes
+

@@ -1,0 +1,130 @@
+2D Matlab implementation of "Bounded Biharmonic Weights for Real-Time
+Deformation" by Alec Jacobson, Ilya Baran, Jovan Popovic, and Olga Sorkine to
+appear at SIGGRAPH 2011
+
+= BBW Demo =
+
+  This matlab package demos computing skinning weights automatically for a 2d
+  shape. To start, add bbw_demo/ to your matlab path and issue:
+  
+  >> bbw_demo
+
+= BBW Computation =
+
+  If you just want to start digging around in the weight computation code, look
+  at:
+    boundary_conditions.m
+    biharmonic_bounded.m
+
+= Alligator Demo =
+
+  The matlab package also contains a second demo that reproduces (in a MATLAB
+  plot) the alligator from Fig. 1 in the paper. To run this demo issue:
+  
+  >> alligator_demo
+  
+  This demo shows a working 2D cartoon image deformation pipeline. An image is
+  loaded from a .png file. The alpha/transparency is used to find the boundary
+  of the character. The triangle program is used mesh inside this boundary. A
+  set of bones, points and cage edges are placed on the domain (read from
+  file). The domain is remeshed sampling the bones and edges and discretizing
+  the space inside external parts of the cage. BBW are computed over this
+  discretization.  The vertices not in the original shape (in the space between
+  the shape and external parts of the cage) are thrown away. The user is
+  presented with a visualization of the domain and may drag about handles to
+  deform the shape interactively.
+
+= Notes =
+
+NOTE: Please contact Alec Jacobson, jacobson@inf.ethz.ch before
+using this code outside of an informal setting, i.e. for comparisons.
+
+NOTE: If your weights are coming out as garbage and you're not using Mosek,
+then either use a smaller mesh or install Mosek or upgrade to MATLAB version >=
+2011a
+
+This package should contain
+bbw_demo/
+  axisanglebetween.m
+  normalizerow.m
+  normrow.m
+  avgedge.m
+  axisangle2quat.m
+  barycenter.m
+  collapse_close_points.m
+  cotmatrix.m
+  cotmatrix3.m
+  doublearea.m
+  dualquatlbs.m
+  edges.m
+  lbs.m
+  limit_faces.m
+  load_mesh.m
+  mask2poly.m
+  massmatrix.m
+  massmatrix3.m
+  massmatrix_intrinsic.m
+  outline.m
+  png2mesh.m
+  png2poly.m
+  point_inside_polygon.m
+  poly2VEH.m
+  quat2mat.m
+  quattrans2udq.m
+  readEDGE.m
+  readELE.m
+  readNODE.m
+  readOBJ.m
+  readOBJfast.m
+  readOFF.m
+  readTGF.m
+  sample_edges.m
+  skinning_transformations.m
+  stacktimes.m
+  triangle.m
+  tsurf.m
+  upsample.m
+  writeELE.m
+  writeNODE.m
+  writePOLY.m
+  tempprefix.m
+  tilefigs.m
+  alligator_demo.m
+  bbw_demo.m
+  biharmonic_bounded.m
+  boundary_conditions.m
+  faces_in_polygon.m
+  ordered_outline.m
+  project_to_lines.m
+  quatmultiply.m
+  remesh_at_handles.m
+  simple_deform.m
+  snap_points_to_close_edges.m
+  pseudoedge_dof.m
+  README
+  woody.obj
+  woody.png
+  woody.poly
+  alligator.obj
+  alligator.png
+  alligator-skeleton-cage-points.tgf
+
+External dependencies:
+  (optional) Mosek: QP solver, much faster than QP solver in matlab 2010b
+  (alligator_demo only) Triangle: triangulation library, needed only if using
+    triangle.m function.
+
+All files copyright Alec Jacobson 2011 unless otherwise noted.
+
+Zip up using:
+>> C = depends('bbw_demo');
+>> C = unique(cat(1,C,depends('alligator_demo')));
+>> C = C(cellfun(@isempty,strfind(C,'opt/local/mosek')));
+>> C = cat(1,C,{ ...
+  'README'; ...
+  'woody.obj';'woody.png';'woody.poly'; ...
+  'alligator.obj';'alligator.png';'alligator-skeleton-cage-points.tgf'});
+>> zip('bbw_demo.zip',C);
+>> fprintf('This package should contain\nbbw_demo/\n');
+>> N = regexprep(C,'^.*\/','');
+>> fprintf('  %s\n',N{:});

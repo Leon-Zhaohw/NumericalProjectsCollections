@@ -1,0 +1,26 @@
+Joseph Culberson's Coloring Programs
+
+Version 2.0 as of November 19, 1998.
+Minor fixes May 30, 2001.
+
+To make these programs, you will either need to create 
+a directory called bin in this directory, or modify
+the BINPATH variable in the file makefile to point
+where you want the executables.
+
+To make all the programs you should type 
+	make all
+
+Alternatively you may make a particular coloring program.
+
+These programs have been compiled on a Sun Sparc 10/40
+running UNIX BSD and on a Pentium II using Linux, 
+using the GNU gcc compiler.  These systems have 128 MB
+of memory.
+
+However, no warranty as to portability is made either to these systems,
+or to other systems.
+
+For smaller systems, and systems where "int" is 16 bits,
+you may need to modify some of the constants defined in the .h files.
+

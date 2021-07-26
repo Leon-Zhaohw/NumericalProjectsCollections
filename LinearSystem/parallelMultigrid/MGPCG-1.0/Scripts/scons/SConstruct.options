@@ -1,0 +1,3 @@
+boost_include=["/usr/include"]
+boost_libpath='/usr/lib'
+boost_libs=['boost_iostreams-mt','boost_filesystem-mt','z']

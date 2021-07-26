@@ -1,0 +1,21 @@
+Polypatches
+Copyright (C) 2008 SurfLab, University of Florida.
+
+This program is free for educational/research purpose.
+You will need to gain permissions from authors before you
+can use this program or any part of the source code for
+commercial usage.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.
+
+DATA SETS:
+Except for the following exceptions, the provided data files
+in directory data/ are free to use and distribute.
+- data/monsterfrog/*
+    the monsterfrog animated dataset was provided to us
+    by Bay Raitt free of charge for educational purposes
+- data/monkey.off
+    is a modification of Blender's (http://www.blender.org/)
+    monkey mesh model
+

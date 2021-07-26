@@ -1,0 +1,18 @@
+import os
+import re
+env=Environment(ENV = os.environ)
+env.Append(CXXFLAGS=["-g","-ffast-math","-std=c++0x","-D_GLIBCXX_DEBUG","-Wall"])
+env.Append(LIBS=["gsl","blas"])
+env.Program("example.cpp")
+
+re_tb=re.compile('^testbed-')
+re_cpp=re.compile('\.cpp$')
+for x in os.listdir('.'):
+    if re_tb.search(x) and re_cpp.search(x):
+        env.Program(re_cpp.sub("",x),[x,"symbolic_tensor.cpp"])
+
+
+re_ex=re.compile('^example-')
+for x in os.listdir('.'):
+    if re_ex.search(x) and re_cpp.search(x):
+        env.Program(re_cpp.sub("",x),x)

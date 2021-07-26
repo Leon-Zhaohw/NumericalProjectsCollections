@@ -1,0 +1,42 @@
+# SConscript file for Public_Library
+
+import os
+import re
+
+Import('env Automatic_Circular_DLLs Automatic_Library Find_Directories Name_From_Library common_libraries Automatic_Global_Library')
+env=env.Copy()
+
+ignore=["build","install","Documentation"]
+directories=Find_Directories(lambda x: x not in ignore)
+
+if env['install_headers'] and env['INSTALL_PATH']:
+    install_include=os.path.join(env['INSTALL_PATH'],'include','physbam','')
+    for d in directories:
+        for h in os.listdir(Dir(d).srcnode().abspath):
+            if h.endswith('.h'):
+                env.Depends(d,env.Install(install_include+d,os.path.join(d,h)))
+
+def Sublibrary(env,name,pattern=None,common=1,parent=None):
+    global directories
+    if pattern==None: pattern=name
+    regex=re.compile(pattern)
+    lib=Automatic_Library(env,'PhysBAM_'+name,filter(lambda x:regex.match(x),directories),ignore=ignore)
+    if common and lib: common_libraries.append(Name_From_Library(env,lib))
+    directories=filter(lambda x:not regex.match(x),directories)
+    if parent:
+        env.Depends(parent,lib)
+    return lib
+
+if env['shared']:
+    if env["PLATFORM"].startswith("win32"):
+        exclude_regex=re.compile("OpenGL|Rendering|CVS")
+        Automatic_Circular_DLLs(env,filter(lambda x:not exclude_regex.match(x),directories))
+    else:
+        for d in directories:
+            Sublibrary(env,d,parent=d)
+        if env["INSTALL_PATH"]:
+            env_with_gl=env.Copy(USE_OPENGL=1)
+            lib=Automatic_Global_Library(env_with_gl,"PhysBAM",map(lambda x:"PhysBAM_"+x,directories))
+            env.Depends('.',env_with_gl.Install(os.path.join(env["INSTALL_PATH"],"lib"),lib))
+else:
+    Sublibrary(env,'All','.*')

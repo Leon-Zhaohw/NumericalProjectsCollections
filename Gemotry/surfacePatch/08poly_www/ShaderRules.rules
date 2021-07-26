@@ -1,0 +1,53 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<VisualStudioToolFile
+	Name="Shader Rules"
+	Version="8.00"
+	>
+	<Rules>
+		<CustomBuildRule
+			Name="CompileFX"
+			DisplayName="Effect Compiler"
+			CommandLine="fxc [Profile] [DebugInfo] /Fo [OutputPath]$(InputName).fxo [inputs]"
+			Outputs="$(InputName).fxo"
+			FileExtensions="*.fx"
+			ExecutionDescription="Compiling effects"
+			>
+			<Properties>
+				<EnumProperty
+					Name="Profile"
+					DisplayName="Effect Profile"
+					>
+					<Values>
+						<EnumValue
+							Value="0"
+							Switch="/T fx_2_0"
+							DisplayName="FX 2.0"
+						/>
+						<EnumValue
+							Value="1"
+							Switch="/T fx_4_0"
+							DisplayName="FX 4.0"
+						/>
+						<EnumValue
+							Value="2"
+							Switch="/T fxl_3_0"
+							DisplayName="FXLite 3.0"
+						/>
+					</Values>
+				</EnumProperty>
+				<BooleanProperty
+					Name="DebugInfo"
+					DisplayName="Enable Debugging Info (/Zi)"
+					Switch="/Zi"
+				/>
+				<StringProperty
+					Name="OutputPath"
+					DisplayName="Output Path"
+					Switch="[value]\"
+					Delimited="true"
+					Inheritable="true"
+				/>
+			</Properties>
+		</CustomBuildRule>
+	</Rules>
+</VisualStudioToolFile>

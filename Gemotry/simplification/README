@@ -1,0 +1,59 @@
+# Fernando de Goes (fdegoes@caltech.edu)
+# Copyright @ Aug 2011
+
+pwsrec2d: Piece Wise Smooth Reconstruction 2D
+
+Implementation of the paper:
+
+"An optimal transport approach to robust reconstruction and simplification of 2D shapes"
+Fernando de Goes, David Cohen-Steiner, Pierre Alliez, and Mathieu Desbrun
+SGP 2011 / Computer Graphics Forum, 30 (5), p. 1593-1602, 2011.
+
+============
+Requirements
+============
+
+    * CMake (v2.4+) [http://www.cmake.org/]
+    * QT4   (v4.4+) [http://qt.nokia.com/]
+    * CGAL  (v3.9+) [http://www.cgal.org/]
+
+========
+Building
+========
+1. Go to
+
+   cd pwsrec3d
+
+2. Create a building directory
+
+   mkdir build
+   cd build
+
+2. Configure using CMake
+   
+   cmake .. 
+   or
+   ccmake ..
+   or 
+   cmake-gui ..
+
+3. Compile the code
+
+   make 
+
+=======
+Running
+=======
+1. Run executable
+   ./pwsrec2d
+
+2. Load data
+   * Open or Drag & Drop an image
+   * Open or Drag & Drop a .xy file (see examples)
+   * Insert point manually (activate Data->Insert_mode)
+   * [add noise/outliers; simplify; refine; …]
+
+3. Run algorithm (see paper for details)
+   * Algorithm->Init 
+   * Algorithm->Decimate 
+   * Algorithm->Relocate 

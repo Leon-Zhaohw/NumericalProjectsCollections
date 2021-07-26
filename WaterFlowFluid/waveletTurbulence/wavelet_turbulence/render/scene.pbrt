@@ -1,0 +1,46 @@
+LookAt 1  2.9  -10.5   1. 0.775 0    0 1 0
+Camera "perspective" "float fov" [8.0]
+Sampler "bestcandidate" "integer pixelsamples" [##SAMPLES##]
+Film "image" "integer xresolution" [##XRES##] "integer yresolution" [##YRES##] "string filename" ["render.##SIZE##.##FRAMENUMBER##.exr"]
+
+# VolumeIntegrator "single" "float stepsize" [.010] # low quality
+VolumeIntegrator "single" "float stepsize" [.002]
+# VolumeIntegrator "single" "float stepsize" [.0005] # high quality
+
+WorldBegin
+
+LightSource "point" "point from" [-5 2 -0.5] "color I" [2100 1500 1500]
+LightSource "point" "point from" [0 6 0] "color I" [50 25 25] 
+
+AttributeBegin
+	Translate 1 1 -1 
+	Rotate 180 0 1 0
+	Translate -0.75 0 -0.75
+	Scale 2 2 2
+	Translate 0.375 0 0.375
+	Material "matte" "color Kd" [0.4 0.05 0]
+	Shape "sphere" "float radius" [0.1]
+AttributeEnd
+
+AttributeBegin
+	Translate 1 0 -1 
+	Rotate 180 0 1 0
+	Translate -0.75 0 -0.75
+	Scale 2 2 2
+	Include "../pbrt/density_##SIZE##_##FRAMENUMBER##.pbrt"
+	"color sigma_a" [100 100 100] 
+	"color sigma_s" [80 80 80]
+AttributeEnd
+
+# floor
+Material "matte" "color Kd" [0.0 0.03 0.20] # blue bg
+Translate 0  0.1 0
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+	"point P" [-50 0.0 -50  50 0.0 -50  50 0.0 50  -50 0.0 50]
+
+# black background
+Material "matte" "color Kd" [0 0 0]
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+"point P" [ -500 -100 100  500 -100 100   500 100 100  -500 100 100 ]
+
+WorldEnd

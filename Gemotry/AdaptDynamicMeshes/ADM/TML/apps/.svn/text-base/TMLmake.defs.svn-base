@@ -1,0 +1,6 @@
+TNT     = ../../TNT
+TNT_INC = -I$(TNT) 
+
+TML     = ../..
+TML_INC = -I$(TML)/include $(TNT_INC)
+TML_LIB = -L$(TML)/lib -ltml -lm

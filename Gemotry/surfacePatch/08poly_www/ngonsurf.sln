@@ -1,0 +1,29 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 9.00
+# Visual Studio 2005
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ngonsurf", "ngonsurf.vcproj", "{6266B41F-4013-41CB-8462-6D45AC187C7D}"
+	ProjectSection(ProjectDependencies) = postProject
+		{E0CF097B-F22D-465B-A884-D89E55BD7ECD} = {E0CF097B-F22D-465B-A884-D89E55BD7ECD}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DXUTCore", "DXUT\Core\DXUTCore_2005.vcproj", "{E0CF097B-F22D-465B-A884-D89E55BD7ECD}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6266B41F-4013-41CB-8462-6D45AC187C7D}.Debug|Win32.ActiveCfg = Debug|Win32
+		{6266B41F-4013-41CB-8462-6D45AC187C7D}.Debug|Win32.Build.0 = Debug|Win32
+		{6266B41F-4013-41CB-8462-6D45AC187C7D}.Release|Win32.ActiveCfg = Release|Win32
+		{6266B41F-4013-41CB-8462-6D45AC187C7D}.Release|Win32.Build.0 = Release|Win32
+		{E0CF097B-F22D-465B-A884-D89E55BD7ECD}.Debug|Win32.ActiveCfg = Debug|Win32
+		{E0CF097B-F22D-465B-A884-D89E55BD7ECD}.Debug|Win32.Build.0 = Debug|Win32
+		{E0CF097B-F22D-465B-A884-D89E55BD7ECD}.Release|Win32.ActiveCfg = Release|Win32
+		{E0CF097B-F22D-465B-A884-D89E55BD7ECD}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

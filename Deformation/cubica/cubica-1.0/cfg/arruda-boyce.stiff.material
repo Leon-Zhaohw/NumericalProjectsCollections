@@ -1,0 +1,4 @@
+material type = arruda-boyce
+arruda-boyce n = 5.0
+arruda-boyce nktheta = 5000.0
+arruda-boyce k = 100000.0

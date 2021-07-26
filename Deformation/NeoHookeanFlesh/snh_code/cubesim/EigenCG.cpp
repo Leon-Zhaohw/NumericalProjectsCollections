@@ -1,0 +1,61 @@
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// I. LICENSE CONDITIONS
+//
+// Copyright (c) 2018 by Disney-Pixar
+//
+// Permission is hereby granted to use this software solely for non-commercial applications
+// and purposes including academic or industrial research, evaluation and not-for-profit media
+// production. All other rights are retained by Pixar. For use for or in connection with
+// commercial applications and purposes, including without limitation in or in connection with
+// software products offered for sale or for-profit media production, please contact Pixar at
+// tech-licensing@pixar.com.
+//
+// THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT
+// NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, NONINFRINGEMENT, AND FITNESS
+// FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL PIXAR OR ITS AFFILIATES BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+// WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+// IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include "EigenCG.h"
+
+namespace CubeSim
+{
+
+EigenCG::EigenCG(const int maxIters, const Scalar& tol)
+: _cgSolver()
+, _targetTolerance(tol)
+, _iterations(0)
+, _error(0.0)
+{
+    _cgSolver.setMaxIterations(maxIters);
+    _cgSolver.setTolerance(tol);
+}
+
+int EigenCG::Iterations() const
+{
+    return _iterations;
+}
+
+const Scalar& EigenCG::Error() const
+{
+    return _error;
+}
+
+bool EigenCG::LastSolveSucceeded() const
+{
+    return _error <= _targetTolerance;
+}
+
+void EigenCG::Solve(const SparseMatrixX& A, const VectorX& b, VectorX& x)
+{
+    _cgSolver.compute(A);
+    x = _cgSolver.solve(b);
+    _iterations = int(_cgSolver.iterations());
+    _error = _cgSolver.error();
+}
+
+}

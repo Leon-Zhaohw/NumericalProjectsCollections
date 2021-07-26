@@ -1,0 +1,66 @@
+File structure:
+
+Public_Library contains all necessary PhysBAM libraries to build the multigrid
+preconditioned CG Poisson solver. The Poisson_MGPCG_optimized_kernels library 
+is NOT part of the standard PhysBAM library.
+
+Projects contains the MGPCG project files.  
+MULTIGRID_POISSON_TESTS.h contains a few test examples for you to try. 
+All other files are really library files for the tool.
+You may wish to move them to Public_Library to automatically include them 
+in the libPhysBAM library to build with in your own projects.
+
+Scripts contains scripts for setting up scons.
+
+
+To build:
+
+This project requires:
+pthreads (at least for all optimized code)
+boost (including the boost_iostreams and boost_filesystem library)
+
+The easiest way to build the PhysBAM Public Library as well as the 
+multigrid_poisson_for_pcg project is using scons.
+
+Follow the instructions found in the Scripts/scons/README to set up.
+
+Given the default settings, this will create an Install directory 
+("PhysBAM-build"), containing the following
+
+* /bin (with the multigrid poisson test executable)
+* /include and /lib with necessary headers and shared library (libPhysBAM) 
+  to build and link against
+   * Please note: the other libs (e.g. libPoisson_MGPCG_optimized_kernels) 
+   are contained within the libPhysBAM library, so you don't need to 
+   link to them
+
+An example Makefile is also included for the test project.
+
+
+Using the MGPCG project:
+As noted above, if you wish to simply use the MGPCG solver as a library, you
+can create a Public_Library directory with all of the 
+Projects/multigrid_poisson_for_pcg files (except main.cpp and 
+MULTIGRID_POISSON_TESTS.h).  This will then include the MGPCG solver in the 
+libPhysBAM library and copy all .h files to the PhysBAM-build/include directory.
+
+All optimized kernels have been implemented in easy-to-read methods which can 
+be used by defining MGPCG_UNOPTIMIZED flag.  Optimized kernels are for 3D 
+problems only.  Unoptimized methods are templatized on dimension and have been
+tested in 2D as well.
+
+All optimized kernels have been explicitly instantiated by Y and Z dimension.
+You can update possible instantiation sizes by updating 
+Public_Library/Poisson_MGPCG_optimized_kernels/Instantiation_Helpers.h.  
+
+Additionally, all dimensions MUST be a multiple of 4, since many kernels 
+iterate over 4x4x4 blocks for best cache usage.
+
+The multigrid V-Cycle works best as a very deep cycle with the coarsest 
+dimension being 8 cells across.  This means that you must instantiate all
+necessary dimensions for the V-Cycle.
+
+The MULTIGRID_POISSON_TESTS can create output which can be viewed using the 
+PhysBAM opengl viewer by defining MGPCG_WRITE_OPENGL_OUTPUT. Unfortunately,
+the opengl viewer has not been included in this release, but hopefully it will
+be available soon!

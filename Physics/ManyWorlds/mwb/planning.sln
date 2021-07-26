@@ -1,0 +1,32 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 9.00
+# Visual C++ Express 2005
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "planning", "planning.vcproj", "{977A369A-DF09-49B3-85FB-4D5BA9077EB6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		DebugDLL|Win32 = DebugDLL|Win32
+		DebugLib|Win32 = DebugLib|Win32
+		Release|Win32 = Release|Win32
+		ReleaseDLL|Win32 = ReleaseDLL|Win32
+		ReleaseLib|Win32 = ReleaseLib|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.Debug|Win32.ActiveCfg = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.Debug|Win32.Build.0 = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.DebugDLL|Win32.ActiveCfg = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.DebugDLL|Win32.Build.0 = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.DebugLib|Win32.ActiveCfg = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.DebugLib|Win32.Build.0 = Debug|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.Release|Win32.ActiveCfg = Release|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.Release|Win32.Build.0 = Release|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.ReleaseDLL|Win32.ActiveCfg = Release|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.ReleaseDLL|Win32.Build.0 = Release|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.ReleaseLib|Win32.ActiveCfg = Release|Win32
+		{977A369A-DF09-49B3-85FB-4D5BA9077EB6}.ReleaseLib|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

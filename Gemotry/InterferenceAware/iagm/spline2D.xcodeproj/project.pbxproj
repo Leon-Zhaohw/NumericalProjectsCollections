@@ -1,0 +1,272 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		646CAE5C13A422AF00D85034 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 646CAE5B13A422AF00D85034 /* main.cpp */; };
+		646CAE6813A4231900D85034 /* state.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 646CAE6313A4231900D85034 /* state.cpp */; };
+		646CAE6913A4231900D85034 /* visualizer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 646CAE6613A4231900D85034 /* visualizer.cpp */; };
+		646CAE6E13A51CB800D85034 /* OpenGL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 646CAE6D13A51CB800D85034 /* OpenGL.framework */; };
+		646CAE7013A5254200D85034 /* libAntTweakBar.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 646CAE6F13A5254200D85034 /* libAntTweakBar.dylib */; };
+		646CAE7213A5255F00D85034 /* GLUT.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 646CAE7113A5255F00D85034 /* GLUT.framework */; };
+		646CAE7613A54C7700D85034 /* libGLEW.1.6.0.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 646CAE7513A54C7700D85034 /* libGLEW.1.6.0.dylib */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		646CAE5513A422AF00D85034 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		646CAE5713A422AF00D85034 /* spline2D */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = spline2D; sourceTree = BUILT_PRODUCTS_DIR; };
+		646CAE5B13A422AF00D85034 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
+		646CAE5D13A422AF00D85034 /* spline2D.1 */ = {isa = PBXFileReference; lastKnownFileType = text.man; path = spline2D.1; sourceTree = "<group>"; };
+		646CAE6313A4231900D85034 /* state.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = state.cpp; sourceTree = "<group>"; };
+		646CAE6413A4231900D85034 /* state.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = state.h; sourceTree = "<group>"; };
+		646CAE6513A4231900D85034 /* timer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = timer.h; sourceTree = "<group>"; };
+		646CAE6613A4231900D85034 /* visualizer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = visualizer.cpp; sourceTree = "<group>"; };
+		646CAE6713A4231900D85034 /* visualizer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = visualizer.h; sourceTree = "<group>"; };
+		646CAE6D13A51CB800D85034 /* OpenGL.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGL.framework; path = System/Library/Frameworks/OpenGL.framework; sourceTree = SDKROOT; };
+		646CAE6F13A5254200D85034 /* libAntTweakBar.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libAntTweakBar.dylib; path = ../../../../opt/local/lib/libAntTweakBar.dylib; sourceTree = "<group>"; };
+		646CAE7113A5255F00D85034 /* GLUT.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GLUT.framework; path = System/Library/Frameworks/GLUT.framework; sourceTree = SDKROOT; };
+		646CAE7513A54C7700D85034 /* libGLEW.1.6.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libGLEW.1.6.0.dylib; path = ../../../../opt/local/lib/libGLEW.1.6.0.dylib; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		646CAE5413A422AF00D85034 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				646CAE7613A54C7700D85034 /* libGLEW.1.6.0.dylib in Frameworks */,
+				646CAE7213A5255F00D85034 /* GLUT.framework in Frameworks */,
+				646CAE7013A5254200D85034 /* libAntTweakBar.dylib in Frameworks */,
+				646CAE6E13A51CB800D85034 /* OpenGL.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		646CAE4C13A422AF00D85034 = {
+			isa = PBXGroup;
+			children = (
+				646CAE7513A54C7700D85034 /* libGLEW.1.6.0.dylib */,
+				646CAE7113A5255F00D85034 /* GLUT.framework */,
+				646CAE6F13A5254200D85034 /* libAntTweakBar.dylib */,
+				646CAE6D13A51CB800D85034 /* OpenGL.framework */,
+				646CAE5A13A422AF00D85034 /* spline2D */,
+				646CAE5813A422AF00D85034 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		646CAE5813A422AF00D85034 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				646CAE5713A422AF00D85034 /* spline2D */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		646CAE5A13A422AF00D85034 /* spline2D */ = {
+			isa = PBXGroup;
+			children = (
+				646CAE5B13A422AF00D85034 /* main.cpp */,
+				646CAE6A13A4232000D85034 /* UI */,
+				646CAE6B13A4233900D85034 /* State */,
+				646CAE6C13A4234700D85034 /* Utils */,
+			);
+			path = spline2D;
+			sourceTree = "<group>";
+		};
+		646CAE6A13A4232000D85034 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				646CAE6613A4231900D85034 /* visualizer.cpp */,
+				646CAE6713A4231900D85034 /* visualizer.h */,
+			);
+			name = UI;
+			sourceTree = "<group>";
+		};
+		646CAE6B13A4233900D85034 /* State */ = {
+			isa = PBXGroup;
+			children = (
+				646CAE6313A4231900D85034 /* state.cpp */,
+				646CAE6413A4231900D85034 /* state.h */,
+			);
+			name = State;
+			sourceTree = "<group>";
+		};
+		646CAE6C13A4234700D85034 /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				646CAE6513A4231900D85034 /* timer.h */,
+				646CAE5D13A422AF00D85034 /* spline2D.1 */,
+			);
+			name = Utils;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		646CAE5613A422AF00D85034 /* spline2D */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 646CAE6013A422AF00D85034 /* Build configuration list for PBXNativeTarget "spline2D" */;
+			buildPhases = (
+				646CAE5313A422AF00D85034 /* Sources */,
+				646CAE5413A422AF00D85034 /* Frameworks */,
+				646CAE5513A422AF00D85034 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = spline2D;
+			productName = spline2D;
+			productReference = 646CAE5713A422AF00D85034 /* spline2D */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		646CAE4E13A422AF00D85034 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				ORGANIZATIONNAME = "DISI - University of Genova";
+			};
+			buildConfigurationList = 646CAE5113A422AF00D85034 /* Build configuration list for PBXProject "spline2D" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = English;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 646CAE4C13A422AF00D85034;
+			productRefGroup = 646CAE5813A422AF00D85034 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				646CAE5613A422AF00D85034 /* spline2D */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		646CAE5313A422AF00D85034 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				646CAE5C13A422AF00D85034 /* main.cpp in Sources */,
+				646CAE6813A4231900D85034 /* state.cpp in Sources */,
+				646CAE6913A4231900D85034 /* visualizer.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		646CAE5E13A422AF00D85034 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = DEBUG;
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				GCC_VERSION = com.apple.compilers.llvm.clang.1_0;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = (
+					/opt/local/include,
+					/usr/local/include/eigen3,
+				);
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		646CAE5F13A422AF00D85034 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_VERSION = com.apple.compilers.llvm.clang.1_0;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = (
+					/opt/local/include,
+					/usr/local/include/eigen3,
+				);
+				MACOSX_DEPLOYMENT_TARGET = 10.6;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		646CAE6113A422AF00D85034 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_OBJC_EXCEPTIONS = YES;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					/opt/local/lib,
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		646CAE6213A422AF00D85034 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_ENABLE_OBJC_EXCEPTIONS = YES;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					/opt/local/lib,
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		646CAE5113A422AF00D85034 /* Build configuration list for PBXProject "spline2D" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				646CAE5E13A422AF00D85034 /* Debug */,
+				646CAE5F13A422AF00D85034 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		646CAE6013A422AF00D85034 /* Build configuration list for PBXNativeTarget "spline2D" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				646CAE6113A422AF00D85034 /* Debug */,
+				646CAE6213A422AF00D85034 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 646CAE4E13A422AF00D85034 /* Project object */;
+}

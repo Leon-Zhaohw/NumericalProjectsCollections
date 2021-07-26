@@ -1,0 +1,640 @@
+// estimateIntegral() computes the VSL integral for a given surface point and VSL
+
+#ifndef PI
+#define PI 3.1415926535
+#endif
+
+#define MIN_PDF  0.005f
+#define WARD_EPS 0.001f
+
+#define WARD_DUER
+// #undef WARD_DUER
+
+// --------------------------------------------------------------------------
+
+bool aboveTangentPlane(float3 D, float3x3 frameGToL)
+{
+   return dot(D, frameGToL[2]) > 0.001;
+}
+
+// --------------------------------------------------------------------------
+
+float getWardDenom(float cosIn, float cosOut)
+{
+#ifdef WARD_DUER
+    return (cosIn * cosOut);
+#else
+    return sqrt(cosIn * cosOut);
+#endif    
+}
+
+// --------------------------------------------------------------------------
+
+float wardLobe(float cosIn, float cosOut, float cosHalf, float alpha)
+{
+	cosIn  = max(cosIn,  WARD_EPS);
+	cosOut = max(cosOut, WARD_EPS);
+	float c2 = cosHalf * cosHalf;
+	return exp((c2 - 1) / (c2 * alpha * alpha)) / getWardDenom(cosIn, cosOut);
+}
+
+// --------------------------------------------------------------------------
+
+// in local frame
+float wardLobeAniso(float3 wi, float3 wo, float2 alpha)
+{
+	wi.z = max(wi.z, WARD_EPS);  wo.z = max(wo.z, WARD_EPS);
+	
+	float3 h  = wi + wo; // doesn't have to be normalized
+	float2 ha = h.xy / alpha.xy;
+	float exponent = -dot(ha,ha)/(h.z*h.z);
+
+	return exp(exponent) / getWardDenom(wi.z, wo.z); 
+}
+
+// --------------------------------------------------------------------------
+
+// note: all vectors are in LOCAL frame
+float3 evalBrdfAniso(float3 kd, float3 ks, float2 alpha, float3 wi, float3 wo)
+{
+    return kd + ks * wardLobeAniso(wi, wo, alpha);
+}
+
+// --------------------------------------------------------------------------
+
+// note: all vectors are in local space
+float4 evalBrdfPdf(float3 kd, float3 ks, float2 alpha, float3 wi, float3 wo, bool needPdf)
+{
+	wi.z = max(wi.z, WARD_EPS);  wo.z = max(wo.z, WARD_EPS);
+	
+	float3 h  = wi + wo;
+	float2 ha = h.xy / alpha.xy;
+
+	float  lobe = exp(-dot(ha,ha)/(h.z*h.z));
+	float3 brdf = kd + ks * lobe / getWardDenom(wi.z, wo.z);
+	float  pdf  = 0;
+	if(needPdf)
+	{
+		h = normalize(h);
+		pdf = lobe / ( (alpha.x*alpha.y) * (4*PI) * (h.z*h.z*h.z*dot(h, wi)) );
+	}
+	return float4(brdf,pdf);
+}	
+
+// --------------------------------------------------------------------------
+
+float sqr(float a) { return a*a; }
+
+// --------------------------------------------------------------------------
+
+struct BrdfSamplingOutput {
+	float3 D;
+	float3 brdf;
+	float  pdf;
+};
+
+// --------------------------------------------------------------------------
+
+// note: all vectors are in LOCAL frame
+BrdfSamplingOutput sampleBrdf(float3 inDirection, float3 Kd, float3 Ks, float2 alpha, 
+                              float r1, float r2)
+{
+    BrdfSamplingOutput outVal;
+
+    // TODO: chnage to anisotropic sampling
+#if 0 // isotropic
+	float tanThetaHSq = -alpha.x*alpha.y*log(r1);
+	float phiH = 2.0f * PI * r2;
+	float2 cosSinPhiH = float2(cos(phiH), sin(phiH));
+#else // anisotropic
+    float  phiH = 2.0f * PI * r2;
+	float2 cosSinPhiH = normalize( float2(cos(phiH),sin(phiH)) * alpha.xy );
+	float tanThetaHSq = -log(r1) / dot(cosSinPhiH/alpha, cosSinPhiH/alpha);
+#endif
+
+	float cosThetaH = sqrt(1.f/(1.f + tanThetaHSq));
+	float sinThetaH = sqrt(tanThetaHSq)*cosThetaH;
+
+	float3 h = float3(sinThetaH*cosSinPhiH.x, sinThetaH*cosSinPhiH.y, cosThetaH);
+
+	float hDotIn = dot(h, inDirection);
+	outVal.D = 2.f*hDotIn*h - inDirection;
+
+	if(outVal.D.z <= WARD_EPS) 
+	  { outVal.pdf = -1; return outVal; } // generated direction below tangent
+
+	float2 haxy = h.xy/alpha;
+	float lobe  = exp(-dot(haxy,haxy)/(h.z*h.z));
+	outVal.brdf = Kd + Ks*(lobe / getWardDenom(inDirection.z, outVal.D.z));
+	outVal.pdf  = lobe / ( (alpha.x*alpha.y) * (4*PI) * (h.z*h.z*h.z * hDotIn) );
+	
+	return outVal;
+}
+
+// --------------------------------------------------------------------------
+
+float3x3 constructFromZ(float3 z)
+{
+    float3 x, y;
+    if (abs(z.x) > 0.99) x = float3(0, 1, 0); else x = float3(1, 0, 0);
+    y = normalize(cross(z, x));
+    x = cross(y, z);
+    return float3x3(
+		x.x, y.x, z.x,
+		x.y, y.y, z.y,
+		x.z, y.z, z.z);
+}
+
+float3x3 constructGlobToLocFromZ(float3 z)
+{
+    float3 x, y;
+    if (abs(z.x) > 0.99) x = float3(0, 1, 0); else x = float3(1, 0, 0);
+    y = normalize(cross(z, x));
+    x = cross(y, z);
+    return float3x3(x, y, z);
+}
+
+float3x3 setupConeFrame(float dist, float lightRadius, float3 L, float3 N)
+{
+    return constructFromZ( (dist>lightRadius) ? L : N);
+    // return constructFromZ(L);
+}
+
+#if 1 // randomized
+unsigned int initSeed(float3 L) { return (int)(1000000.f*dot(L,float3(1,1,1))); }
+unsigned int nextSeed(unsigned int X) { return (X = (1103515245u*X + 12345u)); }
+float rand01f(unsigned int X) { return (X + 1) * 2.328306435454494e-10f; }
+#else // deterministic
+unsigned int initSeed(float3 L) { return 0; }
+unsigned int nextSeed(unsigned int X) { return X; }
+float rand01f(unsigned int X) { return 0.5f; }
+#endif
+
+
+float3 squareToSphericalCap(float cosThetaMax, float r1, float r2)
+{
+    // determine uniform point on disk (given as angle and rad)
+    float rad, angle;
+    float2 d  = 2 * float2(r1,r2) - 1;
+    float2 ad = abs(d);
+    
+    if ((ad.x < 1e-6f) && (ad.y < 1e-6f))
+        rad = angle = 0;
+    else if (ad.x > ad.y)
+    {
+        angle = (PI / 4) * d.y / d.x;
+        rad = d.x;
+    }
+    else
+    {
+        angle = PI / 2 - (PI / 4) * d.x / d.y;
+        rad = d.y;
+    }
+
+    if (rad < 0) { rad = -rad; angle += PI; }
+
+    // transform back to (r1, r2)
+    r1 = rad * rad;
+
+    // sample in local frame
+    float z = 1 - r1 * (1 - cosThetaMax);
+    float tmp = sqrt(1 - z * z);
+    float x = cos(angle) * tmp;
+    float y = sin(angle) * tmp;
+    return float3(x, y, z);
+}
+
+float avg3(float3 v) 
+{ 
+	// return dot(v, float3(1.f/3, 1.f/3, 1.f/3) );
+	return (v.x+v.y+v.z)/3;
+}
+
+// estimate the integral using one deterministic sample from the view sample to the light
+float3 glossyVPLContrib(float lightClamping, float dist, float3 L,
+						float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+						float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{
+	if ( aboveTangentPlane(L, pixelFrameGToL) && aboveTangentPlane(-L, lightFrameGToL) )
+	{
+		float3 wi1 = mul(pixelFrameGToL, L);
+		float3 wo1 = mul(pixelFrameGToL, V);
+		float3 wi2 = mul(lightFrameGToL, -L);
+		float3 wo2 = mul(lightFrameGToL, lightIncoming);
+		float3 brdf1 = evalBrdfAniso(Kd, Ks, alpha, wi1, wo1);
+		float3 brdf2 = evalBrdfAniso(lightKd, lightKs, lightAlpha, wi2, wo2);
+#if 0 // clamping  brdf1*cos1/r^2
+		float3 clampedTerm = brdf1 * wi1.z / (dist*dist);
+		float  weight1 = (lightClamping<=0) ? 1 : min(1, lightClamping/avg3(clampedTerm));
+		return (clampedTerm * brdf2 * wi2.z) * weight1;
+#else // clamping brdf1*cos1*brdf2*cos2/r^2
+		float3 clampedTerm = brdf1 * wi1.z * brdf2 * wi2.z / (dist*dist);
+		float  weight1 = (lightClamping<=0) ? 1 : min(1, lightClamping/avg3(clampedTerm));
+		return clampedTerm * weight1;
+#endif
+
+	}
+	else
+		return 0;
+}
+
+// --------------------------------------------------------------------------
+
+float rayPlaneIsect(float3 rayOrig, float3 rayDir, float3 P, float3 N)
+{
+  float ddd = dot(N, rayDir);
+	  
+  // ray parallel to the plane? 
+  float eps = 1e-3f;
+  if( ddd > -eps )  return 1e20;
+		  
+  float d = -dot(P, N); // d parameter of the plane equation
+		  
+  // parameter t for the intersection
+  float t = -(dot(N, rayOrig) + d) / ddd;
+		  
+  return t;
+}
+
+
+// --------------------------------------------------------------------------
+
+float3 coneSamplingDisc(unsigned int rndSeed, int num, int2 subPixIdx, int2 aa, 
+					float cosTheta, float3x3 coneFrameLToG, float solidAngle, float lightRadius,
+                    float3 L,
+                    float3 pixelPos, float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+                    float3 lightPos, float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{
+    float3 sum = 0;
+    
+    float3 wo1 = mul(pixelFrameGToL, V);
+    float3 wo2 = mul(lightFrameGToL, lightIncoming);
+
+	int2 res = num*aa;
+    for (int i = subPixIdx.y; i < res.y; i+=aa.y)
+    {
+        for (int j = subPixIdx.x; j < res.x; j+=aa.x)
+        {
+            rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+            rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+            float3 Dc = squareToSphericalCap(cosTheta, r1, r2);
+            float3 Dw = mul(coneFrameLToG, Dc); // cone to world
+            
+            if ( aboveTangentPlane( Dw, pixelFrameGToL) && 
+				 aboveTangentPlane(-Dw, lightFrameGToL) ) 
+            {
+				float t = rayPlaneIsect(pixelPos, Dw, lightPos, lightFrameGToL[2]);
+				float3 isectOffset = (pixelPos + t*Dw) - lightPos;
+				if( length(isectOffset) <= lightRadius )
+				{
+					float3 wi1 = mul(pixelFrameGToL,  Dw);
+					float3 wi2 = mul(lightFrameGToL, -Dw);
+					float3 brdf1 = evalBrdfAniso(Kd, Ks, alpha, wi1, wo1);
+					float3 brdf2 = evalBrdfAniso(lightKd, lightKs, lightAlpha, wi2, wo2);
+					sum += brdf1 * brdf2 * wi1.z /** wi2.z*/;
+				}
+            }
+        }
+    }
+    
+    sum *= solidAngle / (float)(num*num);
+    return sum;
+}
+
+
+
+float3 coneSampling(unsigned int rndSeed, int num, int2 subPixIdx, int2 aa, 
+					float cosTheta, float3x3 coneFrameLToG, float solidAngle, 
+                    float3 L,
+                    float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+                    float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{
+    float3 sum = 0;
+    
+    float3 wo1 = mul(pixelFrameGToL, V);
+    float3 wo2 = mul(lightFrameGToL, lightIncoming);
+
+	int2 res = num*aa;
+    for (int i = subPixIdx.y; i < res.y; i+=aa.y)
+    {
+        for (int j = subPixIdx.x; j < res.x; j+=aa.x)
+        {
+            rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+            rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+            float3 Dc = squareToSphericalCap(cosTheta, r1, r2);
+            float3 Dw = mul(coneFrameLToG, Dc); // cone to world
+            
+            if ( aboveTangentPlane( Dw, pixelFrameGToL) && 
+				 aboveTangentPlane(-Dw, lightFrameGToL) ) 
+            {
+				float3 wi1 = mul(pixelFrameGToL,  Dw);
+				float3 wi2 = mul(lightFrameGToL, -Dw);
+				float3 brdf1 = evalBrdfAniso(Kd, Ks, alpha, wi1, wo1);
+				float3 brdf2 = evalBrdfAniso(lightKd, lightKs, lightAlpha, wi2, wo2);
+				sum += brdf1 * brdf2 * wi1.z * wi2.z;
+            }
+        }
+    }
+    
+    sum *= solidAngle / (float)(num*num);
+    return sum;
+}
+
+// pixel brdf sampling alone
+float3 brdf1Sampling(unsigned int rndSeed, int num, int2 subPixIdx, int2 aa, 
+					 float cosTheta, float3x3 coneFrameLToG, 
+					 float solidAngle, float3 L,
+                     float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+                     float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{ 
+    float3 sum=0;
+    
+    float3x3 pixelFrameLToG = transpose( pixelFrameGToL );
+    float3   Lp  = mul(pixelFrameGToL, L); // light direction in pixel frame
+    float3   wo1 = mul(pixelFrameGToL, V); wo1.z = max(wo1.z, WARD_EPS);
+    float3   wo2 = mul(lightFrameGToL, lightIncoming);
+	float3x3 pixelToLightFrame = mul(lightFrameGToL, pixelFrameLToG);
+
+	int2 res = num*aa;
+    for (int i = subPixIdx.y; i < res.y; i+=aa.y)
+    {
+        for (int j = subPixIdx.x; j < res.x; j+=aa.x)
+        {
+            rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+            rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+			BrdfSamplingOutput s = sampleBrdf(wo1, Kd, Ks, alpha, r1, r2);
+			if( s.pdf > MIN_PDF && dot(s.D, Lp) > cosTheta ) // valid dir && inside cone
+			{ 
+				float3 wi2 = mul(pixelToLightFrame, -s.D); // pixel local to light local
+				if( wi2.z > 0.001 ) // above light tangent plane
+				{   
+					float3 brdf2 = evalBrdfAniso(lightKd, lightKs, lightAlpha, wi2, wo2);
+					sum += s.brdf * brdf2 * s.D.z * wi2.z / s.pdf;
+				}
+			}
+		}
+	}
+    sum /= (float) (num * num);
+
+    return sum;
+}    
+
+// light brdf sampling alone
+float3 brdf2Sampling(unsigned int rndSeed, int num, int2 subPixIdx, int2 aa, 
+					 float cosTheta, float3x3 coneFrameLToG, 
+					 float solidAngle, float3 L,
+                     float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+                     float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{ 
+    float3 sum=0;
+
+    float3x3 lightFrameLToG = transpose( lightFrameGToL );
+    float3   Ll  = mul(lightFrameGToL,-L); // light direction in pixel frame
+    float3   wo1 = mul(pixelFrameGToL, V); 
+    float3   wo2 = mul(lightFrameGToL, lightIncoming); wo2.z = max(wo2.z, WARD_EPS);
+	float3x3 lightToPixelFrame = mul(pixelFrameGToL, lightFrameLToG);
+
+	int2 res = num*aa;
+    for (int i = subPixIdx.y; i < res.y; i+=aa.y)
+    {
+        for (int j = subPixIdx.x; j < res.x; j+=aa.x)
+        {
+            rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+            rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+			BrdfSamplingOutput s = sampleBrdf(wo2, lightKd, lightKs, lightAlpha, r1, r2);
+
+			if( s.pdf > MIN_PDF && dot(s.D, Ll) > cosTheta  ) // valid dir && inside cone
+			{ 
+				float3 wi1 = mul(lightToPixelFrame, -s.D); // light local to pixel local
+				if( wi1.z > 0.001 ) // above pixel tangent plane
+				{   
+					float3 brdf2 = evalBrdfAniso(Kd, Ks, alpha, wi1, wo1);
+					sum += s.brdf * brdf2 * wi1.z * s.D.z / s.pdf;
+				}
+			}
+		}
+	}
+    sum /= (float) (num * num);
+    
+    return sum;
+}
+
+// return MIS weight divided by the pdf for the current techniques
+float getMisWeight(int current, float4 pdfs, float4 numSamples)
+{
+   // balance heuristic
+   return numSamples[current] / dot(pdfs,numSamples);
+   // power heuristic (2)
+   // return pdfs[current]*numSamples[current] / dot(pdfs*pdfs,numSamples);
+}
+
+float3 misSampling(unsigned int rndSeed, int num, int2 subPixIdx, int2 aa, 
+				   float cosTheta, float3x3 coneFrameLToG, 
+				   float solidAngle, float3 L,
+				   float3x3 pixelFrameGToL, float3 Kd, float3 Ks, float2 alpha, float3 V, 
+				   float3x3 lightFrameGToL, float3 lightKd, float3 lightKs, float2 lightAlpha, float3 lightIncoming)
+{
+    float4 pdfs = float4(1/solidAngle, 0, 0, 0);
+    float4 numSamples = num*num;
+    int i,j;
+    
+    // use BRDF sampling only on glossy surfaces
+    bool2 useBrdf = bool2(!all(Ks==0), !all(lightKs==0));
+    // bool2 useBrdf = bool2(true, true);
+
+	float3 wo1 = mul(pixelFrameGToL, V);             wo1.z = max(wo1.z, WARD_EPS);
+    float3 wo2 = mul(lightFrameGToL, lightIncoming); wo2.z = max(wo2.z, WARD_EPS);
+
+    float3 coneSum = 0, brdf1Sum = 0, brdf2Sum = 0;
+
+	int2 res = num*aa;
+    for (i = subPixIdx.y; i < res.y; i+=aa.y)
+    {
+        for (j = subPixIdx.x; j < res.x; j+=aa.x)
+        {
+            rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+            rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+            float3 Dc = squareToSphericalCap(cosTheta, r1, r2);
+            float3 Dw = mul(coneFrameLToG, Dc); // cone to world
+            
+            if ( aboveTangentPlane( Dw, pixelFrameGToL) && 
+				 aboveTangentPlane(-Dw, lightFrameGToL) ) 
+            {
+				float3 wi1 = mul(pixelFrameGToL,  Dw);
+				float3 wi2 = mul(lightFrameGToL, -Dw);
+				float4 brdfPdf1 = evalBrdfPdf(Kd, Ks, alpha, wi1, wo1, useBrdf[0]);
+				float4 brdfPdf2 = evalBrdfPdf(lightKd, lightKs, lightAlpha, wi2, wo2, useBrdf[1]);
+				float3 fx = brdfPdf1.xyz * brdfPdf2.xyz * wi1.z * wi2.z;
+				pdfs[1] = brdfPdf1.w;
+				pdfs[2] = brdfPdf2.w;
+				coneSum += fx * getMisWeight(0,pdfs,numSamples);
+            }
+        }
+    }
+    
+    coneSum /= (float)(num*num);
+
+	if(useBrdf[0])
+	{
+		float3x3 pixelFrameLToG = transpose( pixelFrameGToL );
+		float3   Lp  = mul(pixelFrameGToL, L); // light direction in pixel frame
+		float3x3 pixelToLightFrame = mul(lightFrameGToL, pixelFrameLToG);
+		for (i = subPixIdx.y; i < res.y; i+=aa.y)
+		{
+			for (j = subPixIdx.x; j < res.x; j+=aa.x)
+			{
+				rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+				rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+				BrdfSamplingOutput s = sampleBrdf(wo1, Kd, Ks, alpha, r1, r2);
+				if( s.pdf > MIN_PDF && dot(s.D, Lp) > cosTheta ) // valid dir && inside cone
+				{ 
+					float3 wi2 = mul(pixelToLightFrame, -s.D); // pixel local to light local
+					if( wi2.z > 0.001 ) // above light tangent plane
+					{   
+						float4 brdfPdf2 = evalBrdfPdf(lightKd, lightKs, lightAlpha, wi2, wo2, useBrdf[1]);
+						float3 fx = s.brdf * brdfPdf2 * s.D.z * wi2.z;
+						pdfs[1] = s.pdf;
+						pdfs[2] = brdfPdf2.w;
+						brdf1Sum += fx * getMisWeight(1,pdfs,numSamples);
+					}
+				}
+			}
+		}
+		brdf1Sum /= (float) (num * num);
+	}
+
+	if(useBrdf[1])
+	{
+		float3x3 lightFrameLToG = transpose( lightFrameGToL );
+		float3   Ll  = mul(lightFrameGToL,-L); // light direction in pixel frame
+		float3x3 lightToPixelFrame = mul(pixelFrameGToL, lightFrameLToG);
+		for (i = subPixIdx.y; i < res.y; i+=aa.y)
+		{
+			for (j = subPixIdx.x; j < res.x; j+=aa.x)
+			{
+				rndSeed = nextSeed(rndSeed); float r1 = (i + rand01f(rndSeed)) / res.y;
+				rndSeed = nextSeed(rndSeed); float r2 = (j + rand01f(rndSeed)) / res.x;
+				BrdfSamplingOutput s = sampleBrdf(wo2, lightKd, lightKs, lightAlpha, r1, r2);
+
+				if( s.pdf > MIN_PDF && dot(s.D, Ll) > cosTheta  ) // valid dir && inside cone
+				{ 
+					float3 wi1 = mul(lightToPixelFrame, -s.D); // light local to pixel local
+					if( wi1.z > 0.001 ) // above pixel tangent plane
+					{   
+						float4 brdfPdf1 = evalBrdfPdf(Kd, Ks, alpha, wi1, wo1, useBrdf[0]);
+						pdfs[1] = brdfPdf1.w;
+						pdfs[2] = s.pdf;
+						float3 fx = s.brdf * brdfPdf1 * wi1.z * s.D.z;
+						brdf2Sum += fx * getMisWeight(2,pdfs,numSamples);
+					}
+				}
+			}
+		}
+		brdf2Sum /= (float) (num * num);
+	}
+    
+    return coneSum + brdf1Sum + brdf2Sum;
+}
+
+// ------------------------------------------------------------------------------------
+float circleSegmentArea(float h, float r)
+{
+	h /= r;
+	float  A = (h * sqrt(1-h*h) + asin(h) + PI/2);
+	return A*r*r;
+}
+
+float distFromPlane(float3 p, float3 np, float3 q, float3 nq)
+{
+	float dpq = dot(np,nq);
+	if(dpq*dpq>0.99) return 1e20;
+
+	float l = dot(p-q, nq);
+
+	return sqrt( l*l / (1-dpq*dpq) );
+}
+
+float effectiveLightArea(float lightR, float3 lightP, float3 lightN, float3 P, float3 N)
+{
+	float h = distFromPlane(lightP, lightN, P, N);
+	return (h<lightR) ? circleSegmentArea(h,lightR) : PI*lightR*lightR;
+}
+
+// ------------------------------------------------------------------------------------
+float3 estimateIntegral(int lightNumSamples, int2 subPixIdx, int2 aa, float dist, 
+						float3 L, float3 P, float3 N,
+                        float3 Kd, float3 Ks, float2 alpha, float3 V, 
+                        float3 lightPos, float3 lightDir, float3 lightKd, float3 lightKs, 
+                        float2 lightAlpha, float3 lightIncoming, float lightRadius,
+						float lightClamping)
+{
+    // setup local coordinate frame at the pixel and the light
+    float3x3 pixelFrameGToL = constructGlobToLocFromZ(N);
+    float3x3 lightFrameGToL = constructGlobToLocFromZ(lightDir);
+
+	if(0)
+	{
+		// glossy point light source (with 1/r^2)
+		return glossyVPLContrib(lightClamping, dist, L, pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+	}
+
+
+    // compute solid angle
+	float theta = asin(min(lightRadius/dist,1)); // if inside the sphere, sample whole hemisphere
+	float cosTheta = cos(theta);
+	// float cosTheta = sqrt( max(0, 1-rOverDist*rOverDist) );
+	float sinThetaHalf = sin(theta / 2);
+	float solidAngle = 4 * PI * sinThetaHalf * sinThetaHalf;
+	// float solidAngle = 2*PI * (1-cosTheta);
+
+	unsigned int rndSeed = initSeed(L);
+    
+    float3x3 frame = setupConeFrame(dist, lightRadius, L, N);
+    
+	// compute number of samples (if adaptive)
+	int num = lightNumSamples;
+	if (num < 0)
+	{
+		float c = sqrt(solidAngle / (2 * PI));
+		num = ceil(-num * c);
+	}
+	
+    // sample the integral
+    float3 sum = 0;
+    
+	if(0) // cone sampling with rejection of rays outside the light disc
+	{
+		sum = coneSamplingDisc(rndSeed, num, subPixIdx, aa, cosTheta, frame, solidAngle, 
+			lightRadius, L, 
+			P, pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightPos, lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+	}
+	else if(0) // cone sampling
+	{
+		sum = coneSampling(rndSeed, num, subPixIdx, aa, cosTheta, frame, solidAngle, L, 
+			pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+	}
+	else if(0) // pixel brdf sampling
+	{
+		sum = brdf1Sampling(rndSeed, num, subPixIdx, aa, cosTheta, frame, solidAngle, L,
+			pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+	}
+    else if(0) // light brdf sampling
+    {
+		sum = brdf2Sampling(rndSeed, num, subPixIdx, aa, cosTheta, frame, solidAngle, L,
+			pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+    }
+    else if(1) // mis (cone+brdf1+brdf2)
+    {
+		sum = misSampling(rndSeed, num, subPixIdx, aa, cosTheta, frame, solidAngle, L,
+			pixelFrameGToL, Kd, Ks, alpha, V, 
+			lightFrameGToL, lightKd, lightKs, lightAlpha, lightIncoming);
+    }
+
+    // return sum / (PI * lightRadius * lightRadius);
+	return sum / effectiveLightArea(lightRadius, lightPos, lightDir, P, N);
+}

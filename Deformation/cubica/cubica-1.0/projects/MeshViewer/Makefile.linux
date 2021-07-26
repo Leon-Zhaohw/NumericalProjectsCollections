@@ -1,0 +1,70 @@
+CFLAGS = -c -I../../src/linearalgebra -I${SLEPC_DIR}/include
+GLVUFLAGS = -lglvuglvu -lglvufileutils -lglvucamera -lglvumath -L${GLVU_LIB}
+CPPFLAGS = -fopenmp -O3 -c -Wall -I../../ -I../../src/util \
+           -I../../src/linearalgebra -I../../src/geometry \
+           -I../../src/cubature -I../../src/material \
+           -I../../src/integrator \
+           -I${GLVU_INCLUDE} -I${MKLINC}
+FPPFLAGS =
+EXECUTABLE = ../../bin/MeshViewer
+regression: $(EXECUTABLE)
+ALL: $(EXECUTABLE)
+LINALGEBRASRC = ../../src/linearalgebra/MATRIX3.cpp \
+                ../../src/linearalgebra/VECTOR.cpp \
+                ../../src/linearalgebra/MATRIX.cpp \
+                ../../src/linearalgebra/TENSOR3.cpp \
+                ../../src/linearalgebra/SPARSE_MATRIX.cpp \
+                ../../src/linearalgebra/SPARSE_PETSC_MATRIX.cpp \
+                ../../src/linearalgebra/NNLS.cpp \
+                ../../src/linearalgebra/PCG_MATRIX.cpp \
+                ../../src/linearalgebra/BLOCK_MATRIX.cpp \
+                ../../src/linearalgebra/BLOCK_VECTOR.cpp
+GEOMETRYSRC = ../../src/geometry/TET.cpp \
+              ../../src/geometry/TRIANGLE.cpp \
+              ../../src/geometry/BOX.cpp \
+              ../../src/geometry/CYLINDER.cpp \
+              ../../src/geometry/SURFACE.cpp \
+              ../../src/geometry/COMPOUND.cpp \
+              ../../src/geometry/SPHERE.cpp  \
+              ../../src/geometry/OBJ.cpp \
+              ../../src/geometry/ISO_STUFFER.cpp \
+              ../../src/geometry/plyfile.cpp \
+              ../../src/geometry/TET_MESH.cpp \
+              ../../src/geometry/SUBSPACE_TET_MESH.cpp
+UTILSRC = ../../src/util/SIMPLE_PARSER.cpp
+MATERIALSRC = ../../src/material/STVK.cpp \
+              ../../src/material/ARRUDA_BOYCE.cpp \
+              ../../src/material/MOONEY_RIVLIN.cpp \
+              ../../src/material/INVERTIBLE.cpp \
+              ../../src/material/NEO_HOOKEAN.cpp \
+              ../../src/material/POLYNOMIAL_4_TERM.cpp \
+              ../../src/material/MATERIAL.cpp
+INTEGRATORSRC = ../../src/integrator/FULLSPACE_INTEGRATOR.cpp
+OGDENSRC = ../../src/material/OGDEN.cpp \
+           ../../src/material/OGDEN_00000.cpp \
+           ../../src/material/OGDEN_00010.cpp \
+           ../../src/material/OGDEN_00100.cpp \
+           ../../src/material/OGDEN_00101.cpp \
+           ../../src/material/OGDEN_01000.cpp \
+           ../../src/material/OGDEN_01100.cpp \
+           ../../src/material/OGDEN_01101.cpp \
+           ../../src/material/OGDEN_10010.cpp
+SOURCEC    = main.cpp \
+             $(LINALGEBRASRC) \
+             $(GEOMETRYSRC) \
+             $(UTILSRC) \
+             $(MATERIALSRC) \
+             $(INTEGRATORSRC) \
+             $(OGDENSRC)
+OBJSC = $(SOURCEC:.cpp=.o)
+
+include ${SLEPC_DIR}/conf/slepc_common
+
+CLINKER = g++
+
+$(EXECUTABLE) : $(OBJSC) chkopts
+	${CLINKER} \
+  -fopenmp -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core \
+  -liomp5 -lpthread -L${MKLLIB} \
+  -o ${EXECUTABLE} $(OBJSC) ${SLEPC_LIB} ${GLVUFLAGS} \
+  -lGLU -lGL -lglut

@@ -1,0 +1,30 @@
+TNT     = ../../TML/TNT
+TNT_INC = -I$(TNT)
+
+TML     = ../../TML
+TML_INC = -I$(TML)/include $(TNT_INC)
+TML_LIB = -L$(TML)/lib -ltml -lm
+
+ADM     = ../..
+ADM_INC = -I$(ADM)/include $(TML_INC)
+ADM_LIB = -L$(ADM)/lib -ladm $(TML_LIB)
+
+SURFACES = -I../..
+
+##############################################
+
+VIEWER   = -I..
+
+MAGICK_INC = `Magick++-config --cxxflags --cppflags`
+MAGICK_LIB = `Magick++-config --ldflags --libs`
+
+FLTK_INC = `fltk-config --use-forms --use-gl --cflags --cxxflags`
+FLTK_LIB = `fltk-config --use-forms --use-gl --ldflags --libs`
+
+##############################################
+
+CC    = g++
+FLAGS = -g -Wall 
+
+.cc.o: $<
+	$(CC) -c $< -o $@ $(FLAGS) $(INC)

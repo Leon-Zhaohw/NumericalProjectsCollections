@@ -1,0 +1,13 @@
+ADM (Adaptive Dynamic Mesh)
+--------------------------
+
+* To compile ADM library, first you need the TML library.
+
+* All types of oracles are stored at 'surfaces' folder.
+
+* To use level-set, you need CPLS3D library.
+
+* TML and CPLS3D are different projects, so you must checkout them.
+
+Author: Fernando de Goes
+Date  : May 23, 2007

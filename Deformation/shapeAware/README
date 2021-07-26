@@ -1,0 +1,117 @@
+2D Matlab implementation of shape deformation with Dual Quaternion Skinning
+using weights according to "Smooth Shape-Aware Functions with Controlled
+Extrema" by Alec Jacobson, Tino Weinkauf, and Olga Sorkine 2012
+
+= Cactus Demo =
+
+  This matlab package demos computing skinning weights automatically for a 2d
+  shape. To start, add cactus_demo/ to your matlab path and issue:
+  
+  >> cactus_demo
+
+= Weights Computation =
+
+  If you just want to start digging around in the weight computation code, look
+  at:
+    boundary_conditions.m
+    monotonic_biharmonic.m
+
+= Notes =
+
+NOTE: Please contact Alec Jacobson, jacobson@inf.ethz.ch before
+using this code outside of an informal setting, i.e. for comparisons.
+
+NOTE: If your weights are coming out as garbage and you're not using Mosek,
+then either use a smaller mesh or install Mosek or upgrade to MATLAB version >=
+2011a
+
+External dependencies:
+  (optional) Mosek: QP solver, much faster than QP solver in matlab 2010b
+  (optional) Triangle: triangulation library, needed only if using triangle.m
+    function.
+
+This package should contain
+cactus_demo/
+  cactus_demo.m
+  biharmonic_bounded.m
+  get_control_points.m
+  simple_deform.m
+  monotonic_biharmonic.m
+  weights_colormap.m
+  boundary_conditions.m
+  doublearea.m
+  harmonic.m
+  load_mesh.m
+  png2mesh.m
+  triangle.m
+  upsample.m
+  tilefigs.m
+  pseudoedge_dof.m
+  conic.m
+  default_mosek_param.m
+  inequality_constraints_from_graphs.m
+  mark_extrema.m
+  monotonicity_matrix.m
+  report_mosek_error.m
+  min_quad_with_fixed.m
+  min_quad_with_fixed_active_set.m
+  repdiag.m
+  avgedge.m
+  axisangle2quat.m
+  cotmatrix3.m
+  cotmatrix_embedded.m
+  dualquatlbs.m
+  edges.m
+  faces_first.m
+  grad.m
+  lbs.m
+  massmatrix3.m
+  massmatrix_embedded.m
+  png2poly.m
+  project_to_lines.m
+  quattrans2udq.m
+  readEDGE.m
+  readELE.m
+  readNODE.m
+  readOBJ.m
+  readOBJfast.m
+  readOFF.m
+  skinning_transformations.m
+  stacktimes.m
+  writeELE.m
+  writeNODE.m
+  writePOLY.m
+  tempprefix.m
+  quatmultiply.m
+  local_max.m
+  local_min.m
+  point.m
+  axisanglebetween.m
+  lu_lagrange.m
+  minnz.m
+  normalizerow.m
+  normrow.m
+  cotmatrix_intrinsic.m
+  mask2poly.m
+  massmatrix_intrinsic.m
+  poly2VEH.m
+  quat2mat.m
+  maxnz.m
+  point_inside_polygon.m
+  README
+  cactus.obj
+  cactus.png
+
+All files copyright Alec Jacobson 2012 unless otherwise noted.
+
+Zip up using:
+>> C = depends('cactus_demo');
+>> C = C(cellfun(@isempty,strfind(C,'opt/local/mosek')));
+>> C = cat(1,C,{ ...
+  'README'; ...
+  'cactus.obj';'cactus.png'});
+>> zip('cactus_demo.zip',C);
+>> fprintf('This package should contain\ncactus_demo/\n');
+>> N = regexprep(C,'^.*\/','');
+>> fprintf('  %s\n',N{:});
+
