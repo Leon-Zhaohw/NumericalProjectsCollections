@@ -1,0 +1,280 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2003-2008 Nils Thuerey
+ *
+ * Header for LevelSet class
+ * 
+ *****************************************************************************/
+
+
+#ifndef LEVELSET_H
+#include <list>
+#include "globals.h"
+#include "geomfile.h"
+#include "fluidsolver.h"
+
+class RandomNumbers;
+
+namespace DDF {
+
+/*****************************************************************************/
+//! A single particle for the levelset
+class LevelSetParticle
+{
+	public:
+  		//! Standard constructor
+  		inline LevelSetParticle(Vec3 mp, Real r = 0.0) :
+				mPos(mp), mRadius(r)/*, mActive( true )*/
+			{ }
+  		//! Copy constructor
+  		inline LevelSetParticle(const LevelSetParticle &a) :
+				mPos(a.mPos), mRadius(a.mRadius)/*, mActive(a.mActive)*/
+			{ }
+
+  		//! Destructor
+	  	inline ~LevelSetParticle() { /* empty */ };
+
+		//! add vector to position
+		inline void advance(double vx, double vy, double vz)
+		{
+			mPos[0] += vx; mPos[1] += vy; mPos[2] += vz;
+		}
+		inline void advance(const Vec3& v)
+		{
+			mPos += v;
+		}
+
+		//! returns position
+		inline const Vec3& getPos() const { return mPos; }
+		//! set particle position
+		inline void setPos(Vec3 set) { mPos = set; }
+		//! returns particle radius
+		inline Real getRadius() const { return mRadius; }
+		//! set particle radius
+		inline void setRadius(Real rad) { mRadius = rad; }
+
+		//! get active flag
+		//inline bool getActive() { return mActive; }
+		//! set active flag
+		//inline void setActive(bool set) { mActive = set; }
+
+		inline Real phi(const Vec3& x) const {
+			const Real sr = ((mRadius>0) ? 1 : -1);
+			return sr*(sr*mRadius - norm(x - mPos));
+		}
+		
+	protected:
+
+		//! the particle position */
+		Vec3 mPos;
+
+		//! signed radius of the particle (also determines side)
+		Real mRadius;
+
+		//! particle active? 
+		//bool mActive;
+};
+
+
+class EscapedParticle
+{
+	public:
+  		//! Standard constructor
+  		inline EscapedParticle(Vec3 mp, Real r, Vec3 vel) :
+				mId(mIdCounter), mType(1),
+				mPos(mp), mRadius(r), mVel( vel ), mAge(0) { mIdCounter++; }
+  		//! Copy constructor
+  		inline EscapedParticle(const EscapedParticle &a) :
+				mId(mIdCounter), mType(1),
+				mPos(a.mPos), mRadius(a.mRadius), mVel(a.mVel), mAge(0) { mIdCounter++; }
+
+	  	inline ~EscapedParticle() { /* empty */ };
+
+		inline void advance(Real dt, Vec3 accel) {
+			mVel += accel * dt;
+			mPos += mVel * dt;
+			mAge++;
+		}
+
+		//! returns position
+		inline const Vec3& getPos() const { return mPos; }
+		//! set particle position
+		inline void setPos(Vec3 set) { mPos = set; }
+		//! returns particle radius
+		inline Real getRadius() const { return mRadius; }
+		//! set particle radius
+		inline void setRadius(Real rad) { mRadius = rad; }
+
+		inline const Vec3& getVel() const { return mVel; }
+		inline void setVel(Vec3 set) { mVel = set; }
+
+		inline int getAge() const { return mAge; }
+		inline void increaseAge(int i) { mAge += i; }
+		inline int getId() const { return mId; }
+
+		inline int getType() const { return mType; }
+		inline void setType(int type) { mType=type; }
+		
+	protected:
+		unsigned int mId;
+		static unsigned int mIdCounter;
+
+		// by default escaped=1, foam=2
+		int mType;
+
+		//! the particle position */
+		Vec3 mPos;
+		//! signed radius of the particle (also determines side)
+		Real mRadius;
+		//! particle velocity
+		Vec3 mVel;
+
+		int mAge;
+};
+
+
+/*****************************************************************************/
+//! level set surface tracking class, template V provides access to the 
+class LevelSet 
+{
+
+	public:
+		//! Constructor 
+		LevelSet();
+		//! Destructor 
+		virtual ~LevelSet();
+
+		//! Init ararys etc. 
+		void initializeLevelSet(int setx, int sety, int setz);
+
+		//! reinitialize level set with signed distance function
+		void reinitMarching(Real maxTime, Grid<Real>* phiAr, FlagGrid* fmFlags, FlagGrid* fluidFlags, 
+				bool doVelTransport, bool correctOuterLayer=true);
+		void reinitFI(Real maxTime, Grid<Real>* phiAr, FlagGrid* fiFlags, bool doVelTransport);
+		void reinitFS(Grid<Real>* phiAr, FlagGrid* fsFlags, bool doVelTransport);
+		//void initFromGeomFile(GeomFile* gf);
+		void initFromGridFlags(Grid<Real>* phiAr);
+
+		//! particle level set methods
+		void plsReseed(Grid<Real>* pPhi, FlagGrid* flags);
+		void plsResample(Grid<Real>* pPhi, Grid<Real>* pDiv, FlagGrid* flags);
+		void plsSeedOneParticle(int i, int j, int k, Real phi, Grid<Real>* pPhi, RandomNumbers* pRand);
+		void plsAdvect(Grid<Vec3>* pVel, FlagGrid* flags, Real dt);
+		void plsCorrect(Grid<Real>* pPhi, Grid<Real>* pPhiPlus, Grid<Real>* pPhiMinus, FlagGrid* flags);
+		void plsRemoveAtObstacle(FlagGrid* flags);
+		int plsRemoveAtSinks(Grid<Real>* pDiv);
+		int plsRemoveEscaped(Grid<Real>* pPhi, Grid<Vec3>* pVel, Grid<Real>* pTemp, Real dx, Real genEscaped, bool genBubbles, int skipBorder);
+		void plsAdjustRadii(Grid<Real>* pPhi, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav, Real generateEscaped);
+		void plsAdvectEscaped(Grid<Real>* pPhi, FlagGrid* flags, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav);
+
+		void clearPhiValuesNearWalls(Grid<Real>* pPhi, FlagGrid* flags);
+		void plsReinitFlagsBruteForce(Grid<Real>* pPhi, FlagGrid* flags, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav);
+
+	public:
+		//! access functions
+
+		//! get array sizes
+		int getSizeX() const { return mSizex; }
+		int getSizeY() const { return mSizey; }
+		int getSizeZ() const { return mSizez; }
+
+		void setFsolver(DDF::FluidSolver* set) { mpFsolver = set; }
+		void setFirstInit(bool set) { mFirstInit = set; }
+		void set2dSlice(int set) { m2dSlice = set; }
+
+		const std::list<LevelSetParticle>& getParticles(void) const { return mParticles; }
+		const std::list<EscapedParticle>& getEscapedParticles(void) const { return mEscapedParticles; }
+		void setFoamLifetime(Real set) { mFoamLifetime = set; }
+
+	protected:
+		bool mFirstInit;
+
+		//  parameter determines 2d slice, if 2d is active
+		int m2dSlice;
+
+		//! parent solver object
+		DDF::FluidSolver *mpFsolver;
+
+		//! the particle array (for multiple timesteps) 
+		std::list<LevelSetParticle> mParticles;
+		//std::list<LevelSetParticle> mParticleSpares;
+		std::list<EscapedParticle> mEscapedParticles;
+
+		//! minimal and maximal particel radii
+		const Real mPrMin, mPrMax;
+
+		//! band of cells to be filled with particles
+		const Real mParticleMaxPhi;
+
+		//! (negative) divergence level threshold which
+		//  identifies a sink for plsRemoveAtSink.
+		const Real mSinkDivLevel;
+
+	protected:
+		inline void plsCorrectAt(int x, int y, int z, const LevelSetParticle& p, Real sign, Grid<Real>* pPhiCorr);
+
+		//! access velocity field wrapper - note, requires valid mpLsVelGrid!
+		Grid<Vec3>* mpLsVelGrid;
+		inline Vec3 lsGetVelocity(int x, int y, int z);
+
+		// grid size
+		int mSizex, mSizey, mSizez;
+
+		// lifetime for escaped foam particles
+		Real mFoamLifetime;
+
+
+		// old, unused - curvature calculation
+		inline Real computeCurvature(Grid<Real> *grid, int i,int j,int k) {
+#			define PHI(i,j,k) (grid->getGlobal(i,j,k))
+#			define ddxP(a,b,c) (PHI((a)+1,(b),(c)) - PHI((a)  ,(b),(c)))
+#			define ddxM(a,b,c) (PHI((a)  ,(b),(c)) - PHI((a)-1,(b),(c)))
+#			define ddxC(a,b,c) ((PHI((a)+1,(b),(c)) - PHI((a)-1,(b),(c))) *0.5)
+#			define ddyP(a,b,c) (PHI((a),(b)+1,(c)) - PHI((a),(b)  ,(c)))
+#			define ddyM(a,b,c) (PHI((a),(b)  ,(c)) - PHI((a),(b)-1,(c)))
+#			define ddyC(a,b,c) ((PHI((a),(b)+1,(c)) - PHI((a),(b)-1,(c))) *0.5)
+#			if DDF_DIMENSION==2
+#				define ddzP(a,b,c) 0.
+#				define ddzM(a,b,c) 0.
+#				define ddzC(a,b,c) 0.
+#			else
+#				define ddzP(a,b,c) (PHI((a),(b),(c)+1) - PHI((a),(b),(c)  ))
+#				define ddzM(a,b,c) (PHI((a),(b),(c)  ) - PHI((a),(b),(c)-1))
+#				define ddzC(a,b,c) ((PHI((a),(b),(c)+1) - PHI((a),(b),(c)-1)) *0.5)
+#			endif
+			Real curv = 0.;
+						curv += ABS( ddxP(i,j,k) / sqrt(     SQUARE( ddxP(i,j,k) ) 
+							 + SQUARE( 0.5*( ddyC(i+1,j,k) + ddyC(i,j,k) ) )
+							 + SQUARE( 0.5*( ddzC(i+1,j,k) + ddzC(i,j,k) ) )   ));
+						curv += ABS( ddyP(i,j,k) / sqrt(     SQUARE( ddyP(i,j,k) )  
+							 + SQUARE( 0.5*( ddxC(i+1,j,k) + ddxC(i,j,k) ) )    
+							 + SQUARE( 0.5*( ddzC(i+1,j,k) + ddzC(i,j,k) ) )    ));
+#						if DDF_DIMENSION==3
+						curv += ABS( ddzP(i,j,k) / sqrt(   SQUARE( ddzP(i,j,k) ) 
+							 + SQUARE( 0.5*( ddxC(i+1,j,k) + ddxC(i,j,k) ) )
+							 + SQUARE( 0.5*( ddyC(i+1,j,k) + ddyC(i,j,k) ) )    ));
+#						endif
+			return curv;
+#			undef PHI
+#			undef ddxP
+#			undef ddxM
+#			undef ddxC
+#			undef ddyP
+#			undef ddyM
+#			undef ddyC
+#			undef ddzP
+#			undef ddzM
+#			undef ddzC
+		}
+};
+
+
+
+} // namespace DDF
+
+
+
+#define LEVELSET_H
+#endif
+

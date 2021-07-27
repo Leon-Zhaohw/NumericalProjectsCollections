@@ -1,0 +1,2235 @@
+/******************************************************************************
+*
+* DDF 
+*
+* Plugins for mathematical operations on grids.
+*
+*****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "paramset.h"
+
+
+
+using namespace std;
+
+namespace DDF { 
+
+
+	// Adds two grids together, or grid + value
+	class gridOpAdd : public SolverPlugin {
+	public:
+		gridOpAdd()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantReal(0), mConstantVec3(0.0f, 0.0f, 0.0f), 
+			                  mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~gridOpAdd() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+			
+			mConstantReal = params.FindOneFloat("constantNum", mConstantReal);
+			mConstantVec3 = params.FindOneVector("constantVec3", mConstantVec3);
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+				
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(mGridName1) && mpPlParams->haveGridReal(mGridName2) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridGridReal(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridGridReal(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(mGridName1) && mpPlParams->haveGridVec3(mGridName2) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridGridVec3(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridGridVec3(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(definedGrid) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridConstReal(definedGrid, mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridConstReal(definedGrid, mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(definedGrid) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return addGridConstVec3(definedGrid, mConstantVec3, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return addGridConstVec3(definedGrid, mConstantVec3, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+		
+	private:
+
+		bool addGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool addGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool addGridGridReal(std::string g1, std::string g2, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool addGridConstReal(std::string g1, float val, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool addGridGridVec3(std::string g1, std::string g2, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool addGridConstVec3(std::string g1, Vec3 val, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool addGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool addGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool addGridGridReal(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool addGridConstReal(std::string g1, float val, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool addGridGridVec3(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool addGridConstVec3(std::string g1, Vec3 val, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) + val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+		
+		float mConstantReal; 
+		Vec3 mConstantVec3;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+
+	// subs two grids , or grid - value
+	class gridOpSub : public SolverPlugin {
+	public:
+		gridOpSub()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantReal(0), mConstantVec3(0.0f, 0.0f, 0.0f), 
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~gridOpSub() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantReal = params.FindOneFloat("constantNum", mConstantReal);
+			mConstantVec3 = params.FindOneVector("constantVec3", mConstantVec3);
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(mGridName1) && mpPlParams->haveGridReal(mGridName2) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridGridReal(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridGridReal(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(mGridName1) && mpPlParams->haveGridVec3(mGridName2) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridGridVec3(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridGridVec3(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(definedGrid) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridConstReal(definedGrid, mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridConstReal(definedGrid, mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(definedGrid) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return subGridConstVec3(definedGrid, mConstantVec3, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return subGridConstVec3(definedGrid, mConstantVec3, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool subGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool subGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool subGridGridReal(std::string g1, std::string g2, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool subGridConstReal(std::string g1, float val, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool subGridGridVec3(std::string g1, std::string g2, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool subGridConstVec3(std::string g1, Vec3 val, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool subGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool subGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool subGridGridReal(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool subGridConstReal(std::string g1, float val, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool subGridGridVec3(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool subGridConstVec3(std::string g1, Vec3 val, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) - val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		float mConstantReal; 
+		Vec3 mConstantVec3;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+
+	// component muls two grids , or grid * value
+	class gridOpMul : public SolverPlugin {
+	public:
+		gridOpMul()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantReal(0), mConstantVec3(0.0f, 0.0f, 0.0f), 
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~gridOpMul() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantReal = params.FindOneFloat("constantNum", mConstantReal);
+			mConstantVec3 = params.FindOneVector("constantVec3", mConstantVec3);
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpMul","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpMul","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+
+					} else {
+						return mulGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(mGridName1) && mpPlParams->haveGridReal(mGridName2) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridGridReal(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return mulGridGridReal(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(mGridName1) && mpPlParams->haveGridVec3(mGridName2) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridGridVec3(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return mulGridGridVec3(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return mulGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(definedGrid) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridConstReal(definedGrid, mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return mulGridConstReal(definedGrid, mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(definedGrid) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return mulGridConstVec3(definedGrid, mConstantVec3, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return mulGridConstVec3(definedGrid, mConstantVec3, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpMul","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpMul","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool mulGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool mulGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool mulGridGridReal(std::string g1, std::string g2, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool mulGridConstReal(std::string g1, float val, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool mulGridGridVec3(std::string g1, std::string g2, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool mulGridConstVec3(std::string g1, Vec3 val, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool mulGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool mulGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool mulGridGridReal(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool mulGridConstReal(std::string g1, float val, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool mulGridGridVec3(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool mulGridConstVec3(std::string g1, Vec3 val, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) * val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		float mConstantReal; 
+		Vec3 mConstantVec3;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	// component divs two grids , or grid * value
+	class gridOpDiv : public SolverPlugin {
+	public:
+		gridOpDiv()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantReal(0), mConstantVec3(0.0f, 0.0f, 0.0f), 
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~gridOpDiv() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantReal = params.FindOneFloat("constantNum", mConstantReal);
+			mConstantVec3 = params.FindOneVector("constantVec3", mConstantVec3);
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(mGridName1) && mpPlParams->haveGridReal(mGridName2) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridGridReal(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridGridReal(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(mGridName1) && mpPlParams->haveGridVec3(mGridName2) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridGridVec3(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridGridVec3(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(definedGrid) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridConstReal(definedGrid, mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridConstReal(definedGrid, mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(definedGrid) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return divGridConstVec3(definedGrid, mConstantVec3, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return divGridConstVec3(definedGrid, mConstantVec3, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool divGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool divGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool divGridGridReal(std::string g1, std::string g2, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool divGridConstReal(std::string g1, float val, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool divGridGridVec3(std::string g1, std::string g2, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool divGridConstVec3(std::string g1, Vec3 val, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool divGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool divGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool divGridGridReal(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool divGridConstReal(std::string g1, float val, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool divGridGridVec3(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool divGridConstVec3(std::string g1, Vec3 val, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) gridOut->setGlobal(grid1->getGlobal(x,y,z) / val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		float mConstantReal; 
+		Vec3 mConstantVec3;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	// replaces values from grid 1 with values from grid 2
+	class gridOpReplace : public SolverPlugin {
+	public:
+		gridOpReplace()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantReal(0), mConstantVec3(0.0f, 0.0f, 0.0f), 
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~gridOpReplace() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantReal = params.FindOneFloat("constantNum", mConstantReal);
+			mConstantVec3 = params.FindOneVector("constantVec3", mConstantVec3);
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(mGridName1) && mpPlParams->haveGridReal(mGridName2) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridGridReal(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridGridReal(mGridName1, mGridName2, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(mGridName1) && mpPlParams->haveGridVec3(mGridName2) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridGridVec3(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridGridVec3(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridConstInt(definedGrid, (int)mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridReal(definedGrid) && mpPlParams->haveGridReal(mGridNameOut)) {
+					// real grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridConstReal(definedGrid, mConstantReal, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridConstReal(definedGrid, mConstantReal, mGridNameOut);
+					}
+				} else if (mpPlParams->haveGridVec3(definedGrid) && mpPlParams->haveGridVec3(mGridNameOut)) {
+					// vec3 grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return replaceGridConstVec3(definedGrid, mConstantVec3, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return replaceGridConstVec3(definedGrid, mConstantVec3, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool replaceGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool replaceGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool replaceGridGridReal(std::string g1, std::string g2, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool replaceGridConstReal(std::string g1, float val, std::string o) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+		bool replaceGridGridVec3(std::string g1, std::string g2, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool replaceGridConstVec3(std::string g1, Vec3 val, std::string o) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						gridOut->setGlobal(val, x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool replaceGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool replaceGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(val, x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 				
+					}
+				}
+			}
+
+			return true;
+		}
+		bool replaceGridGridReal(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* grid2 = mpPlParams->getGridReal(g2);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool replaceGridConstReal(std::string g1, float val, std::string o, std::string logical) {
+			Grid<Real>* grid1 = mpPlParams->getGridReal(g1);
+			Grid<Real>* gridOut = mpPlParams->getGridReal(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(val, x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 		
+					}
+				}
+			}
+
+			return true;
+		}
+		bool replaceGridGridVec3(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* grid2 = mpPlParams->getGridVec3(g2);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid2->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+
+		bool replaceGridConstVec3(std::string g1, Vec3 val, std::string o, std::string logical) {
+			Grid<Vec3>* grid1 = mpPlParams->getGridVec3(g1);
+			Grid<Vec3>* gridOut = mpPlParams->getGridVec3(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(val, x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 			
+					}
+				}
+			}
+
+			return true;
+		}
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		float mConstantReal; 
+		Vec3 mConstantVec3;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	// logical AND between two int grids or int grid and int number
+	class logicGridOpAnd : public SolverPlugin {
+	public:
+		logicGridOpAnd()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantInt(0), 
+			                  mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~logicGridOpAnd() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantInt = params.FindOneInt("constantInt", mConstantInt);
+			if (mConstantInt != 0) mConstantInt = 1; // normalize
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return andGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return andGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return andGridConstInt(definedGrid, mConstantInt, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return andGridConstInt(definedGrid, mConstantInt, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool andGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform and operation
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) && grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool andGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform and
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) && val, x, y, z);		
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool andGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z) && grid2->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool andGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z) && val, x, y, z);	
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 				
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		int mConstantInt; 
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	// logical OR between two int grids or int grid and int number
+	class logicGridOpOr : public SolverPlugin {
+	public:
+		logicGridOpOr()
+			: SolverPlugin(), mGridName1(""), mGridName2(""), mGridNameOut(""), mConstantInt(0), 
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~logicGridOpOr() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridName2 = params.FindOneString("grid2", mGridName2 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mConstantInt = params.FindOneInt("constantInt", mConstantInt);
+			if (mConstantInt != 0) mConstantInt = 1; // normalize
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "") && (mGridName2 == "")) {
+				errFatal("gridOpAdd","No input grids defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			if ((mGridName1 != "") && (mGridName2 != "")) {
+				// grid + grid operation
+
+				// find out type
+				if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridName2) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return orGridGridInt(mGridName1, mGridName2, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return orGridGridInt(mGridName1, mGridName2, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+			} else {
+				// grid + constant operation
+				std::string definedGrid;
+
+				// find out which grid is defined
+				if (mGridName1 != "") definedGrid = mGridName1;
+				else definedGrid = mGridName2;
+
+
+				// find out type
+				if (mpPlParams->haveGridInt(definedGrid) && mpPlParams->haveGridInt(mGridNameOut)) {
+					// int grids
+					if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+						return orGridConstInt(definedGrid, mConstantInt, mGridNameOut, mLogicalFlagGridName);
+					} else {
+						return orGridConstInt(definedGrid, mConstantInt, mGridNameOut);
+					}
+				} 
+
+				errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool orGridGridInt(std::string g1, std::string g2, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform and operation
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) || grid2->getGlobal(x,y,z), x, y, z);					
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool orGridConstInt(std::string g1, int val, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform and
+						gridOut->setGlobal(grid1->getGlobal(x,y,z) || val, x, y, z);		
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool orGridGridInt(std::string g1, std::string g2, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* grid2 = mpPlParams->getGridInt(g2);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z) || grid2->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		bool orGridConstInt(std::string g1, int val, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z) || val, x, y, z);	
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 				
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+	protected:
+		std::string mGridName1;
+		std::string mGridName2;
+		std::string mGridNameOut;
+
+		std::string mLogicalFlagGridName;
+
+		int mConstantInt; 
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	// logical not of a grid
+	class logicGridOpNot : public SolverPlugin {
+	public:
+		logicGridOpNot()
+			: SolverPlugin(), mGridName1(""), mGridNameOut(""),
+			mLogicalFlagGridName(""), mOperationTag("<operation tag not defined>")
+		{ };
+		~logicGridOpNot() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+
+			// load params
+			mGridName1 = params.FindOneString("grid1", mGridName1 );
+			mGridNameOut = params.FindOneString("gridOut", mGridNameOut );
+
+			mLogicalFlagGridName = params.FindOneString("logicalIntGrid", mLogicalFlagGridName);
+			mOperationTag = params.FindOneString("tag", mOperationTag);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform operation
+		virtual bool performStep(Real dt) {
+
+			if (mGridNameOut == "") {
+				errFatal("gridOpAdd","No output grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+			// first, we see if we add two grids or grid + constant
+			if ((mGridName1 == "")) {
+				errFatal("gridOpAdd","No input grid defined in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			}
+
+
+			// find out type
+			if (mpPlParams->haveGridInt(mGridName1) && mpPlParams->haveGridInt(mGridNameOut)) {
+				// int grids
+				if (mpPlParams->haveGridInt(mLogicalFlagGridName)) {
+					return notGridGridInt(mGridName1, mGridNameOut, mLogicalFlagGridName);
+				} else {
+					return notGridGridInt(mGridName1, mGridNameOut);
+				}
+			} 
+
+			errFatal("gridOpAdd","grid type mismatch in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+
+		
+			errFatal("gridOpAdd","operation error in tag: " << mOperationTag, SIMWORLD_PLUGINERROR);
+			return false;
+		};
+
+
+	private:
+
+		bool notGridGridInt(std::string g1, std::string o) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform and operation
+						gridOut->setGlobal(!grid1->getGlobal(x,y,z), x, y, z);				
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+
+		bool notGridGridInt(std::string g1, std::string o, std::string logical) {
+			Grid<int>* grid1 = mpPlParams->getGridInt(g1);
+			Grid<int>* gridOut = mpPlParams->getGridInt(o);
+
+			Grid<int>* logicalGrid = mpPlParams->getGridInt(logical);
+
+			for (int x = 0; x < gridOut->getSizeX(); x++) {
+				for (int y = 0; y < gridOut->getSizeY(); y++) {
+					for (int z = 0; z < gridOut->getSizeZ(); z++) {
+						// perform addition
+						if (logicalGrid->getGlobal(x,y,z) != 0) {
+							gridOut->setGlobal(!grid1->getGlobal(x,y,z), x, y, z);		
+						} else {
+							gridOut->setGlobal(grid1->getGlobal(x,y,z), x, y, z);	
+						} 
+					}
+				}
+			}
+
+			return true;
+		}
+
+
+		
+
+
+	protected:
+		std::string mGridName1;
+		std::string mGridNameOut;
+		std::string mLogicalFlagGridName;
+
+		std::string mOperationTag;
+	};
+
+
+	//***************************************************************************************
+
+
+	SolverPlugin* MakeGridOpPlugin(std::string name) {
+		if (name.compare( string("grid-op-add") )==0) {
+			return new gridOpAdd;
+		} else if (name.compare( string("grid-op-sub") )==0) {
+			return new gridOpSub;
+		} else if (name.compare( string("grid-op-mul") )==0) {
+			return new gridOpMul;
+		} else if (name.compare( string("grid-op-div") )==0) {
+			return new gridOpDiv;
+		} else if (name.compare( string("grid-op-replace") )==0) {
+			return new gridOpReplace;
+		} else if (name.compare( string("logical-grid-op-and") )==0) {
+			return new logicGridOpAnd;
+		} else if (name.compare( string("logical-grid-op-or") )==0) {
+			return new logicGridOpOr;
+		} else if (name.compare( string("logical-grid-op-not") )==0) {
+			return new logicGridOpNot;
+		} 
+		return NULL;
+	}
+
+
+}; // DDF
+
+

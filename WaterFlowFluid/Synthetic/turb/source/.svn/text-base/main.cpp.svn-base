@@ -1,0 +1,237 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * DDF main test progs
+ *
+ *****************************************************************************/
+
+// ! fix level set detaching from boundaries - init neg. offsets
+//check sg jacobi, unittests 2d, memleaks...
+
+// - add opengl gui, intacs solver?
+// - add config file parser (pbrt?)
+// - check min/max vel/pressure for ctest 5 (2d/3d)
+// - adapt time step size?
+
+// TODO:
+// check! - sg jacobi 2d not working!?
+// - better patch to thread distribution for parallel loops
+// - no slip boundaries
+// - free surface: advect additional particles, init flags, set BCs
+
+#include "globals.h"
+#include "grid.h"
+//#include "simplegrtest.h"
+#include "operators.h"
+#include "conjugategrad.h"
+#include "fluidsolver.h"
+
+#include "geomfile.h"
+#include "parser.h"
+#include "solverparams.h"
+
+#ifdef WIN32
+#include <time.h>
+#else
+#include <sys/time.h>
+#endif
+#include <fstream>
+using DDF::Vec3;
+using DDF::Grid;
+using DDF::GridAccessor;
+using DDF::Real;
+
+#include "../util/md5.cc"
+ 
+#if DDF_DEBUG==1
+//static int N = 16;
+#else
+//static int N = 32; //48;
+#endif
+//int maxIter =  20;
+//int modIter = 10; 
+//Real gDT = 0.5;
+
+// Defined in fluidsolver.cpp, parser.cpp
+extern DDF::FluidSolver *gpFsolver;
+extern map<string, DDF::FluidSolver*> gFluidSolvers;
+extern std::vector<DDF::FluidSolver*> gFluidSolversOrdered;
+
+// test params
+//bool gUseSimplegrid = false; 
+bool gUseCg = true;
+
+// parser debugging (set to 1 in main)
+extern int yydebug;
+
+
+namespace DDF { 
+
+Real gStepCounter = 0; // for debugging
+extern int showGlutGui(const char *title); // from glutgui.cpp
+
+
+//*****************************************************************************
+
+// substep debug
+static Real gSubstepCounter = 0;
+static Real gSubstepSolver = 0; 
+static Real gSubstepStepFacCnt = 0;
+
+bool advanceAllSolvers() { 
+	bool quit = false;
+
+	bool substep = false;
+	for (int f=0; f< (int)gFluidSolversOrdered.size(); f++) {
+		if(gFluidSolversOrdered[f]->getParams()->mSubstepDebug )
+			substep = true;
+	}
+	// enforce for all
+	for (int f=0; f< (int)gFluidSolversOrdered.size(); f++) {
+		gFluidSolversOrdered[f]->getParams()->mSubstepDebug = substep;
+	}
+
+	if(!substep) {
+		// normal advance of all solvers
+		for (int f=0; f< (int)gFluidSolversOrdered.size(); f++) {
+			for(int i=0; i< gFluidSolversOrdered[f]->getParams()->mStepFactor; i++) {
+				gFluidSolversOrdered[f]->simulateFluid();
+			}
+
+			if( gFluidSolversOrdered[f]->getParams()->getQuit() ) quit = true;
+		}
+	} else {
+		// TODO treat init as steps...
+
+		// substepping, three parts
+		gFluidSolversOrdered[ gSubstepSolver ]->simulateFluid();
+		gSubstepCounter++;
+		if(gSubstepCounter>= gFluidSolversOrdered[ gSubstepSolver ]->getNumPluginSteps() ) {
+			gSubstepCounter=0;
+			gSubstepStepFacCnt++;
+		}
+		if(gSubstepStepFacCnt >= gFluidSolversOrdered[ gSubstepSolver ]->getParams()->mStepFactor) {
+			gSubstepStepFacCnt=0;
+			gSubstepSolver++;
+		}
+		if(gSubstepSolver >= gFluidSolversOrdered.size() ) {
+			gSubstepSolver = 0;
+		}
+
+		debMsg("advanceAllSolvers","Substepping ss="<<gSubstepCounter<<", ssfc="<<gSubstepStepFacCnt<<", sos="<<gSubstepSolver );
+		// debug info
+		if(1) for (int f=0; f< (int)gFluidSolversOrdered.size(); f++) {
+			debMsg("advanceAllSolvers","Substep info "<<f<<
+					" steps="<< gFluidSolversOrdered[ gSubstepSolver ]->getNumPluginSteps() <<", "
+					" facsteps="<< gFluidSolversOrdered[ gSubstepSolver ]->getParams()->mStepFactor <<", "
+					" solvers="<< gFluidSolversOrdered.size() );
+		}
+	}
+
+	return quit;
+} 
+
+// run end plugins
+void finalizeAllSolvers() { 
+	for (int f=0; f< (int)gFluidSolversOrdered.size(); f++)
+		gFluidSolversOrdered[f]->finalize();
+	// dont delete yet... GUI, eg, might continue to run...
+}
+
+// finally, free memory
+void deleteAllSolvers() { 
+	for (int f=0; f< (int)gFluidSolversOrdered.size(); f++)
+		delete gFluidSolversOrdered[f];
+}
+
+}; // DDF
+
+using namespace DDF;
+
+
+//*****************************************************************************
+// main...
+int main(int argc,const char* argv[]) {
+
+#if DDF_OPENMP==1
+	//omp_set_num_threads(1); // test
+#endif
+	
+	if (argc>1) {
+		// randomzie
+		//srand( time(NULL) );
+		srand(0);
+
+		// try to parse additional command line params
+		if(argc>=3) {
+			string cmdParams = string("SolverParams \"-override-\" " );
+			for(int i=2; i<argc; i++) {
+				cmdParams.append(argv[i]);
+				cmdParams.append(" ");
+			}
+			debMsg("main", "Command line params = '"<<cmdParams<<"' ");
+			if(!ParseString(cmdParams)) {
+				errMsg("main","Unable to parse '"<<cmdParams<<"' ");
+				exit(1);
+			}
+		}
+
+		// parse mandatory config file
+		debMsg("main", "Config file = '"<<argv[1]<<"' ");
+		if(!ParseFile(argv[1])) {
+			errMsg("main","Unable to parse "<<argv[1]);
+			exit(1);
+		} 
+		if(!gpFsolver) {
+			errMsg("main","No fluid solver in "<<argv[1]);
+			exit(1);
+		} 
+	} else {
+		if (1) { // command params debugging
+			debMsg("argInfo","argc="<<argc<<" argv0= '"<<argv[0] <<"' ");
+			for(int i=1; i<argc; i++) debMsg("argInfo","argc="<<i<<" / "<<argc<<" argv= '"<<argv[i] <<"' ");
+			debMsg("argInfo"," \n");
+		}
+		errMsg("Usage","Syntax is '<ddf-exe> <config-file> [additional params (optional)]'\n");
+		exit(1);
+	}
+
+
+	// print setup
+	debMsg("main","\n\n---------------------------------------------------------------------------------------------------");
+	debMsg("main","Resolution="<< gpFsolver->getParams()->getGridSize()<<", " << DDF::getSettingsString() );
+	//debMsg("main","gUseSimplegrid="<<gUseSimplegrid<<" " <<"gUseCg="<<gUseCg<<" " ); // DEBUG
+	// init simple grid usage
+
+	// initialize Simulation  (always, also needed for SG)
+	// old BU init
+	if(!gpFsolver) {
+		errMsg("Main","No solver found, exiting...\n");
+		exit(1);
+	}
+	 
+	// show gui & exit, if DDF_HIDEGUI is equal to 1
+	bool hideGui = false;
+	if(getenv("DDF_HIDEGUI")) {
+	 	if(atoi(getenv("DDF_HIDEGUI"))>=1) hideGui = true;
+	}
+	if((DDF_GLUTGUI==1) && (!hideGui)) {
+		DDF::showGlutGui(argv[0]);
+	} else {
+		// or run a few steps (as given in config file)
+		bool quit = false;
+		while(!quit) {
+			quit = advanceAllSolvers();
+		}
+	}
+	// run final steps
+	finalizeAllSolvers();
+	deleteAllSolvers();
+
+	debMsg("main", "done ");
+	return 0;
+}
+
+

@@ -1,0 +1,43 @@
+/******************************************************************************
+*
+* DDF - convert.h
+* A class that contains unified interfaces for conversion of numericals to 
+* string, and vice versa.
+*
+*****************************************************************************/
+
+#ifndef CONVERT_H
+#define CONVERT_H
+
+
+#include <iostream>
+#include <stdio.h>      // standard input/output
+#include <stdlib.h>
+
+namespace DDF
+{
+
+
+	class convert {
+
+	public:
+
+		convert();
+
+		~convert();
+
+	public:
+
+		int str2int(std::string s);
+
+		float str2float(std::string s);
+
+		std::string int2str(int i);
+
+		std::string float2str(float f);
+
+	};
+
+};
+
+#endif // CONVERT_H

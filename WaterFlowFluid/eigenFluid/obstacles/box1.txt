@@ -1,0 +1,8 @@
+box
+center 0.1 0.36 0.36
+dim 0.1 0.1 0.1
+angle 0
+axis 0 1 0
+period 90
+translationPeriod 90
+color 0.1 0.2 0.8

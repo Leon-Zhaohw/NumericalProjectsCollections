@@ -1,0 +1,47 @@
+ObjectBegin "Cube"
+  Material "matte" "color Kd" [.8 .8 .8 ]
+ Shape "trianglemesh" "integer indices"
+ [ 0 1 2  2 0 3 
+   0 4 1  5 4 1
+   2 1 5  2 5 6 
+   3 0 4  3 4 7 
+   3 6 2  3 6 7 
+   4 6 5  4 6 7]
+    "point P" [-1 -1 -1   1 -1 -1   1 -1 1   -1 -1 1  -1  1 -1   1  1 -1   1  1 1   -1  1 1 ]
+ObjectEnd
+
+ObjectBegin "wedge"
+  Material "matte" "color Kd" [.8 .8 .8 ]
+ Shape "trianglemesh" "integer indices"
+ [ 1 3 0  1 3 4
+   5 1 0 5 1 2
+   0 5 3  1 2 4]
+    "point P" [-1  1 -1   1  1.0 -1   1.0 -1.0 1.0
+               -1 -1 -1   1 -1.0 -1  -1.0 -1.0 1.0 ]
+ObjectEnd
+
+AttributeBegin
+ # upper right
+ Identity
+ Translate  -3.27  0  0
+ Scale      2.0  0.50  8.00
+ ObjectInstance "Cube"
+
+ # lower left
+ Identity
+ Translate  2.75  -0.0475  0.00
+ Scale      1.50  0.50  8.00
+ ObjectInstance "Cube"
+
+ # upper left
+ Identity
+ Translate  0.00  0 -5.23
+ Scale      1.5  0.50  4.00
+ ObjectInstance "Cube"
+
+ # lower right
+ Identity
+ Translate  0.00  -0.02  5.25
+ Scale      1.5  0.50  4.00
+ ObjectInstance "Cube"
+AttributeEnd

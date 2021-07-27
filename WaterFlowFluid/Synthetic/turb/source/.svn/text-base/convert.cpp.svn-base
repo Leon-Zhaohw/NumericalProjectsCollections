@@ -1,0 +1,45 @@
+/******************************************************************************
+*
+* DDF - convert.cpp
+* A class that contains unified interfaces for conversion of numericals to 
+* string, and vice versa.
+*
+*****************************************************************************/
+
+
+#include "convert.h"
+#include <iostream>
+#include <sstream>
+
+namespace DDF {
+
+
+	DDF::convert::convert() {}
+
+
+	DDF::convert::~convert() {}
+
+
+	int DDF::convert::str2int(std::string s) {
+		return atoi(s.c_str());
+	}
+
+	float DDF::convert::str2float(std::string s) {
+		return atof(s.c_str());
+	}
+
+
+	std::string DDF::convert::int2str(int i) {
+		std::stringstream out;
+		out << i;
+		return out.str();
+	}
+
+	std::string DDF::convert::float2str(float f) {
+		std::stringstream out;
+		out << f;
+		return out.str();
+	}
+
+
+} // DDF

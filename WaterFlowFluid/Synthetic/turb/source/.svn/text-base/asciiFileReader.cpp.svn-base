@@ -1,0 +1,123 @@
+/******************************************************************************
+*
+* DDF - asciiFileReader.cpp
+* This class contains functionality for simple ascii based file parsing.
+*
+*****************************************************************************/
+
+
+#include "asciiFileReader.h"
+
+
+
+namespace DDF {
+
+	// constructor
+	DDF::asciiFileReader::asciiFileReader() {
+		
+	}
+
+
+	// destructor
+	DDF::asciiFileReader::~asciiFileReader() {
+		closeFile();
+	}
+
+
+
+	// open file
+	void DDF::asciiFileReader::openNewFile(std::string filePath, int maxCharPerLine, int numOfHeaderLines) {
+
+		// close old one (if exists)
+		if (mFile.is_open()) {
+			mFile.close();
+		}
+
+		// open file
+		mFile.open(filePath.c_str());
+
+		// get other parameter
+		mMaxCharPerLine = maxCharPerLine;
+		mNumOfHeaderLines = numOfHeaderLines;
+
+		// remove header lines right away
+		for (int i = 0; i < mNumOfHeaderLines; i++) {
+			readLine();
+		}
+	}
+
+
+	// close file
+	void DDF::asciiFileReader::closeFile() {
+		mFile.close();
+	}
+
+
+	
+	// reads a line and returns the string (without /n)
+	std::string* DDF::asciiFileReader::readLine() {
+
+		// return null if file empty
+		if (mFile.eof()) return NULL;
+
+		// init char buffer
+		char* chars = new char[mMaxCharPerLine];
+		
+		// get char line
+		mFile.getline(chars, mMaxCharPerLine, '\n');
+
+		// count length of actual chars in chars
+		int numOfChars = mFile.gcount();
+		chars[numOfChars] = 0;
+
+		// remove line
+		std::string* return_string = new std::string(chars);
+
+		// delete buffer
+		delete chars;
+
+		// return
+		return return_string;
+	}
+
+
+
+	// functions with additional functionality
+	///////////////////////////////////////////
+
+	// string splitter
+	void DDF::asciiFileReader::splitString(std::string* s, char separator, std::vector<std::string>* out_data) {
+		// clear out list
+		out_data->clear();
+
+		// test for emptyness
+		if (s->length() <= 0) return;
+
+		// split string
+		const char* chars = s->c_str();
+
+		int pos = 0;
+		int charsTaken = 0;
+		char* tmpCharBuf = new char[mMaxCharPerLine];
+		while (pos < s->length()) {// while stuff to read
+			while ((pos < s->length()) && (chars[pos] != separator) && (chars[pos] != '\n')) {
+				tmpCharBuf[charsTaken] = chars[pos];
+				charsTaken += 1;
+				pos += 1;
+			}
+			tmpCharBuf[charsTaken] = 0;
+
+			// create string and add to the list
+			out_data->push_back(std::string(tmpCharBuf));
+			charsTaken = 0;
+
+			// jump position ahead (over separator)
+			pos += 1;
+		}
+	}
+
+
+
+	
+
+} // DDF

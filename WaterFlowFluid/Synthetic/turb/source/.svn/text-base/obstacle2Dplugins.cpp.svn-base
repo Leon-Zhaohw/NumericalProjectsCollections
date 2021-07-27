@@ -1,0 +1,850 @@
+/******************************************************************************
+*
+* DDF 
+*
+* Plugins for simple moving 2D obstacles
+*
+*****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "paramset.h"
+
+
+using namespace std;
+
+namespace DDF { 
+
+
+
+
+	///////////////////////////////////////////////////////////////////////////////
+	// initializes a solid obstacle box
+	///////////////////////////////////////////////////////////////////////////////
+
+	class goPlaceSolidBox : public GridOpBase {
+	public:
+		goPlaceSolidBox(Grid<int>* dst, const Vec3& minCorner, const Vec3& size) :
+		  GridOpBase(), mpFlagMod(dst) {
+			  mpFlags = NULL;
+
+			  // compute real grid values
+			  mMinCorner = Vec3(minCorner.x * float(mpFlagMod->getSizeX()), minCorner.y * float(mpFlagMod->getSizeY()), minCorner.z * float(mpFlagMod->getSizeZ()));
+			  mSize = Vec3(size.x * float(mpFlagMod->getSizeX()), size.y * float(mpFlagMod->getSizeY()), size.z * float(mpFlagMod->getSizeZ()));
+
+			  applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		  };
+
+		  ~goPlaceSolidBox() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls);
+		  };
+
+		  // add forces and update empty cells free surface boundaries
+		  inline void operator() (int i, int j, int k) {
+			  gaFlagMod.write(i,j,k);
+			  if ((i>=mMinCorner.x) && (i<=mMinCorner.x + mSize.x)
+				  && (j>=mMinCorner.y) && (j<=mMinCorner.y + mSize.y)
+#if DDF_DIMENSION==3
+				  && (k>=mMinCorner.z) && (k<=mMinCorner.z + mSize.z)
+#endif
+				  )
+			  {
+				  gaFlagMod.write(i,j,k) = FOBSTACLE;
+			  }
+		  };
+
+
+		  void reduce(goPlaceSolidBox &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		Vec3 mMinCorner, mSize;
+	}; // goPlaceSolidBox
+
+
+
+
+
+
+	//-----------------------------------------------------------------------------
+	class goSetVelocities : public GridOpBase {
+	public:
+		goSetVelocities(Grid<Vec3>* dst, const Vec3& minCornerCur, const Vec3& minCornerFut, const Vec3& size, const Vec3& velocity) :
+		  GridOpBase(), mpCurrVelMod(dst) {
+			  mpFlags = NULL;
+
+			  // save velocity
+			  mVelocity = velocity;
+
+			  // compute real grid values
+			  mMinCornerCur = Vec3(minCornerCur.x * float(mpCurrVelMod->getSizeX()), minCornerCur.y * float(mpCurrVelMod->getSizeY()), minCornerCur.z * float(mpCurrVelMod->getSizeZ()));
+			  mMinCornerFut = Vec3(minCornerFut.x * float(mpCurrVelMod->getSizeX()), minCornerFut.y * float(mpCurrVelMod->getSizeY()), minCornerFut.z * float(mpCurrVelMod->getSizeZ()));
+			  mSize = Vec3(size.x * float(mpCurrVelMod->getSizeX()), size.y * float(mpCurrVelMod->getSizeY()), size.z * float(mpCurrVelMod->getSizeZ()));
+
+			  mS = mpCurrVelMod->getSize()-nVec3i(1,1,1);
+
+			  applyOperatorToGridsWithoutFlags(this, mpCurrVelMod);
+		  };
+
+		  ~goSetVelocities() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaCurrVelMod.gridAccInit(mpCurrVelMod, AM_WRITE, gaCalls);
+		  };
+
+		  inline void operator() (int i, int j, int k) {
+			  gaCurrVelMod.write(i,j,k);
+
+
+			  // if i,j,k in future box
+			  if ((i>=mMinCornerFut.x) && (i<=mMinCornerFut.x + mSize.x)
+				  && (j>=mMinCornerFut.y) && (j<=mMinCornerFut.y + mSize.y)
+#if DDF_DIMENSION==3
+				  && (k>=mMinCornerFut.z) && (k<=mMinCornerFut.z + mSize.z)
+#endif
+				  )
+			  {
+
+				  gaCurrVelMod.write(i,j,k) = mVelocity;
+
+				  //				// if i,j,k NOT in border
+				  //							// fix boundary
+				  //				if (!((i<1) || (i>=mS.x)
+				  //					|| (j<1) || (j>=mS.y)
+				  //#if DDF_DIMENSION==3
+				  //					|| (k<1) || (k>=mS.z)
+				  //#endif
+				  //					))
+				  //				{
+				  //
+				  //
+				  //					// if i,j,k NOT in current box
+				  //					if (!((i>=mMinCornerCur.x) && (i<=mMinCornerFut.x + mSize.x)
+				  //						&& (j>=mMinCornerCur.y) && (j<=mMinCornerFut.y + mSize.y)
+				  //#if DDF_DIMENSION==3
+				  //						&& (k>=mMinCornerCur.z) && (k<=mMinCornerFut.z + mSize.z)
+				  //#endif
+				  //					))
+				  //					{
+				  //						// set velocity
+				  //						gaCurrVelMod.write(i,j,k) = mVelocity;
+				  //					}
+				  //
+				  //				} // if not in border
+
+			  } // if in future box
+
+
+		  };
+
+
+		  void reduce(goSetVelocities &op) { };
+
+	protected:
+		Grid<Vec3> *mpCurrVelMod;
+		GridAccessor<Vec3,0> gaCurrVelMod;
+		nVec3i mS;
+		Vec3 mMinCornerCur, mMinCornerFut, mSize, mVelocity;
+	}; // goSetVelocities
+
+
+
+	//-----------------------------------------------------------------------------
+	class goRemoveSolidBox : public GridOpBase {
+	public:
+		goRemoveSolidBox(Grid<int>* dst, const Vec3& minCorner, const Vec3& size) :
+		  GridOpBase(), mpFlagMod(dst) {
+			  mpFlags = NULL;
+
+			  // compute real grid values
+			  mMinCorner = Vec3(minCorner.x * float(mpFlagMod->getSizeX()), minCorner.y * float(mpFlagMod->getSizeY()), minCorner.z * float(mpFlagMod->getSizeZ()));
+			  mSize = Vec3(size.x * float(mpFlagMod->getSizeX()), size.y * float(mpFlagMod->getSizeY()), size.z * float(mpFlagMod->getSizeZ()));
+
+			  mS = mpFlagMod->getSize()-nVec3i(1,1,1);
+
+			  applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		  };
+
+		  ~goRemoveSolidBox() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls);
+		  };
+
+		  inline void operator() (int i, int j, int k) {
+			  gaFlagMod.write(i,j,k);
+
+
+			  // remove box
+			  if ((i>=mMinCorner.x) && (i<=mMinCorner.x + mSize.x)
+				  && (j>=mMinCorner.y) && (j<=mMinCorner.y + mSize.y)
+#if DDF_DIMENSION==3
+				  && (k>=mMinCorner.z) && (k<=mMinCorner.z + mSize.z)
+#endif
+				  )
+			  {
+				  gaFlagMod.write(i,j,k) = FEMPTY;
+			  }
+
+
+
+
+			  // fix boundary
+			  if ((i<1) || (i>=mS.x)
+				  || (j<1) || (j>=mS.y)
+#if DDF_DIMENSION==3
+				  || (k<1) || (k>=mS.z)
+#endif
+				  )
+			  {
+				  gaFlagMod.write(i,j,k) = FOBSTACLE;
+			  }
+
+
+		  };
+
+
+		  void reduce(goRemoveSolidBox &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		nVec3i mS;
+		Vec3 mMinCorner, mSize;
+	}; // goRemoveSolidBox
+
+
+
+
+	//-----------------------------------------------------------------------------
+	class movingSolidBox : public SolverPlugin {
+	public:
+		movingSolidBox()
+			: SolverPlugin(), mFlagGrid("flags"), mVelocityGrid("vel-curr"), mMinCorner(0.,0.,0.), mSize(0.,0.,0.), mVelocity(0.,0.,0.)
+
+		{ };
+		~movingSolidBox() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mFlagGrid = params.FindOneString("flaggrid", mFlagGrid );
+			mVelocityGrid = params.FindOneString("velocitygrid", mVelocityGrid );
+			mMinCorner = params.FindOneVector("minCorner", mMinCorner);
+			mSize = params.FindOneVector("size", mSize);
+			mVelocity = params.FindOneVector("velocity", mVelocity);
+
+			mTotal_dt = 0.0f;
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			//debMsg("solidBoxPerformStep","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mFlagGrid);
+			Grid<Vec3>* grcurvel = mpPlParams->getGridVec3(mVelocityGrid);
+
+			// compute dt vectors
+			Vec3 dt_vec_old = Vec3(mTotal_dt, mTotal_dt, mTotal_dt);
+			mTotal_dt += dt;
+			Vec3 dt_vec_cur = Vec3(mTotal_dt, mTotal_dt, mTotal_dt);
+			Vec3 dt_vec_future = Vec3(mTotal_dt + dt, mTotal_dt + dt, mTotal_dt + dt);
+
+			// compute old, current and future box positions
+			Vec3 mMinCornerOld = mMinCorner + mVelocity * dt_vec_old;
+			Vec3 mMinCornerCur = mMinCorner + mVelocity * dt_vec_cur;
+			Vec3 mMinCornerFut = mMinCorner + mVelocity * dt_vec_future;
+
+			if (mMinCornerCur.y > 0.2f) {
+				// remove old box
+				goRemoveSolidBox(grflags, mMinCornerOld, mSize);
+
+				// create new box
+				goPlaceSolidBox(grflags, mMinCornerCur, mSize);
+
+				// set velocities
+
+				float one_over_dx = 1.0f/mpPlParams->getDeltaX();
+
+				goSetVelocities(grcurvel, mMinCornerCur, mMinCornerCur, mSize, mVelocity * Vec3(one_over_dx, one_over_dx, one_over_dx));
+			}
+			return true;
+		};
+
+	protected:
+		std::string mFlagGrid;
+		std::string mVelocityGrid;
+		Vec3 mMinCorner, mSize, mVelocity;
+		float mTotal_dt;
+	};
+
+
+	///////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+	///////////////////////////////////////////////////////////////////////////////
+	// animates an cornered solid 2D obstacle block
+	///////////////////////////////////////////////////////////////////////////////
+
+	class goPlaceSolidCorneredBlock : public GridOpBase {
+	public:
+		goPlaceSolidCorneredBlock(Grid<int>* dst, const Vec3& startCorner, const float& effectiveWidth, float& effectiveHeight, const float& steepness, const float& vanishHeight, const float& extraWidth, const int& gridValueToSet):
+		  GridOpBase(), mpFlagMod(dst) {
+			  mpFlags = NULL;
+
+			  // compute real grid values
+			  mStartCorner = Vec3(startCorner.x * float(mpFlagMod->getSizeX()), startCorner.y * float(mpFlagMod->getSizeY()), startCorner.z * float(mpFlagMod->getSizeZ()));
+
+			  mEffectiveWidth = effectiveWidth * float(mpFlagMod->getSizeX());
+
+			  mEffectiveHeight = effectiveHeight * float(mpFlagMod->getSizeX());
+
+			  mVanishHeight = vanishHeight * float(mpFlagMod->getSizeY());
+
+
+			  mValue = gridValueToSet;
+
+			  mSteepness = steepness;
+
+			  mExtraWidth = extraWidth * float(mpFlagMod->getSizeX());
+
+
+			  applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		  };
+
+		  ~goPlaceSolidCorneredBlock() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls);
+		  };
+
+		  // add forces and update empty cells free surface boundaries
+		  inline void operator() (int i, int j, int k) {
+			  gaFlagMod.write(i,j,k);
+
+
+			  if ((i>=mStartCorner.x - mExtraWidth)
+				  && (i <= mStartCorner.x + mEffectiveWidth)
+				  && (j>= (i - mStartCorner.x) * mSteepness + mStartCorner.y )
+				  && (j < mStartCorner.y + mEffectiveHeight)
+				  && (j > mVanishHeight)
+				  && (j > mStartCorner.y)
+				  )
+			  {
+				  gaFlagMod.write(i,j,k) = mValue;
+
+			  }
+		  };
+
+
+		  void reduce(goPlaceSolidCorneredBlock &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+
+		Vec3 mStartCorner;
+		float mEffectiveWidth;
+		float mEffectiveHeight;
+		float mExtraWidth;
+		float mSteepness;
+		float mVanishHeight;
+		int mValue;
+	};
+
+
+
+
+
+
+
+	class goPlaceSolidCorneredBlockR : public GridOpBase {
+	public:
+		goPlaceSolidCorneredBlockR(Grid<Real>* dst, const Vec3& startCorner, const float& effectiveWidth, float& effectiveHeight, const float& steepness, const float& vanishHeight, const float& extraWidth, const float& gridValueToSet):
+		  GridOpBase(), mpRealGrid(dst) {
+			  mpFlags = NULL;
+
+			  // compute real grid values
+			  mStartCorner = Vec3(startCorner.x * float(mpRealGrid->getSizeX()), startCorner.y * float(mpRealGrid->getSizeY()), startCorner.z * float(mpRealGrid->getSizeZ()));
+
+			  mEffectiveWidth = effectiveWidth * float(mpRealGrid->getSizeX());
+
+			  mEffectiveHeight = effectiveHeight * float(mpRealGrid->getSizeX());
+
+			  mVanishHeight = vanishHeight * float(mpRealGrid->getSizeY());
+
+
+			  mValue = gridValueToSet;
+
+			  mSteepness = steepness;
+
+			  mExtraWidth = extraWidth * float(mpRealGrid->getSizeX());
+
+
+			  applyOperatorToGridsWithoutFlags(this, mpRealGrid);
+		  };
+
+		  ~goPlaceSolidCorneredBlockR() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaRealGrid.gridAccInit(mpRealGrid, AM_WRITE, gaCalls);
+		  };
+
+		  // add forces and update empty cells free surface boundaries
+		  inline void operator() (int i, int j, int k) {
+			  gaRealGrid.write(i,j,k);
+
+
+			  if ((i>=mStartCorner.x - mExtraWidth)
+				  && (i <= mStartCorner.x + mEffectiveWidth)
+				  && (j>= (i - mStartCorner.x) * mSteepness + mStartCorner.y )
+				  && (j < mStartCorner.y + mEffectiveHeight)
+				  && (j > mVanishHeight)
+				  && (j > mStartCorner.y)
+				  )
+			  {
+				  gaRealGrid.write(i,j,k) = mValue;
+
+			  }
+		  };
+
+
+		  void reduce(goPlaceSolidCorneredBlockR &op) { };
+
+	protected:
+		Grid<Real> *mpRealGrid;
+		GridAccessor<Real,0> gaRealGrid;
+
+		Vec3 mStartCorner;
+		float mEffectiveWidth;
+		float mEffectiveHeight;
+		float mExtraWidth;
+		float mSteepness;
+		float mVanishHeight;
+		int mValue;
+	};
+
+
+
+
+
+
+	//-----------------------------------------------------------------------------
+	class goSetVelocitiesCorneredBlock : public GridOpBase {
+	public:
+		goSetVelocitiesCorneredBlock(Grid<Vec3>* dst, const Vec3& startCorner, 
+			const float& effectiveWidth, float& effectiveHeight, const float& steepness, 
+			const float& vanishHeight, const float& extraWidth, const Vec3& gridValueToSet, const float& one_over_dx):
+		GridOpBase(), mpCurrVelMod(dst) {
+			mpFlags = NULL;
+
+			// compute real grid values
+			mStartCorner = Vec3(startCorner.x * 
+				float(mpCurrVelMod->getSizeX()), startCorner.y * float(mpCurrVelMod->getSizeY()), startCorner.z * float(mpCurrVelMod->getSizeZ()));
+
+			mEffectiveWidth = effectiveWidth * float(mpCurrVelMod->getSizeX());
+
+			mEffectiveHeight = effectiveHeight * float(mpCurrVelMod->getSizeX());
+
+			mExtraWidth = extraWidth * float(mpCurrVelMod->getSizeX());
+
+
+			mVanishHeight = vanishHeight * float(mpCurrVelMod->getSizeY());
+
+			//float one_over_dx = 1.0f/mpPlParams->getDeltaX();
+			mValue = gridValueToSet * Vec3(one_over_dx, one_over_dx, one_over_dx);
+
+
+			mSteepness = steepness;
+
+
+			applyOperatorToGridsWithoutFlags(this, mpCurrVelMod);
+		};
+
+		~goSetVelocitiesCorneredBlock() { };
+		void resetVariables() { };
+		void buildCallList() {
+			gaCurrVelMod.gridAccInit(mpCurrVelMod, AM_WRITE, gaCalls);
+		};
+
+		inline void operator() (int i, int j, int k) {
+			gaCurrVelMod.write(i,j,k);
+
+			if ((i>=mStartCorner.x - mExtraWidth)
+				&& (i <= mStartCorner.x + mEffectiveWidth)
+				&& (j>= (i - mStartCorner.x) * mSteepness + mStartCorner.y )
+				&& (j < mStartCorner.y + mEffectiveHeight)
+				&& (j > mVanishHeight)
+				&& (j > mStartCorner.y)
+				)
+			{
+
+				// set velocity
+				gaCurrVelMod.write(i,j,k) = mValue;
+			}
+
+		};
+
+
+		void reduce(goSetVelocitiesCorneredBlock &op) { };
+
+	protected:
+		Grid<Vec3> *mpCurrVelMod;
+		GridAccessor<Vec3,0> gaCurrVelMod;
+
+
+		Vec3 mStartCorner;
+		float mEffectiveWidth;
+		float mEffectiveHeight;
+		float mSteepness;
+		float mVanishHeight;
+		float mExtraWidth;
+
+		Vec3 mValue;
+	};
+
+
+
+
+
+	//-----------------------------------------------------------------------------
+	class movingSolidCorneredBlock : public SolverPlugin {
+	public:
+		movingSolidCorneredBlock()
+			: SolverPlugin(), mFlagGrid("flags"), mVelocityGrid("vel-curr"), 
+			mObjImmersedGrid("obj-immersed"), mVelocity(0.,0.,0.), mStartCorner(0.,0.,0.), 
+			mSurfaceLength(1), mSurfaceAngle(0), mVanishHeight(0), mExtraWidth(0)
+
+		{ };
+		~movingSolidCorneredBlock() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			// get grids
+			mFlagGrid = params.FindOneString("flaggrid", mFlagGrid );
+			mVelocityGrid = params.FindOneString("velocitygrid", mVelocityGrid );
+			mObjImmersedGrid = params.FindOneString("immersedgrid", mObjImmersedGrid);
+
+			// get parameter
+			mVelocity = params.FindOneVector("velocity", mVelocity);
+			mStartCorner = params.FindOneVector("startCorner", mStartCorner);
+			mSurfaceLength = params.FindOneFloat("surfaceLength", mSurfaceLength);
+			mSurfaceAngle = params.FindOneFloat("surfaceAngle", mSurfaceAngle);
+			mVanishHeight = params.FindOneFloat("vanishHeight", mVanishHeight);
+			mExtraWidth = params.FindOneFloat("extraWidth", mExtraWidth);
+
+
+			debMsg("========>>>>>>>>>>>>> SOLID BOX >>>>>", " "<<mVanishHeight);
+
+
+			mTotal_dt = 0.0f;
+
+
+			float angleRad = (mSurfaceAngle / 180) * 3.14159265;
+
+			// compute line steepness that goes through min corner
+			mSteepness = tan(angleRad);
+
+
+			// compute effective x and y of the block size
+			mEffectiveWidth = cos(angleRad) * mSurfaceLength;
+			mEffectiveHeight = sin(angleRad) * mSurfaceLength;
+
+			// add som extra height
+			mEffectiveHeight += 0.025;
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			//debMsg("solidBoxPerformStep","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mFlagGrid);
+			Grid<Vec3>* grcurvel = mpPlParams->getGridVec3(mVelocityGrid);
+
+			// compute dt vectors
+			Vec3 dt_vec_old = Vec3(mTotal_dt, mTotal_dt, mTotal_dt);
+
+			mTotal_dt += dt;
+
+			Vec3 dt_vec_cur = Vec3(mTotal_dt, mTotal_dt, mTotal_dt);
+			Vec3 dt_vec_future = Vec3(mTotal_dt + dt, mTotal_dt + dt, mTotal_dt + dt);
+
+
+			// compute old, current and future box positions
+			Vec3 mStartCornerOld = mStartCorner + mVelocity * dt_vec_old;
+			Vec3 mStartCornerCur = mStartCorner + mVelocity * dt_vec_cur;
+			Vec3 mStartCornerFut = mStartCorner + mVelocity * dt_vec_future;
+
+
+			// test if immersing
+			Grid<int>* objectImmersed = mpPlParams->getGridInt(mObjImmersedGrid);
+			if (objectImmersed->getGlobal(0,0,0) <= 0) {
+				// immersion not reached yet... 
+				// 1) get height of fluid
+				Grid<int>* flagGrid = mpPlParams->getGridInt(mFlagGrid);
+
+				// 2) parse height
+				int x = floor(mStartCorner.x * flagGrid->getSizeX());
+				int y = 3;
+				int z = 2;
+				while (flagGrid->getGlobal(x,y,z) == FFLUID) {
+					y++;
+				}
+				// now y == fluid height
+
+				if (y >= floor(mStartCornerFut.y * flagGrid->getSizeY())) {
+					// IMMERSION ALERT
+					objectImmersed->setGlobal(1,0,0,0);
+				}
+			}
+
+
+			// perfom object placement and velocity changes
+
+			////	// remove old box
+			//goPlaceSolidCorneredBlock(grflags, mStartCornerOld, mEffectiveWidth, 
+			//	mEffectiveHeight, mSteepness, mVanishHeight, mExtraWidth, (int)FEMPTY);
+
+
+			// set new box
+			goPlaceSolidCorneredBlock(grflags, mStartCornerCur, mEffectiveWidth, 
+				mEffectiveHeight, mSteepness, mVanishHeight, mExtraWidth, (int)FOBSTACLE);
+
+			
+			
+			// change level set
+			//Grid<Real>* grPhi = mpPlParams->getGridReal("phi-curr");
+
+			/*goPlaceSolidCorneredBlockR(grPhi, mStartCornerCur, mEffectiveWidth,   // THis helps too
+				mEffectiveHeight, mSteepness, mVanishHeight, mExtraWidth, 10);*/
+
+
+
+
+			//	// remove old box
+			goPlaceSolidCorneredBlock(grflags, mStartCornerCur, mEffectiveWidth, 
+				mEffectiveHeight, mSteepness, mVanishHeight, mExtraWidth, (int)FEMPTY);
+
+			//	// set velocities
+
+			float one_over_dx = 1.0f/mpPlParams->getDeltaX() * 0.5f;
+
+			goSetVelocitiesCorneredBlock(grcurvel, mStartCornerCur, mEffectiveWidth, 
+				mEffectiveHeight, mSteepness, mVanishHeight, mExtraWidth, mVelocity, one_over_dx);
+
+			return true;
+		};
+
+	protected:
+		Grid<int> *mpImmMod;
+		GridAccessor<int,0> gaImmMod;
+
+		std::string mFlagGrid;
+		std::string mVelocityGrid;
+		std::string mObjImmersedGrid;
+
+		Vec3 mVelocity, mStartCorner;
+
+		// block shape
+		float mSurfaceLength;
+		float mSurfaceAngle;
+
+		float mVanishHeight;
+
+		float mTotal_dt;
+
+		// runtime parameter
+		float mSteepness;
+		float mEffectiveWidth;
+		float mEffectiveHeight;
+		float mExtraWidth;
+
+		Vec3 mSurfaceQ;
+		float mSurfaceM;
+	};
+
+	
+	///////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+	///////////////////////////////////////////////////////////////////////////////
+	// initializes non reflecting boundaries
+	///////////////////////////////////////////////////////////////////////////////
+
+	class goDampVelocities : public GridOpBase {
+	public:
+		goDampVelocities(Grid<Vec3>* dst, const int verticalLine) :
+		  GridOpBase(), mpCurrVelMod(dst), mVerticalLine(verticalLine) {
+
+
+			  debMsg("========>>>>>>>>>>>>> vertical line:", " "<<verticalLine);
+
+
+			  applyOperatorToGridsWithoutFlags(this, mpCurrVelMod);
+		  };
+
+		  ~goDampVelocities() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaCurrVelMod.gridAccInit(mpCurrVelMod, AM_WRITE, gaCalls);
+		  };
+
+		  // add forces and update empty cells free surface boundaries
+		  inline void operator() (int i, int j, int k) {
+			  gaCurrVelMod.write(i,j,k);
+			  if ((i==mVerticalLine)
+
+#if DDF_DIMENSION==3
+				  || (k==mVerticalLine)
+#endif
+				  )
+			  {
+				  gaCurrVelMod.write(i,j,k) = Vec3(0,0,0);
+			  }
+		  };
+
+
+		  void reduce(goDampVelocities &op) { };
+
+	protected:
+		Grid<Vec3> *mpCurrVelMod;
+		GridAccessor<Vec3,0> gaCurrVelMod;
+		int mVerticalLine;
+	}; // goDampVelocities
+
+
+
+	//-----------------------------------------------------------------------------
+	class goResetHeight : public GridOpBase {
+	public:
+		goResetHeight(Grid<int>* dst, const float& resetHeight, const int& verticalLine) :
+		  GridOpBase(), mpFlagMod(dst), mVerticalLine(verticalLine), mResetHeight(resetHeight) {
+			  mpFlags = NULL;
+
+			  applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		  };
+
+		  ~goResetHeight() { };
+		  void resetVariables() { };
+		  void buildCallList() {
+			  gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls);
+		  };
+
+		  inline void operator() (int i, int j, int k) {
+			  //gaFlagMod.write(i,j,k);
+
+			  if (((i==mVerticalLine) && (j > mResetHeight))
+#if DDF_DIMENSION==3
+				  || ((i==mVerticalLine) && (j > mResetHeight))
+#endif
+				  )
+			  {
+				  gaFlagMod.write(i,j,k) = FEMPTY;
+			  }
+		  };
+
+
+		  void reduce(goResetHeight &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		int mVerticalLine;
+		float mResetHeight;
+	}; // goResetHeight
+
+
+
+	//-----------------------------------------------------------------------------
+	class sinitNonreflectBounds : public SolverPlugin {
+	public:
+		sinitNonreflectBounds()
+			: SolverPlugin(), mFlagGrid("flags"), mVelocityGrid("vel-curr")
+
+		{ };
+		~sinitNonreflectBounds() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mFlagGrid = params.FindOneString("flaggrid", mFlagGrid );
+			mVelocityGrid = params.FindOneString("velocitygrid", mVelocityGrid );
+			mNumBorderPixels = params.FindOneInt("borderPixel", mNumBorderPixels );
+			mResetHeight = params.FindOneFloat("resetHeight", mResetHeight );
+
+
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			//debMsg("non reflecting boundary.. performing","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mFlagGrid);
+			Grid<Vec3>* grcurvel = mpPlParams->getGridVec3(mVelocityGrid);
+
+
+			for (int i = 0; i < mNumBorderPixels; i++) {
+				// damping at i + 1
+				goDampVelocities(grcurvel, i+1);
+				goResetHeight(grflags, mResetHeight * grflags->getSizeY(), i+1);
+
+				// damping at size - i
+				goDampVelocities(grcurvel, grflags->getSizeX() - (i+1+1));
+				goResetHeight(grflags, mResetHeight * grflags->getSizeY(), grflags->getSizeX() - (i+1+1));
+			}
+
+
+
+			return true;
+		};
+
+	protected:
+		std::string mFlagGrid;
+		std::string mVelocityGrid;
+		int mNumBorderPixels;
+		float mResetHeight;
+	};
+
+
+	//*****************************************************************************
+	//*****************************************************************************
+	//*****************************************************************************
+
+
+	///////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+	SolverPlugin* MakeObstacle2DPlugin(std::string name)
+	{
+        if (name.compare( string("moving-solid-cornered-block") ) == 0) {
+			return new movingSolidCorneredBlock;
+		} else if (name.compare( string("moving-solid-box") )==0) {
+			return new movingSolidBox;
+		} else if (name.compare( string("non-reflect-boundaries") )==0) {
+			return new sinitNonreflectBounds;
+		}
+		return NULL;
+	}
+
+}; // DDF
+

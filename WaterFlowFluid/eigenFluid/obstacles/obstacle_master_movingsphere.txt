@@ -1,0 +1,1 @@
+sphere ./obstacles/moving_sphere.txt

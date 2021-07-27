@@ -1,0 +1,79 @@
+/******************************************************************************
+ *
+ * El'Beem - Free Surface Fluid Simulation with the Lattice Boltzmann Method
+ * Copyright 2004 Nils Thuerey
+ *
+ * Header for Toms LIC visualization for elbeem
+ *
+ *****************************************************************************/
+#ifndef TOM_LIC_H
+
+#include "ntl_vector3dim.h"
+
+// debugging LIC on/off
+#define LIC_DEBUG 0
+
+/*namespace tomLic {
+
+struct RGB {
+	RGB (const unsigned char r, const unsigned char g, const unsigned char b): _r (r), _g (g), _b (b) {}
+	RGB (): _r (0), _g (0), _b (0) {}
+	unsigned char _r, _g, _b;
+};
+
+
+struct HSV {
+	HSV (const int h, const int s, const int v): _h (h), _s (s), _v (v) {}
+	HSV (): _h (0), _s (0), _v (0) {}
+	int _h, _s, _v;
+	operator RGB () const;
+};
+
+
+class PPM {
+public:
+	enum Format {ascii, binary, undefined};
+
+	PPM (const int dimX, const int dimY, const Format format = undefined);
+	~PPM ();
+	Format getFormat () const {return _format;}
+	void setFormat (const Format format) {_format = format;}
+	void getSize (int& dimX, int& dimY) const;
+	RGB& operator() (const int x, const int y);
+	bool save (const char* filename, Format format = undefined) const;
+	const RGB* getDataHandle () {return _data;}
+	void rgb2bgr () const;
+
+private:
+	int _dimX, _dimY;
+	RGB* _data;
+	Format _format;
+	RGB _dummy;
+};
+
+}*/
+
+class LIC {
+public:
+	LIC (const int dimX, const int dimY, const int oversampling);
+	virtual ~LIC ();
+	bool calculate (const double sx, const double sy,
+	                const double ex, const double ey );
+	                //ntlVec3d *pic );
+	                //const char* filename);
+	ntlVec3d* getPic() { return _pic; }
+	
+protected:
+	virtual void   vecFunc (double x, double y, double& dx, double& dy);
+	virtual double hueFunc (const double x, const double y);
+
+private:
+	int _dimX, _dimY, _os;
+	unsigned char* _field;
+	ntlVec3d *_pic;
+};
+
+
+#define TOM_LIC_H
+#endif
+

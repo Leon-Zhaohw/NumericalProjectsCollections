@@ -1,0 +1,55 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * Geometry file reader
+ *
+ *****************************************************************************/
+
+#ifndef DDF_GEOMFILE_H
+#define DDF_GEOMFILE_H
+
+#include <zlib.h>
+#include <string>
+#include "globals.h"
+namespace DDF {
+
+template<class T> class ArrayPlain;
+
+class GeomFile {
+	public:
+		GeomFile();
+		~GeomFile();
+
+		// read gz file
+		bool initFromFile(std::string filename);
+		// get value at given position
+		int operator()(int i, int j,int k) const;
+
+
+		// accessors
+		inline void setSimSize(nVec3i set) { mSimSize = set; }
+		inline void setIndexOrder(int set) { mIndexOrder = set; }
+		inline bool getHaveData() { return mHaveData; }
+
+		// factor to determine the 2d slice to init the geometry from (twod only, xy plane)
+		Real mTwodGeominitSliceFactor;
+
+	protected:
+		// grid size
+		nVec3i mGridSize;
+		// simulation size (for mapping)
+		nVec3i mSimSize;
+		// storage
+		ArrayPlain<short int> *mpGrid;
+		// init from file went ok
+		bool mHaveData;
+		// different swapping of indices e.g. for blender import
+		int mIndexOrder;
+
+};
+
+} // DDF
+#endif // DDF_GEOMFILE_H
+

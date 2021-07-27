@@ -1,0 +1,66 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * Basic particles
+ *
+ *****************************************************************************/
+
+#ifndef DDF_PARTICLES_H
+#define DDF_PARTICLES_H
+
+#include "vectorbase.h"
+#include "randomstream.h"
+namespace DDF {
+
+//! obstacle flag types
+typedef enum ParticleTypeT { 
+	PNONE         = 0,
+	PTRACER       = 1,  // advected with flow
+	PFLUIDMARKER  = 2, // marks fluid region
+	PDELETE       = (1<<10), // todo, remove 
+	P_INVALID     = (1<<30), // unused
+} ParticleTypeT;
+
+//! a single particle
+class Particle {
+	public:
+		// init newPatch
+		Particle() : pos(0.),mPartType(PNONE) {};
+		Particle(Vec3 p) : pos(p) {};
+		~Particle() { };
+
+		inline Vec3 getPPos() const { return pos; }
+		inline void setPPos(Vec3 set) { pos = set; }
+
+		inline int getPType() const { return mPartType; }
+		inline void setPType(int set) { mPartType = set; }
+
+		inline void advance(Vec3 vel, Real t) {
+			pos += vel*t;
+		}
+
+		// public data members
+		//! position
+		Vec3 pos;
+		//! debug - ids
+		//int mParticleId;
+		//! type of particle
+		int mPartType;
+
+		void initRandomPos(nVec3i dim, Real cellsize) {
+			pos = Vec3( 
+					mRandomStream.getFloat(1., dim[0]-1.) *cellsize ,
+					mRandomStream.getFloat(1., dim[1]-1.) *cellsize ,
+					mRandomStream.getFloat(1., dim[2]-1.) *cellsize 
+					);
+			if(gDim==2) pos[2] = 0.;
+		}
+	static RandomStream mRandomStream;
+}; // Particle
+
+
+} // namespace DDF
+
+#endif // DDF_PARTICLES_H

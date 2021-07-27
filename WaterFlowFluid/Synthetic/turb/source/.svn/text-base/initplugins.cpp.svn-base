@@ -1,0 +1,1412 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * Init plugins
+ *
+ *****************************************************************************/
+
+// lsdebug
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+
+
+namespace DDF { 
+
+//*****************************************************************************
+// simple, set constant value
+
+class sinitSetConstant : public SolverPlugin {
+	public:
+		sinitSetConstant() : SolverPlugin(),
+   				mGrid("-unnamed-"), mVal(0.) { };
+		~sinitSetConstant() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mVal = params.FindOneFloat("value", mVal );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSetConstant","step "<<dt);
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+
+			// distinguish data types
+			if(mpPlParams->haveGridInt(mGrid) && 1) {
+				Grid<int>* grid = mpPlParams->getGridInt(mGrid);
+				fsSetConstant<int>(flags, grid, (int)mVal);
+			} else if(mpPlParams->haveGridReal(mGrid) && 1) {
+				Grid<Real>* grid = mpPlParams->getGridReal(mGrid);
+				fsSetConstant<Real>(flags, grid, (Real)mVal);
+			} else if(mpPlParams->haveGridVec3(mGrid) && 1) {
+				Grid<Vec3>* grid = mpPlParams->getGridVec3(mGrid);
+				fsSetConstant<Vec3>(flags, grid, Vec3(mVal));				
+			} else { 
+				errFatal("sinitSetConstant::performStep","Grid not found "<<mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		// value
+		float mVal;
+};
+
+template<class T>
+class fsSetConditional : public GridOpBase {
+	public:
+		fsSetConditional(FlagGrid *flags, Grid<T> *dst , T target, int flag) :
+				GridOpBase(), mpDst(dst), mTargetVal(target), mCFlag(flag) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsSetConditional() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			setFlags(mpFlags);
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+		};
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			if ((getFlagAcc()(i,j,k) & mCFlag)==mCFlag)
+				gaDst.write(i,j,k) = mTargetVal;
+		};
+		void reduce(fsSetConditional &op) { };
+
+	protected:
+		Grid<T> *mpDst;
+		GridAccessor<T,0> gaDst;
+		T mTargetVal;
+		int mCFlag;
+}; // fsSetConditional */
+
+class spluginSetConditional : public SolverPlugin {
+	public:
+		spluginSetConditional() : SolverPlugin(),
+   			mGrid("-unnamed-"), mFlag(4),  mTargetVec(0.) {
+			debMsg("spluginSetConditional","cons");
+		};
+		~spluginSetConditional() {
+			debMsg("spluginSetConditional","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginSetConditional","parse");
+			mGrid = params.FindOneString("gridname", mGrid);
+			mFlags = params.FindOneString("flaggrid", "flags");
+			mTargetVec = params.FindOneVector("target-vec", mTargetVec );
+			mTargetReal = params.FindOneFloat("target-real", 0. );
+			mFlag = params.FindOneInt("flag", mFlag );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginSetConditional","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginSetConditional"," dt="<<dt<<" dest:"<<mGrid );
+			FlagGrid* flagg = mpPlParams->getGridInt(mFlags);
+
+			if (mpPlParams->haveGridVec3(mGrid)) {
+				fsSetConditional<Vec3>(flagg, mpPlParams->getGridVec3(mGrid), mTargetVec, mFlag);
+			} else if (mpPlParams->haveGridReal(mGrid)) {
+				fsSetConditional<Real>(flagg, mpPlParams->getGridReal(mGrid), mTargetReal, mFlag);						
+			} else { 
+				errFatal("spluginSetConditional::performStep","Grid not found "<<mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:
+		std::string mGrid,mFlags;
+		int mFlag;
+		Vec3 mTargetVec;
+		Real mTargetReal;
+};
+
+class sinitSetVec3 : public SolverPlugin {
+	public:
+		sinitSetVec3() : SolverPlugin(),
+   				mGrid("-unnamed-"), mVal(0.) { };
+		~sinitSetVec3() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mVal = params.FindOneVector("value", mVal );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSetVec3","step "<<dt);
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+
+			if(mpPlParams->haveGridVec3(mGrid) && 1) {
+				Grid<Vec3>* grid = mpPlParams->getGridVec3(mGrid);
+				fsSetConstant<Vec3>(flags, grid, Vec3(mVal));
+			} else { 
+				errFatal("sinitSetVec3::performStep","Grid not found "<<mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		// value
+		Vec3 mVal;
+};
+
+
+//*****************************************************************************
+// Load field from file
+
+template<class T>
+class fsLoader : public GridOpBase { 
+	public:
+		fsLoader(FlagGrid *flags, Grid<T> *dst,const std::string filename, bool setonlyFluid, int interpol) :
+				GridOpBase(), mpDst(dst),mpFiledata(NULL), onlyFluid(setonlyFluid), mInterpolateWithBorder(interpol) {
+			
+			loadData(filename);
+			mpFlags = flags;
+			mSizeDst = mpFlags->getSize() -nVec3i(1,1,1);
+			applyOperatorToGridsSimple(this);
+		};
+		~fsLoader()
+		{
+			if (mpFiledata!=NULL)
+			{
+				delete[] mpFiledata;
+				mpFiledata = NULL;				
+			}
+		}
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// load data from file
+		void loadData(const std::string file)
+		{
+			unsigned bytes = 0;
+			int /*fsize[3],*/ dlen, dsize;
+			
+			gzFile gzf = gzopen(file.c_str(),"r");
+
+			if (gzf == NULL)
+				errFatal("fsLoader::loadData","can't open field file " << file, SIMWORLD_GRIDERROR);
+
+			if (gzread(gzf, &mSizeRead[0],sizeof(int)*3) != sizeof(int)*3) 
+				errFatal("fsLoader","size fread failed",SIMWORLD_INITERROR);
+
+			if(mInterpolateWithBorder<=-1) {
+				if (mSizeRead[0] != mpDst->getSizeX() || mSizeRead[1] != mpDst->getSizeY() || mSizeRead[2] != mpDst->getSizeZ())
+					errFatal("fsLoader::loadData","gridsize (" << mpDst->getSizeX() << "," << mpDst->getSizeY() << "," << mpDst->getSizeZ() << ") != filesize (" << mSizeRead[0] << ","<< mSizeRead[1] << ","<< mSizeRead[2] << ")" , SIMWORLD_GRIDERROR);
+			}
+
+			if (gzread(gzf,&dlen,sizeof(int)) != sizeof(int)) 
+				errFatal("fsLoader","data length gzread failed",SIMWORLD_INITERROR);
+			if (gzread(gzf,&dsize,sizeof(int)) != sizeof(int)) 
+				errFatal("fsLoader","data-size gzread failed",SIMWORLD_INITERROR);
+			if (dlen*dsize != sizeof(T))
+				errFatal("fsLoader::loadData","Data type size error, grid: " << sizeof(T) << "bytes != file: " << dsize*dlen << "bytes ", SIMWORLD_GRIDERROR);
+
+			mpFiledata = new T[mSizeRead[0]*mSizeRead[1]*mSizeRead[2]];
+			if (dsize ==1)
+			{
+				unsigned len = mSizeRead[0]*mSizeRead[1]*mSizeRead[2];
+				if (gzread(gzf,mpFiledata,dlen*len) != (int)(dlen*len)) errFatal("fsLoader","data fread failed",SIMWORLD_INITERROR);
+			}
+			else
+			{
+				for(int i=0;i<mSizeRead[0]*mSizeRead[1]*mSizeRead[2];i++)
+				{
+					unsigned rlen = gzread(gzf,&(mpFiledata[i]),dsize*dlen);
+					if (rlen != (unsigned)dlen*dsize) errFatal("fsLoader","datachunk fread failed",SIMWORLD_INITERROR);
+				}
+			}
+			gzclose(gzf);
+		}
+
+		// load & safety check access of file data at i,j,k
+		inline T getFileData (int i, int j, int k) { 
+			CLAMP(i, 0, mSizeRead[0]-1);
+			CLAMP(j, 0, mSizeRead[1]-1);
+			CLAMP(k, 0, mSizeRead[2]-1);
+			return mpFiledata[k + mSizeRead[2]*(j + mSizeRead[1]*i) ];
+		}
+
+		inline void operator() (int i, int j, int k) { 
+			nVec3i src = nVec3i(i,j,k);
+			const nVec3i dst = nVec3i(i,j,k);
+
+			if(mInterpolateWithBorder>-1) {
+				for(int l=0; l<gDim; l++) {
+					if(dst[l]<mInterpolateWithBorder) {
+						// keep
+					} else if(dst[l]>=mSizeDst[l]-mInterpolateWithBorder) {
+						// keep upper grid boundary as well
+						src[l] = mSizeRead[l]-1 + (dst[l]-mSizeDst[l]);
+					} else {
+						//src[l] = dst[l]* mSizeRead[l] / mSizeDst[l];
+						const int b = mInterpolateWithBorder;
+						src[l] = ((dst[l]-b) * (mSizeRead[l]-2*b) / (mSizeDst[l]-2*b)) + b;
+					}
+				}
+				//std::cerr <<"Init debug" << "at dst="<<dst<<"|"<<mSizeDst<<"    file src="<<src<<", filesize"<<mSizeRead <<"\n";
+			} else {
+				// direct read (standard way of loading)
+				// nothing to do, load from (i,j,k)
+			}
+
+			const int src_k=src[2], src_j=src[1], src_i=src[0];
+			if (!onlyFluid || fgIsFluid(getFlagAcc()(i,j,k)) ) 
+			{
+				gaDst.write(i,j,k) = getFileData(src_i,src_j,src_k); 
+			}
+		};
+		void reduce(fsLoader &op) { };
+
+	protected:
+		Grid<T> *mpDst;
+		GridAccessor<T,0> gaDst;
+	   
+		T* mpFiledata;
+		bool onlyFluid;
+		nVec3i mSizeRead, mSizeDst; // size of grid in file, and destination grid
+		int mInterpolateWithBorder;
+};
+
+class sinitLoad : public SolverPlugin {
+	public:
+		sinitLoad() : SolverPlugin(),
+   				mGrid("-unnamed-"), fname(""), onlyFluid(false), 
+					mInterpolBorder(1) // by default, scale with border=1
+					{ };
+		~sinitLoad() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			onlyFluid = params.FindOneInt("onlyfluid", 0 ) != 0;
+			mGrid = params.FindOneString("gridname", mGrid );
+			//mParams = params.FindOneString("params", "" );
+			fname = params.FindOneString("file", fname );
+
+			// interpolate, but keep #mInterpolBorder cells from each side unscaled
+			// -1 means off, 0 means scale everything
+			mInterpolBorder = params.FindOneInt("interpolate-with-border", mInterpolBorder );
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitLoad","file " + fname);
+			SolverParams* param = mpPlParams;
+			//if (!mParams.empty()) param = ddfWorldFindParams(mParams);
+			Grid<int>* flags = param->getGridInt("flags");
+
+			// distinguish data types
+			if(param->haveGridReal(mGrid) && 1) {
+				Grid<Real>* grid = param->getGridReal(mGrid);
+				fsLoader<Real>(flags, grid, fname, onlyFluid, mInterpolBorder);
+			} else if(param->haveGridVec3(mGrid) && 1) {
+				Grid<Vec3>* grid = param->getGridVec3(mGrid);
+				fsLoader<Vec3>(flags, grid, fname, onlyFluid, mInterpolBorder);
+			} else if(param->haveGridInt(mGrid) && 1) {
+				Grid<int>* grid = param->getGridInt(mGrid);
+				fsLoader<int>(flags, grid, fname, onlyFluid, mInterpolBorder);
+			} else { 
+				errFatal("sinitLoad::performStep","Grid not found "<<mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:		
+		std::string mGrid, fname, mParams;
+		bool onlyFluid;
+		int mInterpolBorder;
+};
+
+class sinitLoadData : public SolverPlugin {
+	public:
+		sinitLoadData() : SolverPlugin() { };
+		~sinitLoadData() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("sinitLoadData","parse");
+			mName = params.FindOneString("name", "unnamed" );
+			mFile = params.FindOneString("file", "nofile" );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitLoadData","init");
+
+			mpPlParams->getFluidSolver()->loadDataVector(mName,mFile);			
+			return true;
+		};
+
+	protected:		
+		std::string mName, mFile;
+};
+
+class sinitDebugIso : public SolverPlugin {
+	public:
+		sinitDebugIso() : SolverPlugin() { };
+		~sinitDebugIso() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mPhi = params.FindOneString("phi", "isogem" );
+			mFlags = params.FindOneString("flags", "flags" );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			FlagGrid* flags = mpPlParams->getGridInt(mFlags);
+			Grid<Real>* phi = mpPlParams->getGridReal(mPhi);
+			
+			FOR_IJK_GRID(phi) {
+				phi->getGlobal(i,j,k) = fgIsObstacle(flags->getGlobal(i,j,k)) ? 1 : -1;
+			}
+			return true;
+		};
+
+	protected:
+		std::string mPhi, mFlags;
+};
+
+//*****************************************************************************
+// copy grid part
+template<class Scalar>
+class goCopyBox : public GridOpBase {
+	public:
+		goCopyBox(Grid<Scalar> *grd, nVec3i src, nVec3i dst, nVec3i wnd, const nVec3i& flip, const nVec3i& rev) 
+			: GridOpBase(), pos1(dst), pos2(dst+wnd), doRev(rev), posSrc2(src+wnd-1)
+		{
+			posFactor = flip*-2 +1;
+			posOffset = src-dst + flip*(dst*2 + wnd - 1);
+
+			mpGrid = grd;
+			applyOperatorToGridsWithoutFlags(this, mpGrid);
+		};
+		~goCopyBox() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaGrid.gridAccInit(mpGrid, AM_READWRITE, gaCalls); 
+			setNullFlagPointer();
+		};
+		inline void operator() (int i, int j, int k)
+		{
+			if (i>=pos1.x && j>=pos1.y && k>=pos1.z && i<pos2.x && j<pos2.y && k<pos2.z)
+			{
+				nVec3i pi = posOffset + nVec3i(i,j,k) * posFactor;
+				nVec3i pref = doRev * (posSrc2) + (-doRev+1) * pi;
+				gaGrid.write(i,j,k) = gaGrid(pref.x, pref.y, pref.z)*2 - gaGrid(pi.x, pi.y, pi.z);
+			}
+		};
+		void reduce(goCopyBox &op) { };
+	protected:
+		Grid<Scalar> *mpGrid;
+		GridAccessor<Scalar,0> gaGrid;
+		nVec3i pos1, pos2, posFactor, posOffset, doRev, posSrc2;
+}; // goCopyBox */
+
+
+
+class spluginCopyBox : public SolverPlugin {
+	public:
+		spluginCopyBox() : SolverPlugin(),
+   				mGrid("-unnamed-"), posSrc(), posDst(), window(), doFlip(), doReverse()
+		{ };
+		~spluginCopyBox() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			posSrc = vec2I(params.FindOneVector("src", Vec3()));
+			posDst = vec2I(params.FindOneVector("dst", Vec3()));
+			window = vec2I(params.FindOneVector("window", Vec3()));
+			std::string opt = params.FindOneString("opt","");
+			for(;;) // parse options
+			{
+				if (!opt.compare(0,5,"flipx")) doFlip.x = 1;
+				if (!opt.compare(0,5,"flipy")) doFlip.y = 1;
+				if (!opt.compare(0,5,"flipz")) doFlip.z = 1;
+				if (!opt.compare(0,4,"revx")) doReverse.x = 1;
+				if (!opt.compare(0,4,"revy")) doReverse.y = 1;
+				if (!opt.compare(0,4,"revz")) doReverse.z = 1;
+				if (opt.find(",")==std::string::npos) break;
+				opt = opt.substr(opt.find(",")+1);
+			}
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginCopyBox","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginCopyBox","step "<<dt);
+			if(mpPlParams->haveGridInt(mGrid) && 1) {
+				Grid<int>* grd = mpPlParams->getGridInt(mGrid);
+				goCopyBox<int>(grd, posSrc, posDst, window, doFlip, doReverse);
+			} else if(mpPlParams->haveGridReal(mGrid) && 1) {
+				Grid<Real>* grd = mpPlParams->getGridReal(mGrid);
+				goCopyBox<Real>(grd, posSrc, posDst, window, doFlip, doReverse);
+			} else if(mpPlParams->haveGridVec3(mGrid) && 1) {
+				Grid<Vec3>* grd = mpPlParams->getGridVec3(mGrid);
+				goCopyBox<Vec3>(grd, posSrc, posDst, window, doFlip, doReverse);
+			}
+			return true;
+		};
+
+	protected:
+		std::string mGrid;
+		nVec3i posSrc, posDst, window;
+		nVec3i doFlip, doReverse;
+};
+
+//*****************************************************************************
+// Init ramp grid
+
+class fsInitRamp : public GridOpBase { 
+	public:
+		fsInitRamp(FlagGrid *flags, Grid<Real> *dst, int _dim) : GridOpBase(), mpDst(dst), dim(_dim)
+		{		
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsInitRamp()	{};
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k)
+		{ 
+			switch(dim) {
+				case 0:
+					gaDst.write(i,j,k) = (Real)i/mpDst->getSizeX(); break;
+				case 1:
+					gaDst.write(i,j,k) = (Real)j/mpDst->getSizeY(); break;
+				case 2:
+					gaDst.write(i,j,k) = (Real)k/mpDst->getSizeZ(); break;
+			}
+		};
+		void reduce(fsInitRamp &op) { };
+
+	protected:
+		Grid<Real> *mpDst;
+		GridAccessor<Real,0> gaDst;		
+		int dim;
+};
+
+class sinitRamp : public SolverPlugin {
+	public:
+		sinitRamp() : SolverPlugin(),
+					mGrid("-unnamed-"), dim(0) { };
+		~sinitRamp() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			dim = params.FindOneInt("dim", dim );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitRamp","step "<<dt);
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+
+			// distinguish data types
+			if(mpPlParams->haveGridReal(mGrid) && 1) {
+				Grid<Real>* grid = mpPlParams->getGridReal(mGrid);
+				fsInitRamp(flags, grid, dim);
+			} else { 
+				errFatal("sinitRamp::performStep","Grid not found "<<mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:		
+		std::string mGrid;
+		int dim;
+};
+
+
+//*****************************************************************************
+
+class fsSetAllfluid : public GridOpBase { 
+	public:
+		fsSetAllfluid(Grid<int> *dst, int mode=0) :
+				GridOpBase(), mpFlagMod(dst), mMode(mode) {
+			mpFlags = NULL;
+			applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		};
+
+		~fsSetAllfluid() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls); 
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			int flag = gaFlagMod.write(i,j,k);
+			switch(mMode) {
+			case(1): // smoke
+				if((flag & FFLUID) != 0) {
+					flag |= FINFLOW;
+				}
+				if((flag & FEMPTY) != 0) {
+					flag &= (~FEMPTY);
+					flag |= FFLUID;
+				}
+				break;
+			case(2): // remove obstacles
+				if((flag & FOBSTACLE) != 0) {
+					flag &= (~FOBSTACLE);
+					flag |= FFLUID;
+				}
+				break;
+			default: // = 0
+				if((flag & FEMPTY) != 0) {
+					flag &= (~FEMPTY);
+					flag |= FFLUID;
+				}
+				break;
+			}
+			gaFlagMod.write(i,j,k) = flag;
+		};
+		void reduce(fsSetAllfluid &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		// different modes:
+		// 0 = default, set empty to fluid
+		// 1 = set empty to fluid, set fluid to inflow (e.g., turn free surface into smoke test case)
+		// 2 = set obstacles to fluid
+		int mMode;
+}; // fsSetAllfluid 
+
+class sinitSetAllfluid : public SolverPlugin {
+	public:
+		sinitSetAllfluid() : SolverPlugin(), mGrid("-unnamed-"), mMode(0) { };
+		~sinitSetAllfluid() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mMode = params.FindOneInt("mode", mMode );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSetAllfluid","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+
+			fsSetAllfluid(grflags, mMode);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		// different modes:
+		// 0 = default, set empty to fluid
+		// 1 = set empty to fluid, set fluid to inflow (e.g., turn free surface into smoke test case)
+		int mMode;
+};
+
+class sinitTurnFluid2Obs : public SolverPlugin {
+	public:
+		sinitTurnFluid2Obs() : SolverPlugin(), mGrid("-unnamed-"), mMode(0) { };
+		~sinitTurnFluid2Obs() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mMode = params.FindOneInt("mode", mMode );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+			// note - mesh based init might fail if SDF is not copied:
+			// normally do  calc-SDF, copy2grid, reinit-from, turn-fluid2-obs
+
+			// TODO rename & use sinitSetAllfluid?
+			FOR_IJK_GRID(grflags) {
+				if( fgIsFluid(grflags->getGlobal(i,j,k)) ) {
+					grflags->getGlobal(i,j,k) = FOBSTACLE;
+				}
+			}
+			debMsg("sinitTurnFluid2Obs"," done ");
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		// different modes: unused
+		int mMode;
+};
+
+//*****************************************************************************
+// init level set. does initializations which are necessary in order to use
+// the level set. the possible values for eikonal-solver are listed at the
+// end of solverparams.h (currently 1=FMM, 2=FIM, 3=FSM).
+
+class sinitLevelSet : public SolverPlugin {
+	public:
+		sinitLevelSet() : SolverPlugin(), mEikonalSolver(1) { };
+		~sinitLevelSet() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mEikonalSolver = params.FindOneInt("eikonal-solver", mEikonalSolver );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			mpPlParams->getFluidSolver()->initLevelSet(mEikonalSolver);
+			return true;
+		};
+
+	protected:
+		int mEikonalSolver;
+};
+
+//*****************************************************************************
+// initializes the domain with empty cells and a single cell border (or
+// more depending on mBorder param) of obstacles
+
+class goInitBoxDomain : public GridOpBase { 
+	public:
+		goInitBoxDomain(Grid<int>* dst, int border, int setempty, int flagInside = FEMPTY, int flagOutside = FOBSTACLE, int flagFloor = 0) :
+				GridOpBase(), mpFlagMod(dst), mBorder(border), mDoSetEmpty(setempty), mFlagInside(flagInside), mFlagOutside(flagOutside), mFlagFloor(flagFloor) {
+			mpFlags = NULL; // unused
+			mS = mpFlagMod->getSize()-nVec3i(1,1,1);
+			applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		};
+
+		~goInitBoxDomain() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls); 
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+
+
+			gaFlagMod.write(i,j,k);
+			if ((i<1+mBorder) || (i>=mS.x-mBorder)
+				|| (j<1+mBorder) || (j>=mS.y-mBorder)
+#				if DDF_DIMENSION==3
+				|| (k<1+mBorder) || (k>=mS.z-mBorder)
+#				endif
+				) {
+				gaFlagMod.write(i,j,k) = mFlagOutside;
+			} else {
+				if(mDoSetEmpty) gaFlagMod.write(i,j,k) = mFlagInside;
+			}
+			if (j==0 && mFlagFloor > 0) gaFlagMod.write(i,j,k) = mFlagFloor;
+		};
+		void reduce(goInitBoxDomain &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		nVec3i mS;
+		int mBorder, mDoSetEmpty, mFlagInside, mFlagOutside, mFlagFloor;
+}; // goInitBoxDomain 
+
+class sinitBoxDomain : public SolverPlugin {
+	public:
+		sinitBoxDomain()
+			: SolverPlugin(), mGrid("flags"), mBorder(0) , mDoSetEmpty(1)
+			{ };
+		~sinitBoxDomain() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mBorder = params.FindOneInt("border", mBorder );
+			mDoSetEmpty = params.FindOneInt("set-empty", mDoSetEmpty );
+			mFlag1 = params.FindOneInt("flag-inside", FEMPTY );
+			mFlag2 = params.FindOneInt("flag-border", FOBSTACLE );
+			mFloor = params.FindOneInt("flag-floor", 0);
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitBoxDomain","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+
+			goInitBoxDomain(grflags, mBorder,mDoSetEmpty,mFlag1,mFlag2,mFloor);
+			return true;
+		};
+
+	protected:
+		std::string mGrid;
+		int mBorder, mDoSetEmpty, mFlag1, mFlag2, mFloor;
+};
+
+//*****************************************************************************
+// creates a fluid box spanned by lowCorner and highCorner (both specified
+// in range [0,1])
+
+class goSetBoxFluid : public GridOpBase { 
+	public:
+		goSetBoxFluid(Grid<int> *dst, const Vec3& lowCorner, const Vec3& highCorner, int type, bool brd,
+				Grid<Vec3>* vel = NULL, Vec3 set = Vec3(0.), Grid<Real>* dist = NULL, Grid<Vec3>* norm = NULL ) :
+				GridOpBase(), mpFlagMod(dst), mType(type), mBorder(brd),
+				mpVel(vel), mVelSet(set), mpDist(dist), mpNorm(norm) {
+			mpFlags = NULL;
+			mILen = 1. / dst->getMaxSize();
+			mLowCorner = Vec3(lowCorner.x * float(mpFlagMod->getSizeX()), lowCorner.y * float(mpFlagMod->getSizeY()), lowCorner.z * float(mpFlagMod->getSizeZ()));
+			mHighCorner = Vec3(highCorner.x * float(mpFlagMod->getSizeX()), highCorner.y * float(mpFlagMod->getSizeY()), highCorner.z * float(mpFlagMod->getSizeZ()));
+			for (int i=0;i<3;i++) 
+				if(mLowCorner[i] > mHighCorner[i]) {
+					Real a=mLowCorner[i]; mLowCorner[i]=mHighCorner[i]; mHighCorner[i]=a; }
+			applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		};
+
+		~goSetBoxFluid() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls); 
+			if(mpVel) gaVel.gridAccInit(mpVel, AM_WRITE, gaCalls); 
+			if(mpDist) gaDist.gridAccInit(mpDist, AM_READWRITE, gaCalls); 
+			if(mpNorm) gaNorm.gridAccInit(mpNorm, AM_READWRITE, gaCalls); 
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			if (mBorder && (i==0 || j==0 || k==0 || i==mpFlagMod->getSizeX()-1 || j==mpFlagMod->getSizeY()-1 || k==mpFlagMod->getSizeZ()-1))
+				gaFlagMod.write(i,j,k) = FOBSTACLE;
+			if (gaFlagMod.write(i,j,k) == FOBSTACLE)
+				return;
+			if ((i>=mLowCorner.x) && (i<=mHighCorner.x)
+				&& (j>=mLowCorner.y) && (j<=mHighCorner.y)
+#if DDF_DIMENSION==3
+				&& (k>=mLowCorner.z) && (k<=mHighCorner.z)
+#endif
+				)
+			{
+				if(mpVel) {
+					Vec3 &v = gaVel.write(i,j,k);
+					if(gaFlagMod.write(i,j,k) == mType) {
+						//v += mVelSet;
+						//v *= 0.5; // warning, depends on init order...
+						// NT CJW test, dont overwrite!?
+					} else {
+						v = mVelSet;
+					}
+				}
+
+				if(fgIsObstacle(mType)) 
+					gaFlagMod.write(i,j,k) = mType; 
+				else
+					gaFlagMod.write(i,j,k) |= mType; 
+			}
+			// build distance field
+			if (mpDist && mpNorm) {
+				int numIn=0;
+				Vec3 pos(i,j,k), ref(0.);
+				for (int e=0;e<3;e++) { 
+					if ((pos[e]>=mLowCorner[e]) && (pos[e]<=mHighCorner[e])) {
+						ref[e] = pos[e];
+						numIn++;
+					} else if (pos[e]>mLowCorner[e])
+						ref[e] = mHighCorner[e];
+					else
+						ref[e] = mLowCorner[e];
+				}
+				Vec3 nrm = pos-ref;
+				Real newDist = normalize(nrm)*mILen, oldDist = gaDist(i,j,k);
+				if (oldDist == 0 || newDist < oldDist) {
+					gaDist.write(i,j,k) = newDist;
+					gaNorm.write(i,j,k) = nrm;
+				}
+			}
+		
+		};
+		void reduce(goSetBoxFluid &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		GridAccessor<int,0> gaFlagMod;
+		Vec3 mLowCorner, mHighCorner;
+		int mType;
+		bool mBorder;
+
+		// optional velocity
+		Grid<Vec3> *mpVel;
+		GridAccessor<Vec3,0> gaVel;
+		Vec3 mVelSet;
+		Real mILen;
+		Grid<Real> *mpDist;
+		Grid<Vec3> *mpNorm;
+		GridAccessor<Vec3,0> gaNorm;
+		GridAccessor<Real,0> gaDist;		
+}; // goSetBoxFluid 
+
+class sinitFluidBox : public SolverPlugin {
+	public:
+		sinitFluidBox()
+			: SolverPlugin(), mGrid("flags"), mLowCorner(0.,0.,0.), mHighCorner(0.,0.,0.), 
+			mType(FFLUID), mVel(""), mVelSet(0.) 
+		{ };
+		~sinitFluidBox() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mLowCorner = params.FindOneVector("low", mLowCorner);
+			mHighCorner = params.FindOneVector("high", mHighCorner);
+			mType = params.FindOneInt("type", mType);
+			mBorder = params.FindOneInt("border", 0) != 0;
+
+			mVel = params.FindOneString("gridvel", mVel );
+			mVelSet = params.FindOneVector("initvel", mVelSet );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitFluidBox","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+
+			Grid<Vec3>* grvel = NULL;
+			if(mVel.length()>0) {
+				grvel = mpPlParams->getGridVec3(mVel);
+			}
+
+			goSetBoxFluid(grflags, mLowCorner, mHighCorner, mType, mBorder,
+					grvel, mVelSet);
+			return true;
+		};
+
+	protected:
+		std::string mGrid;
+		Vec3 mLowCorner, mHighCorner;
+		int mType;
+		bool mBorder;
+		std::string mVel;
+		Vec3 mVelSet;
+};
+
+//*****************************************************************************
+// creates a fluid ball with given radius at given position (both specified
+// in range [0,1])
+// optionally, also initializes velocity
+
+class goSetBallFluid : public GridOpBase { 
+	public:
+		goSetBallFluid(Grid<int> *dst, const Vec3& center, const Vec3& scale, Real radius, int type, int cyl, 
+				Grid<Vec3>* vel = NULL, Vec3 set = Vec3(0.), Grid<Real>* dist = NULL, Grid<Vec3>* norm = NULL ) :
+					GridOpBase(), mpFlagMod(dst), mpDist(dist), mpNorm(norm), mType(type), mCylinderAxis(cyl), 
+					mpVel(vel), mVelSet(set) {
+			mpFlags = NULL;
+			mScale = Vec3(1.) / scale;
+			mCenter = Vec3(
+					center.x * float(mpFlagMod->getSizeX()), 
+					center.y * float(mpFlagMod->getSizeY()), 
+					center.z * float(mpFlagMod->getSizeZ()));
+			mRadiusSqr = radius * float(mpFlagMod->getSizeX());
+			mRadiusSqr = mRadiusSqr*mRadiusSqr;
+			mILen = 1. / (Real)dst->getMaxSize();			
+			applyOperatorToGridsWithoutFlags(this, mpFlagMod);
+		};
+
+		~goSetBallFluid() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaFlagMod.gridAccInit(mpFlagMod, AM_WRITE, gaCalls); 
+			if(mpVel) gaVel.gridAccInit(mpVel, AM_WRITE, gaCalls); 
+			if(mpDist) gaDist.gridAccInit(mpDist, AM_READWRITE, gaCalls); 
+			if(mpNorm) gaNorm.gridAccInit(mpNorm, AM_READWRITE, gaCalls); 
+		};
+
+		inline void operator() (int i, int j, int k) { 
+			if (gaFlagMod.write(i,j,k) == FOBSTACLE)
+				return;
+			//Real d[3];
+			Vec3 d;
+			d[0] = mCenter.x - i;
+			d[1] = mCenter.y - j;
+#if DDF_DIMENSION==2
+			//const Real d = dx*dx + dy*dy;
+			d[2] = 0.;
+#else
+			d[2] = mCenter.z - k;
+#endif
+			d *= mScale;
+			
+			//const Real d = dx*dx + dy*dy + dz*dz;
+			if(mCylinderAxis>=0) d[mCylinderAxis] = 0.;
+			const Real dist = normNoSqrt(d);
+
+			if (dist < mRadiusSqr)
+			{
+				if(mpVel) {
+					Vec3 &v = gaVel.write(i,j,k);
+					if(gaFlagMod.write(i,j,k) == mType) {
+						//v += mVelSet;
+						//v *= 0.5; // warning, depends on init order...
+						// NT CJW test, dont overwrite!?
+					} else {
+						v = mVelSet;
+					}
+				}
+
+				// set flag
+				//gaFlagMod.write(i,j,k) = mType; 
+				if(fgIsObstacle(mType)) 
+					gaFlagMod.write(i,j,k) = mType; 
+				else
+					gaFlagMod.write(i,j,k) |= mType; 
+
+			} else if (mpDist && mpNorm) {
+				Real ds = sqrt(dist);
+				Real oldDist = gaDist(i,j,k), newDist = (ds - sqrt(mRadiusSqr)) * mILen;
+				if (oldDist==0 || newDist<oldDist) {
+					gaDist.write(i,j,k) = newDist;
+					gaNorm.write(i,j,k) = -d / ds;
+				}
+			}
+
+		};
+		void reduce(goSetBallFluid &op) { };
+
+	protected:
+		Grid<int> *mpFlagMod;
+		Grid<Real> *mpDist;
+		Grid<Vec3> *mpNorm;
+		GridAccessor<int,0> gaFlagMod;
+		GridAccessor<Real,0> gaDist;
+		GridAccessor<Vec3,0> gaNorm;
+		Vec3 mCenter;
+		Vec3 mScale;
+		Real mRadiusSqr,mILen;
+		int mType, mCylinderAxis;
+
+		// optional velocity
+		Grid<Vec3> *mpVel;
+		GridAccessor<Vec3,0> gaVel;
+		Vec3 mVelSet;
+}; // goSetBallFluid 
+
+class sinitFluidBall : public SolverPlugin {
+	public:
+		sinitFluidBall()
+			: SolverPlugin(), mGrid("flags"), 
+			mCenter(0.5,0.5,0.5), mScale(1.), mRadius(0.2), 
+			mType(FFLUID), mCylinderAxis(-1), mVel(""), mVelSet(0.)
+		{ };
+		~sinitFluidBall() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mCenter = params.FindOneVector("center", mCenter);
+			mScale = params.FindOneVector("scale", mScale);
+			mRadius = params.FindOneFloat("radius", mRadius);
+			mType = params.FindOneInt("type", mType);
+			mCylinderAxis = params.FindOneInt("cylinder-axis", mCylinderAxis);
+
+			mVel = params.FindOneString("gridvel", mVel );
+			mVelSet = params.FindOneVector("initvel", mVelSet );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitFluidBall","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+
+			Grid<Vec3>* grvel = NULL;
+			if(mVel.length()>0) {
+				grvel = mpPlParams->getGridVec3(mVel);
+			}
+
+			goSetBallFluid(grflags, mCenter, mScale, mRadius, mType, mCylinderAxis,
+					grvel, mVelSet, NULL);
+			return true;
+		};
+
+	protected:
+		std::string mGrid;
+		Vec3 mCenter, mScale;
+		Real mRadius;
+		int mType, mCylinderAxis;
+		std::string mVel;
+		Vec3 mVelSet;
+};
+
+class sinitSphere : public SolverPlugin {
+	public:
+		sinitSphere() : SolverPlugin() { };
+		~sinitSphere() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", "flags");
+			mCenter = params.FindOneVector("center", Vec3(0.5,0.5,0.5));
+			mRadius = params.FindOneFloat("radius", 0.2);
+			mType = params.FindOneInt("type", FOBSTACLE);
+			mDist = params.FindOneString("dist", "");
+			mNorm = params.FindOneString("norm", "");
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSphere","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+			Grid<Real>* dist = mDist.empty() ? NULL : mpPlParams->getGridReal(mDist);
+			Grid<Vec3>* norm = mNorm.empty() ? NULL : mpPlParams->getGridVec3(mNorm);
+
+			goSetBallFluid(grflags, mCenter, 1., mRadius, mType, -1, NULL, Vec3(0.), dist, norm);
+			return true;
+		};
+	protected:
+		std::string mGrid, mDist, mNorm;
+		Vec3 mCenter;
+		Real mRadius;
+		int mType;
+};
+
+class sinitBox : public SolverPlugin {
+	public:
+		sinitBox() : SolverPlugin() { };
+		~sinitBox() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", "flags");
+			mPos1 = params.FindOneVector("pos1", Vec3(0.));
+			mPos2 = params.FindOneVector("pos2", Vec3(0.));
+			mType = params.FindOneInt("type", FOBSTACLE);
+			mDist = params.FindOneString("dist", "");
+			mNorm = params.FindOneString("norm", "");
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		virtual bool performStep(Real dt) {
+			debMsg("sinitBox","step "<<dt);
+			Grid<int>* grflags = mpPlParams->getGridInt(mGrid);
+			Grid<Real>* dist = mDist.empty() ? NULL : mpPlParams->getGridReal(mDist);
+			Grid<Vec3>* norm = mNorm.empty() ? NULL : mpPlParams->getGridVec3(mNorm);
+
+			goSetBoxFluid(grflags, mPos1, mPos2, mType, false, NULL, Vec3(0.), dist, norm);
+			return true;
+		};
+	protected:
+		std::string mGrid, mDist, mNorm;
+		Vec3 mPos1, mPos2;
+		int mType;
+};
+
+
+//*****************************************************************************
+// initializes a Zalesak disk, incl. boundaries and rotational velocity field
+
+class sinitZalesakDisk : public SolverPlugin {
+	public:
+		sinitZalesakDisk()
+			: SolverPlugin()
+		{ };
+		~sinitZalesakDisk() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitZalesakDisk", "Creating Mr. Zalesak");
+			initZalesakDisk();
+			return true;
+		};
+
+		void initZalesakDisk()
+		{
+			FlagGrid* pFlags = mpPlParams->getGridInt("flags");
+			Grid<Vec3> *pCurrVel = mpPlParams->getGridVec3("vel-curr");
+
+			const int sx = pCurrVel->getSizeX();
+			const int sy = pCurrVel->getSizeY();
+			const int sz = pCurrVel->getSizeZ();
+			const int smax = mpPlParams->getDimMax();
+			int ks = 1;
+			int ke = sz-1;
+			if(gDim==2) {
+				ks = mpPlParams->getFluidSolver()->get2dKstart();
+				ke = mpPlParams->getFluidSolver()->get2dKend();
+			}
+
+			int minSize = std::min(sx, sy);
+			// disk center
+			Vec3 diskCenter(sx/2., sy/2. + minSize/4., sz/2.);
+			// disk radius
+			double radius = (double)( (Real)minSize * 0.15 );
+			double boxLeft = (double)(diskCenter[0]-radius/6.00);
+			double boxRight= (double)(diskCenter[0]+radius/6.00);
+			double boxTop  = (double)(diskCenter[1]-radius/0.75);
+			double boxBot  = (double)(diskCenter[1]+radius/1.50);
+
+			// center of rotation
+			Vec3 rc(sx/2, sy/2, 0);
+			// velocity scale factor, relate to gridsize
+			Real vscale = 1.0 / ( (Real)smax );
+
+			for (int k=ks; k<ke; k++) {
+				for (int j=0; j<sy; j++) {
+					for (int i=0; i<sx; i++) {
+						if(fgIsObstacle( pFlags->getGlobal(i,j,k) )) continue;
+
+						int flag = FEMPTY; 
+						Real dist = norm(Vec3(diskCenter[0]-i, diskCenter[1]-j, diskCenter[2]-k));
+						if (dist <= radius) {
+							// is within disk
+							if (j<boxBot) {
+								if ((i<boxLeft)||(i>boxRight))
+									// is outside of cutaway box
+									flag = FFLUID;
+							} else
+								flag = FFLUID;
+						}
+						pFlags->getGlobal(i,j,k) = flag;
+
+						Vec3 v;
+						v[0] = (j-rc.y)*2*M_PI*vscale;
+						v[1] = (rc.x-i)*2*M_PI*vscale;
+						v[2] = 0;
+						pCurrVel->getGlobal(i,j,k) = v;
+					}
+				}
+			}
+		}
+	protected:
+};
+
+
+//*****************************************************************************
+
+
+template<class T>
+class goSetBoundary : public GridOpBase { 
+	public:
+		goSetBoundary(Grid<int> *flags, Grid<T> *gvel, const T& vel, int sides, int border) :
+				GridOpBase(), mpVel(gvel), mVel(vel), mSides(sides), mBorder(border) {
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+
+		~goSetBoundary() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVel.gridAccInit(mpVel, AM_WRITE, gaCalls); 
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			const int border = mBorder;
+			if ( ((mSides&1) && (i<=0+border)) || 
+				  ((mSides&2) && (i>=mpVel->getSizeX()-1-border))  ||
+			     ((mSides&4) && (j<=0+border))  || 
+				  ((mSides&8) && (j>=mpVel->getSizeY()-1-border))  ||
+			    ((gDim==3) && (
+					 ((mSides&16) && (k<=0+border))  || 
+					 ((mSides&32) && (k>=mpVel->getSizeZ()-1-border)) )) 
+				 ) {
+				gaVel.write(i,j,k) = mVel;
+			}
+		};
+		void reduce(goSetBoundary &op) { };
+
+	protected:
+		Grid<T> *mpVel;
+		GridAccessor<T,0> gaVel;
+		T mVel;
+		int mSides;
+		int mBorder;
+}; // goSetBoundary 
+
+class sinitSetBoundary : public SolverPlugin {
+	public:
+		sinitSetBoundary()
+			: SolverPlugin(), mGrid("vel"), mVecVal(0.,0.,0.),mIntVal(0),mRealVal(0.), mSides(0), mBorder(1)
+		{ };
+		~sinitSetBoundary() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", mGrid );
+			mVecVal = params.FindOneVector("value", mVecVal);
+			mIntVal = params.FindOneInt("value", mIntVal);
+			mRealVal = params.FindOneFloat("value", mRealVal);
+			mBorder = params.FindOneInt("border", mBorder);
+
+			string sideStr = params.FindOneString("sides", string("xXyYzZ") );
+			if(sideStr.find("x") != string::npos) mSides |= 1;
+			if(sideStr.find("X") != string::npos) mSides |= 2;
+			if(sideStr.find("y") != string::npos) mSides |= 4;
+			if(sideStr.find("Y") != string::npos) mSides |= 8;
+			if(sideStr.find("z") != string::npos) mSides |= 16;
+			if(sideStr.find("Z") != string::npos) mSides |= 32;
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSetBoundary","step ");
+			Grid<int>* grflags = mpPlParams->getGridInt("flags");
+
+			if (mpPlParams->haveGridReal(mGrid)) {
+				Grid<Real>* grvel = mpPlParams->getGridReal(mGrid); 
+				goSetBoundary<Real>(grflags, grvel, mRealVal, mSides, mBorder);
+			} else
+			if (mpPlParams->haveGridVec3(mGrid)) {
+				Grid<Vec3>* grvel = mpPlParams->getGridVec3(mGrid); 
+				goSetBoundary<Vec3>(grflags, grvel, mVecVal, mSides, mBorder);
+			} else
+			if (mpPlParams->haveGridInt(mGrid)) {
+				Grid<int>* grvel = mpPlParams->getGridInt(mGrid); 
+				goSetBoundary<int>(grflags, grvel, mIntVal, mSides, mBorder);
+			}
+
+			return true;
+		};
+
+	protected:
+		std::string mGrid;
+		Vec3 mVecVal;
+		int  mIntVal;
+		Real mRealVal;
+		int mSides, mBorder;
+};
+
+//*****************************************************************************
+
+#define FOR_IJK_GRID_BND(grid,bnd) \
+	FOR_IJK( (grid)->getMinZLoopValue(bnd), (grid)->getMaxZLoopValue(bnd),   0+(bnd), (grid)->getSizeY()-(bnd),   0+(bnd), (grid)->getSizeX()-(bnd) ) 
+
+
+class sinitSymmetrize : public SolverPlugin {
+	public:
+		sinitSymmetrize()
+			: SolverPlugin(), mFlags("flags"), mGrid("phi-curr")
+		{ };
+		~sinitSymmetrize() { };
+		virtual bool initPlugin() { return true; };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mFlags = params.FindOneString("flags", mFlags );
+			mGrid = params.FindOneString("grid", mGrid );
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("sinitSymmetrize","setting X");
+			FlagGrid* flags = mpPlParams->getGridInt(mFlags);
+			Grid<Real>* grid = mpPlParams->getGridReal(mGrid);
+
+			const int bnd = 0;
+			const int half = ( (grid)->getSizeX()-2*(bnd) )/2 + bnd;
+			FOR_IJK( (grid)->getMinZLoopValue(bnd), (grid)->getMaxZLoopValue(bnd),   
+					0+(bnd), (grid)->getSizeY()-(bnd),   
+					0+(bnd), half ) {
+				// 0+(bnd), (grid)->getSizeX()-(bnd) ) {
+				grid->getGlobal( ( (grid)->getSizeX()-(bnd)-1 ) - i, j ,k) = 
+					grid->getGlobal( i, j ,k) ;
+			}
+
+			return true;
+		};
+
+	protected:
+		std::string mFlags;
+		std::string mGrid;
+};
+
+
+//*****************************************************************************
+
+SolverPlugin* MakeInitPlugin(std::string name) {
+
+	if(name.compare( string("set-constant") )==0) {
+		return new sinitSetConstant;
+	} else if(name.compare( string("set-conditional") )==0) {
+		return new spluginSetConditional;
+	} else if(name.compare( string("set-vec3") )==0) {
+		return new sinitSetVec3;
+	} else if(name.compare( string("set-allfluid") )==0) {
+		return new sinitSetAllfluid;
+
+	} else if (name.compare( string("set-boundary") )==0) {
+		return new sinitSetBoundary;
+	} else if (name.compare( string("symmetrize") )==0) {
+		return new sinitSymmetrize;
+
+	} else if(name.compare( string("turn-fluid-into-obstacles") )==0) {
+		return new sinitTurnFluid2Obs;
+	} else if (name.compare( string("init-load") )==0) {
+		return new sinitLoad;
+	} else if (name.compare( string("init-datavector") )==0) {
+		return new sinitLoadData;
+	} else if (name.compare( string("init-ramp") )==0) {
+		return new sinitRamp;
+	} else if (name.compare( string("init-levelset") )==0) {
+		return new sinitLevelSet;
+	} else if (name.compare( string("init-box-domain") )==0) {
+		return new sinitBoxDomain;
+	} else if (name.compare( string("init-fluid-box") )==0) {
+		return new sinitFluidBox;
+	} else if (name.compare( string("init-fluid-ball") )==0) {
+		return new sinitFluidBall;
+	} else if (name.compare( string("init-sphere") )==0) {
+		return new sinitSphere;
+	} else if (name.compare( string("init-box") )==0) {
+		return new sinitBox;
+	} else if (name.compare( string("init-zalesak-disk") )==0) {
+		return new sinitZalesakDisk;
+	} else if(name.compare( string("copy-box") )==0) {
+		return new spluginCopyBox;
+	} else if (name.compare( string("init-debug-iso") )==0) {
+		return new sinitDebugIso;
+	} 
+	return NULL;
+}
+
+}; // DDF
+

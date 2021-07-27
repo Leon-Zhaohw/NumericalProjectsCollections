@@ -1,0 +1,83 @@
+ObjectBegin "Cube"
+  Material "matte" "color Kd" [.8 .8 .8 ]
+ Shape "trianglemesh" "integer indices"
+ [ 0 1 2  2 0 3 
+   0 4 1  5 4 1
+   2 1 5  2 5 6 
+   3 0 4  3 4 7 
+   3 6 2  3 6 7 
+   4 6 5  4 6 7]
+    "point P" [-1 -1 -1   1 -1 -1   1 -1 1   -1 -1 1  -1  1 -1   1  1 -1   1  1 1   -1  1 1 ]
+ObjectEnd
+
+ObjectBegin "flume"
+  Material "matte" "color Kd" [.4 .4 .4 ]
+ Shape "trianglemesh" "integer indices"
+ [ 0 1 2  2 0 3 
+   0 4 1  5 4 1
+   2 1 5  2 5 6 
+   3 0 4  3 4 7 
+   3 6 2  3 6 7 
+   4 6 5  4 6 7]
+    "point P" [-1 -1 -1   1 -1 -1   1 -1 1   -1 -1 1  -1  1 -1   1  1 -1   1  1 1   -1  1 1 ]
+ObjectEnd
+
+
+AttributeBegin
+ Translate 1.05 -0.20  0
+ Scale     0.6  0.40  2.00
+ ObjectInstance "Cube"
+ Identity
+ Translate -1.05 -0.20  0
+ Scale      0.60  0.40  2.00
+ 
+ ObjectInstance "Cube"
+ #back begin
+ Identity
+ Translate  0.40 -0.20  -0.96
+ Scale      0.12  0.40  0.50
+ ObjectInstance "Cube"
+ Identity
+ Translate  -0.30 -0.20  -0.96
+ Scale       0.20  0.40  0.50
+ ObjectInstance "Cube"
+ Identity
+ Translate   0.00 -0.20  -1.36
+ Scale       0.50  0.40  0.50
+ ObjectInstance "Cube"
+
+ Identity
+ Translate  0.04 -0.38 -0.96
+ Scale      0.30  0.40  0.50
+ ObjectInstance "Cube"
+ #back end
+
+ Identity
+ Translate -0.00 -0.20  0.96
+ Scale      0.50  0.40  0.50
+ ObjectInstance "Cube"
+
+ #bottom
+ Identity
+ Translate  0.00 -0.98  0.00
+ Scale      0.50  0.50  0.50
+ ObjectInstance "Cube"
+AttributeEnd
+
+AttributeBegin
+ Translate  0.10  0.28 -0.63
+ Scale      0.21  0.03  0.20
+ Material "matte" "color Kd" [.5 .5 .5 ]
+ ObjectInstance "flume"
+ Identity
+ Translate  0.28  -0.15 -0.63
+ Scale      0.03  0.40  0.20
+ Material "matte" "color Kd" [.5 .5 .5 ]
+ ObjectInstance "flume"
+ Identity
+ Translate -0.08  -0.15 -0.63
+ Scale      0.03  0.40  0.20
+ Material "matte" "color Kd" [.5 .5 .5 ]
+ ObjectInstance "flume"
+ Identity
+AttributeEnd

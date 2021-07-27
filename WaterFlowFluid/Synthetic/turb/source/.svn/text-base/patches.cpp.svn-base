@@ -1,0 +1,144 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * Patchmanager implementation
+ *
+ *****************************************************************************/
+
+
+#include "patches.h"
+namespace DDF { 
+
+static void removeVecEntry(std::vector<Patch*> &vec, Patch *p);
+
+PatchManager* PatchManager::getSingleton() {
+	if (!gpPatchManager) {
+		gpPatchManager = new PatchManager();
+	}
+	return gpPatchManager;
+};
+
+// debug output for patch memory management
+#define PM_DEBUGCOND false
+
+// note - elemsize is in bytes here!
+Patch* PatchManager::getPatchMem(int gridid, int elemsize, int boundary, nVec3i off, int threadid) {
+	const size_t linesize = (gPatchSize+2*boundary);
+	size_t tsize = elemsize*CUBEFUNC(linesize);
+	Patch *ret =NULL;
+
+	//test...
+#pragma omp critical (PM_GET_PATCHMEM)
+	{
+
+	// is one unused?
+	if (PM_DEBUGCOND) debMsg("PatchManager::getPatchMem","Requested "<<threadid<<","<<elemsize<<","<<boundary <<" --- ");
+	for(size_t i=0; i<mFreed.size(); i++) {
+		Patch* oldp = mFreed[i];
+		if (PM_DEBUGCOND) debMsg("PatchManager::getPatchMem","Free patch i="<<i<<" "<<oldp->mThreadId<<","<<oldp->mElemSize<<","<<oldp->mBoundary);
+		if ( (1) &&
+				(!ret) && 
+				(oldp->mThreadId==threadid) &&
+				(oldp->mElemSize==elemsize) &&
+				(oldp->mBoundary==boundary) 
+			) {
+			oldp->mParentId = gridid;
+			removeVecEntry(mFreed, oldp);
+			mPmPatches.push_back(oldp);
+			
+			ret =oldp;
+			i=mFreed.size(); 
+		}
+	}
+
+	if (!ret) {
+		void* pdat = malloc(tsize);
+		mBytesAlloced += tsize;
+		int pid = gPatchIdCounter++;
+		Patch *patch = new Patch(pdat, elemsize, boundary, off, pid, gridid, threadid); // newPatch
+
+		// int debug mode, reset memory to "invalid" values
+		if (DDF_DEBUG==1) {
+			Real *memp = (Real*)pdat;
+			int ftsize = tsize/sizeof(Real);
+			for(int i=0; i<ftsize; i++) { memp[i] = -1e10; }
+		}
+		
+		patch->setAllocBytes(tsize);
+		mAllocated.push_back(patch);
+		mPmPatches.push_back(patch);
+
+		if (PM_DEBUGCOND) debMsg("PatchManager::getPatchMem","Alloc pm patch at "<<off<<", size="<<tsize<<", elemsize="<<elemsize<<" id"<<patch->mPatchId<<", thread:"<<threadid ); // GRIDMEMDEB
+		//if (gStepCounter>5) { errFatal("mem","err!!", SIMWORLD_GRIDERROR); } // DEBUG
+		ret = mPmPatches[ mPmPatches.size()-1 ];
+	}
+
+	} // critical
+	return ret;
+};
+
+void PatchManager::releasePatchMem(Patch* freep) {
+	if (!freep) return;
+
+	// TODO check  reset nb pointers of patch?
+	//if (PM_FREERIGHTAWAY) { mBytesAlloced -= freep->mAllocBytes; free(freep->mpData); delete freep;  }
+#pragma omp critical (PM_GET_PATCHMEM)
+	{
+		mFreed.push_back(freep);
+		removeVecEntry(mPmPatches, freep);
+
+		if (PM_DEBUGCOND) {
+			debMsg("PatchManager::releasePatchMem","Free'd patch "<<freep->mThreadId<<","<<freep->mElemSize<<","<<freep->mBoundary);
+			for(size_t i=0; i<mFreed.size(); i++) {
+				Patch* oldp = mFreed[i];
+				debMsg("PatchManager:releasePatchMem","Free patch i="<<i<<" "<<oldp->mThreadId<<","<<oldp->mElemSize<<","<<oldp->mBoundary);
+			} 
+		} // DEBUG */
+	}
+};
+
+// free memory
+void PatchManager::cleanup() {
+#pragma omp critical (PM_GET_PATCHMEM)
+	{
+	// free left patches
+	for(size_t i=0; i<mPmPatches.size(); i++) {
+		// check if already freed?
+		free(mPmPatches[i]->mpData);
+		delete mPmPatches[i];
+	}
+
+	mPmPatches.clear();
+	mAllocated.clear();
+	mFreed.clear();
+	}
+};
+
+std::string PatchManager::getInfoString() {
+	std::ostringstream out;
+	out << "Bytes:"<<mBytesAlloced<<", Patches:"<<mPmPatches.size()<<", Alloced:"<<mAllocated.size()<<", Freed:"<<mFreed.size() ;
+	return out.str();
+}
+
+// helper
+static void removeVecEntry(std::vector<Patch*> &vec, Patch *p) {
+	for (int i=vec.size()-1; i>=0; i--) {
+		if (vec[i]==p) {
+			if (vec.size()>1) {
+				vec[i] = vec[ vec.size()-1 ];
+			}
+			vec.pop_back();
+			return;
+		}
+	} // vec
+
+	if (PM_DEBUGCOND) debMsg("PatchManager::removeVecEntry","Concering patch "<<p->toString());
+	//if (gUsePatches) 
+		debMsg("removeVecEntry","Vector not in!?");
+		errFatal("removeVecEntry","Vector not in!?", SIMWORLD_GRIDERROR);
+}
+
+} // DDF
+

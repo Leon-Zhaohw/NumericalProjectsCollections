@@ -1,0 +1,3 @@
+mkdir meshes
+mkdir logs
+./teraBunny ./data/bunny_500.cfg | tee ./logs/bunny_500.log

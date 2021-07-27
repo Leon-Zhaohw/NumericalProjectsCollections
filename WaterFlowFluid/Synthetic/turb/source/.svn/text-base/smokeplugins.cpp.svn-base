@@ -1,0 +1,1055 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * Smoke helper plugins
+ *
+ *****************************************************************************/
+
+// lsdebug
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+#include "imageio.h"
+
+#include "waveletnoise.h"
+using WAVELETNOISE::WaveletNoiseField;
+
+
+namespace DDF { 
+
+
+//*****************************************************************************
+// helper plugin
+// init densities for rising smoke test case
+
+class fsInitDensityTestcase : public GridOpBase { // Flagbord<1> {
+	public:
+		fsInitDensityTestcase(FlagGrid *flags, Grid<Real> *dst, nVec3i s, nVec3i e, int cutoff,
+				bool invert) : 
+				GridOpBase(), 
+				mpDst(dst), mBbS(s), mBbE(e), mYCutoff(cutoff), 
+				mInvertGrad(invert) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsInitDensityTestcase() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			// safety - always write
+			Real& v = gaDst.write(i,j,k);
+			nVec3i p = nVec3i(i,j,k);
+
+			// check in bb 
+			if(p[0]>=mBbS[0] && p[1]>=mBbS[1] && p[2]>=mBbS[2] &&
+			   p[0]<=mBbE[0] && p[1]<=mBbE[1] && p[2]<=mBbE[2]) {
+
+				if(!mInvertGrad) {
+					v = 0.1 + 
+						(p[0]-mBbS[0])/(Real)(mBbE[0]-mBbS[0])*1.0; // gradient along x
+				} else {
+					// invert in intervals...
+					v = 0.1 +  (1. - ((p[0]-mBbS[0])/(Real)(mBbE[0]-mBbS[0])*1.0)); 
+				}
+				v = 1.;
+			}
+
+			if(p[1] > mYCutoff) {
+				v = 0.;
+			}
+		};
+		void reduce(fsInitDensityTestcase &op) { };
+
+	protected:
+		Grid<Real> *mpDst;
+		GridAccessor<Real,0> gaDst;
+		// bounding box start,end
+		nVec3i mBbS, mBbE;
+		// remove top densities?
+		int mYCutoff;
+		// invert gradient to init?
+		bool mInvertGrad;
+}; // fsInitDensityTestcase */
+
+
+class spluginInitDensityTestcase : public SolverPlugin {
+	public:
+		spluginInitDensityTestcase() : SolverPlugin(),
+   				mDensName("-unnamed-"), 
+					mBbS(-1.), mBbE(-1.), mYCutoff(-1) {
+			debMsg("spluginInitDensityTestcase","cons");
+		};
+		~spluginInitDensityTestcase() {
+			debMsg("spluginInitDensityTestcase","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginInitDensityTestcase","parse");
+			mDensName = params.FindOneString("density", mDensName );
+			mBbS = params.FindOneVector("bb-start", mBbS );
+			mBbE = params.FindOneVector("bb-end", mBbE );
+			mYCutoff = params.FindOneInt("ycutoff", mYCutoff );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginInitDensityTestcase","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginInitDensityTestcase"," dt="<<dt<<" dest:"<<mDensName );
+			Grid<Real>* dens = mpPlParams->getGridReal(mDensName);
+
+			// convert from 0-1 to 0..gridsize
+			const nVec3i n = mpPlParams->getGridSize();
+			nVec3i bbs = nVec3i( (int)(n[0]*mBbS[0]), (int)(n[1]*mBbS[1]), (int)(n[2]*mBbS[2]) );
+			nVec3i bbe = nVec3i( (int)(n[0]*mBbE[0]), (int)(n[1]*mBbE[1]), (int)(n[2]*mBbE[2]) );
+			int cutoff = n[1]-mYCutoff;
+
+			if(gDim==2) {
+				bbs[2] = gPatchSize/2;
+				bbe[2] = gPatchSize/2+1;
+			}
+
+			bool invert = false;
+			if( (int)(mpPlParams->getSimTime()) % 2 ) invert = true;
+			//if(invert) printf("\n\nTTTTTTTT %d, %f, %d\n\n", (int)mpPlParams->getSimTime(), mpPlParams->getSimTime(), invert);
+
+			fsInitDensityTestcase(mpPlParams->getFluidSolver()->getGridFlags(), dens, bbs, bbe, cutoff, invert);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mDensName;
+		Vec3 mBbS, mBbE;
+		int mYCutoff;
+};
+
+/*
+class spluginInitDensityTestcase : public SolverPlugin {
+	public:
+		spluginInitDensityTestcase() : SolverPlugin(),
+   				mDensName("-unnamed-"), 
+					mBbS(-1.), mBbE(-1.), mYCutoff(-1) {
+			debMsg("spluginInitDensityTestcase","cons");
+		};
+		~spluginInitDensityTestcase() {
+			debMsg("spluginInitDensityTestcase","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginInitDensityTestcase","parse");
+			mDensName = params.FindOneString("density", mDensName );
+			mVecGrid = params.FindOneString("vec-grid", mDensName );
+			mBbS = params.FindOneVector("bb-start", mBbS );
+			mBbE = params.FindOneVector("bb-end", mBbE );
+			mYCutoff = params.FindOneInt("ycutoff", mYCutoff );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginInitDensityTestcase","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginInitDensityTestcase"," dt="<<dt<<" dest:"<<mDensName );
+
+			Grid<Real>* dens = NULL;
+			if(mpPlParams->haveGridReal(mDensName))    dens    = mpPlParams->getGridReal(mDensName);
+			Grid<Vec3>* srcVecGrid = NULL;
+			if(mpPlParams->haveGridVec3(mVecGrid)) srcVecGrid = mpPlParams->getGridVec3(mVecGrid);
+
+			GridBase* baseGrid = NULL;
+			if(dens) {
+				if(srcVecGrid) {
+					debMsg("spluginDumpImage","Warning - not using scalar grid, only vec one!!!!!!!!!!!!!!!!!!!!!!");
+				}
+				baseGrid = dens;
+			} else if(srcVecGrid) {
+				baseGrid = srcVecGrid;
+			} else {
+				errFatal("spluginDumpImage","Provide either 'gridname'='"<<mGrid<<"', or 'vecgridname'='"<<mVecGrid<<"' ",SIMWORLD_PLUGINERROR);
+			}
+
+			// convert from 0-1 to 0..gridsize
+			const nVec3i n = mpPlParams->getGridSize();
+			nVec3i bbs = nVec3i( (int)(n[0]*mBbS[0]), (int)(n[1]*mBbS[1]), (int)(n[2]*mBbS[2]) );
+			nVec3i bbe = nVec3i( (int)(n[0]*mBbE[0]), (int)(n[1]*mBbE[1]), (int)(n[2]*mBbE[2]) );
+			int cutoff = n[1]-mYCutoff;
+
+			if(gDim==2) {
+				bbs[2] = gPatchSize/2;
+				bbe[2] = gPatchSize/2+1;
+			}
+
+			bool invert = false;
+			if( (int)(mpPlParams->getSimTime()) % 2 ) invert = true;
+
+			if(dens)       fsInitDensityTestcase(mpPlParams->getFluidSolver()->getGridFlags(), dens, bbs, bbe, cutoff, invert);
+			if(srcVecGrid) fsAddVecTestcase(     mpPlParams->getFluidSolver()->getGridFlags(), srcVecGrid, bbs, bbe, cutoff, invert);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mDensName, mVecGrid;
+		Vec3 mBbS, mBbE;
+		int mYCutoff;
+};
+*/
+
+
+//*****************************************************************************
+// helper plugin
+
+// optionally, write out inflow values for file export
+class fsInitDensityInflow : public GridOpBase {
+	public:
+		fsInitDensityInflow(FlagGrid *flags, Grid<Real> *dst , Grid<Real> *writeGrid, Real target, int flag,
+			WaveletNoiseField* noise = NULL) :
+				GridOpBase(), mpDst(dst), mpWriteGrid(writeGrid),
+  				mTargetValue(target), mFlag(flag), mpNoise(noise) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsInitDensityInflow() { }; 
+		void resetVariables() { };
+		void reduce(fsInitDensityInflow &op) { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			if(mpWriteGrid) gaWriteGrid.gridAccInit(mpWriteGrid, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			if(mpWriteGrid) gaWriteGrid.write(i,j,k) = 0.;
+
+			// safety - always write
+			if( (getFlagAcc()(i,j,k) & mFlag) == 0) return;
+			Real& v = gaDst.write(i,j,k);
+
+			if(!mpNoise) {
+				// constant
+				if(v<mTargetValue) v = mTargetValue;
+			} else {
+				const Real targ = mpNoise->evaluate( Vec3(i, j, k) ) * mTargetValue;
+				if(v<targ) v = targ;
+			}
+
+			//debMsg("at"," "<<PRINT_IJK<<" flag ="<< getFlagAcc()(i,j,k)<<" smoke "<< gaDst.write(i,j,k));
+			if(mpWriteGrid) gaWriteGrid.write(i,j,k) = v;
+		};
+
+	protected:
+		Grid<Real> *mpDst, *mpWriteGrid;
+		GridAccessor<Real,0> gaDst;
+		GridAccessor<Real,0> gaWriteGrid;
+		Real mTargetValue;
+		int mFlag;
+		// optional noise eval
+		WaveletNoiseField* mpNoise;
+}; // fsInitDensityInflow */
+
+// correct level set values instead of adding densities
+// for free surface inflow
+class fsInitPhiInflow : public GridOpBase {
+	public:
+		fsInitPhiInflow(FlagGrid *flags, Grid<Real> *dst , Grid<Real> *writeGrid, Real target, int flag,
+			WaveletNoiseField* noise = NULL) :
+				GridOpBase(), mpDst(dst), mpWriteGrid(writeGrid),
+  				mTargetValue(target), mFlag(flag), mpNoise(noise) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsInitPhiInflow() { }; 
+		void resetVariables() { };
+		void reduce(fsInitPhiInflow &op) { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			if(mpWriteGrid) gaWriteGrid.gridAccInit(mpWriteGrid, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			if(mpWriteGrid) gaWriteGrid.write(i,j,k) = 0.;
+
+
+			// special handling of outflow, remove any inside LS values
+			if(fgIsOutflow(getFlagAcc()(i,j,k)) ) {
+				gaDst.write(i,j,k) = 0.1;
+				return;
+			}
+
+			if( (getFlagAcc()(i,j,k) & mFlag) == 0) return;
+			Real& v = gaDst.write(i,j,k);
+
+			if(!mpNoise) { 
+				// if v > target -> v=target...
+				if(v>mTargetValue) v = mTargetValue;
+			} else {
+				const Real targ = mpNoise->evaluate( Vec3(i, j, k) ); // * mTargetValue;
+				// only handle regions with noise>0.5
+				if( targ > 0.5) {
+					if(v>mTargetValue) {
+						v = mTargetValue;
+						//debMsg("phi"," "<<PRINT_IJK);
+					}
+				}
+				//if(v<targ) v = targ;
+			}
+
+			//debMsg("at"," "<<PRINT_IJK<<" flag ="<< getFlagAcc()(i,j,k)<<" smoke "<< gaDst.write(i,j,k));
+			if(mpWriteGrid) gaWriteGrid.write(i,j,k) = v;
+		};
+
+	protected:
+		Grid<Real> *mpDst, *mpWriteGrid;
+		GridAccessor<Real,0> gaDst;
+		GridAccessor<Real,0> gaWriteGrid;
+		Real mTargetValue;
+		int mFlag;
+		// optional noise eval
+		WaveletNoiseField* mpNoise;
+}; // fsInitPhiInflow */
+
+class fsInflowVecApply : public GridOpBase {
+	public:
+		fsInflowVecApply(FlagGrid *flags, Grid<Vec3> *dst , Vec3 target, 
+			WaveletNoiseField* noise = NULL, bool set=false, Real noiseThresh=0.) :
+				GridOpBase(), mpDst(dst), 
+  				mTargetValue(target), mpNoise(noise), mSet(set), mNoiseThreshold(noiseThresh) { 
+			debMsg("fsInflowVecApply","noise thresh "<<mNoiseThreshold);
+			if(mNoiseThreshold>=0. && !mpNoise) {
+				errFatal("fsInflowVecApply","Noise treshhold needs noise field!",SIMWORLD_PLUGINERROR);
+			}
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsInflowVecApply() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			if(! fgIsInflow(getFlagAcc()(i,j,k)) ) return;
+			Vec3& v = gaDst.write(i,j,k);
+
+			if(!mpNoise) {
+				// constant
+				if(!mSet) v += mTargetValue;
+				else v = mTargetValue;
+			} else if(mNoiseThreshold<=0.) {
+				// use noise...
+
+				if(!mSet) { 
+					// add 
+					v[0] += mpNoise->evaluate( Vec3(i, j, k) ) * mTargetValue[0];
+					v[1] += mpNoise->evaluate( Vec3(i+100., j, k) ) * mTargetValue[0];
+					v[2] += mpNoise->evaluate( Vec3(i, j+200., k) ) * mTargetValue[0]; 
+				} else { 
+					// overwrite old
+					v[0] = mpNoise->evaluate( Vec3(i, j, k) ) * mTargetValue[0];
+					v[1] = mpNoise->evaluate( Vec3(i+100., j, k) ) * mTargetValue[0];
+					v[2] = mpNoise->evaluate( Vec3(i, j+200., k) ) * mTargetValue[0]; 
+				}
+			} else {
+				// use noise threshold...
+
+				if(!mSet) { 
+					// add 
+					errFatal("fsInflowVecApply","Noise treshhold only works with set=1",SIMWORLD_PLUGINERROR);
+				} else { 
+					// overwrite old
+					if( mpNoise->evaluate( Vec3(i, j, k) ) > mNoiseThreshold ) {
+						v = mTargetValue;
+						//debMsg("vec"," "<<PRINT_IJK);
+					}
+				}
+			}
+		};
+		void reduce(fsInflowVecApply &op) { };
+
+	protected:
+		Grid<Vec3> *mpDst;
+		GridAccessor<Vec3,0> gaDst;
+		Vec3 mTargetValue;
+		WaveletNoiseField* mpNoise;
+		bool mSet;
+		// dont set noise values, but set constant value if noise is smaller than threshold
+		Real mNoiseThreshold;
+}; // fsInflowVecApply */
+
+class spluginInitDensityInflow : public SolverPlugin {
+	public:
+		spluginInitDensityInflow() : SolverPlugin(),
+   			mDensName("-unnamed-"),  mWriteName(""),
+				mNoiseName(""),
+				mAnimOutCounter(0), mTargetValue(1.), mTargetVec(0.), mSet(false),
+  				mDoLevelset(0), mNoiseThresh(0.)	{
+			debMsg("spluginInitDensityInflow","cons");
+		};
+		~spluginInitDensityInflow() {
+			debMsg("spluginInitDensityInflow","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginInitDensityInflow","parse");
+			mDensName = params.FindOneString("density", mDensName );
+			mFlag = params.FindOneInt("flag", FINFLOW);
+			mVecName = params.FindOneString("vecgridname", mVecName );
+			mWriteName = params.FindOneString("write-grid", mWriteName );
+			mTargetValue = params.FindOneFloat("target-value", mTargetValue );
+
+			mSet = 0 < params.FindOneInt("set", mSet );
+			mDoLevelset = params.FindOneInt("do-levelset", mDoLevelset );
+
+			// preinit vec in case only real value is given
+			mTargetVec = Vec3(mTargetValue);
+			mTargetVec = params.FindOneVector("target-vec", mTargetVec );
+
+			mNoiseName = params.FindOneString("noise", mNoiseName );
+			mNoiseThresh = params.FindOneFloat("noise-threshold", mNoiseThresh );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginInitDensityInflow","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginInitDensityInflow"," dt="<<dt<<" dest:"<<mDensName<<"/"<<mVecName );
+			//Grid<Real>* dens = mpPlParams->getGridReal(mDensName);
+			Grid<Real>* writeGrid = NULL;
+	   	if(mWriteName.length()>0) {
+				writeGrid = mpPlParams->getGridReal(mWriteName);
+			}
+
+			WaveletNoiseField* noise = NULL;
+			if(mNoiseName.length()>0) 
+				noise = mpPlParams->getNoiseField(mNoiseName);
+
+			Grid<Real>* dens = NULL;
+			if(mpPlParams->haveGridReal(mDensName))    dens    = mpPlParams->getGridReal(mDensName);
+			Grid<Vec3>* srcVecGrid = NULL;
+			if(mpPlParams->haveGridVec3(mVecName)) srcVecGrid = mpPlParams->getGridVec3(mVecName);
+
+			GridBase* baseGrid = NULL;
+			if(dens) {
+				baseGrid = dens;
+			} else if(srcVecGrid) {
+				baseGrid = srcVecGrid;
+			} else {
+				errFatal("spluginInitDensityInflow","Provide either 'density'='"<<mDensName<<"', or 'vecgridname'='"<<mVecName<<"' ",SIMWORLD_PLUGINERROR);
+			}
+
+			if(dens) {
+				if(mDoLevelset) {
+					fsInitPhiInflow(mpPlParams->getFluidSolver()->getGridFlags(), dens, 
+							writeGrid, mTargetValue, mFlag,noise);
+				} else {
+					// normal density add
+					fsInitDensityInflow(mpPlParams->getFluidSolver()->getGridFlags(), dens, 
+							writeGrid, mTargetValue, mFlag,noise);
+				}
+
+				/* writing out grids should now be done with the "dump-grip-scalar" plugin */
+			} 
+			if(srcVecGrid) {
+				// sanity checks
+				if(dens) {
+					errFatal("spluginInitDensityInflow","Error, can't do real-grid and vec-grid handling at same time!", SIMWORLD_PLUGINERROR);
+				}
+				if(mDoLevelset) {
+					errFatal("spluginInitDensityInflow","Error, can't do level set handling with vec grid!", SIMWORLD_PLUGINERROR);
+				}
+
+				// apply...
+				fsInflowVecApply(mpPlParams->getFluidSolver()->getGridFlags(), srcVecGrid, 
+						mTargetVec, noise, mSet, mNoiseThresh);
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mDensName, mWriteName, mVecName;
+		std::string mNoiseName;
+		int mAnimOutCounter, mFlag;
+		Real mTargetValue;
+		Vec3 mTargetVec;
+		bool mSet;
+		int mDoLevelset;
+		Real mNoiseThresh;
+};
+
+
+//*****************************************************************************
+// vorticity confinement
+
+class fsComputeVorticity : public GridOpBaseFlagbord<1> {
+	public:
+		fsComputeVorticity(FlagGrid *flags, Grid<Vec3> *vel, 
+				Grid<Vec3> *dirVort, Grid<Real> *temp, Real dx) : 
+				GridOpBaseFlagbord<1>(), mpVel(vel), mpDirVort(dirVort), mpTemp(temp) { 
+			mDx = dx;
+			mDxInv = 1. / dx;
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsComputeVorticity() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVel.gridAccInit(mpVel, AM_READ, gaCalls); 
+			gaDirVort.gridAccInit(mpDirVort, AM_WRITE, gaCalls); 
+			gaTemp.gridAccInit(mpTemp, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			int flag = getFlagAcc()(i,j,k);
+			if(fgIsObstacle(flag)) {
+				gaTemp.write(i,j,k) = 0.;
+				gaDirVort.write(i,j,k) = Vec3(0.);
+				return;
+			}
+
+			// safety - always write
+			//if(gaVel(i,j,k)<=0.) return;
+			// TODO? add flag checks?  
+			//gaTemp.write(i,j,k) += mStrength * gaVel(i,j,k);
+
+			Vec3 vCurr = gaVel(i,j,k);
+			Vec3 vRight = vCurr;
+			Vec3 vUp = vCurr;
+			Vec3 vBack = vCurr;
+			if(!fgIsObstacle( getFlagAcc()(i+1,j,k)) ) vRight = gaVel(i+1,j,k);
+			if(!fgIsObstacle( getFlagAcc()(i,j+1,k)) ) vUp = gaVel(i,j+1,k);
+			if(!fgIsObstacle( getFlagAcc()(i,j,k+1)) ) vBack = gaVel(i,j,k+1);
+
+			//Vec3 vLeft = vCurr;
+			//Vec3 vDown = vCurr;
+			//Vec3 vFront = vCurr;
+			//if(!fgIsObstacle( getFlagAcc()(i-1,j,k)) ) vLeft  = gaVel(i-1,j,k);
+			//if(!fgIsObstacle( getFlagAcc()(i,j-1,k)) ) vDown  = gaVel(i,j-1,k);
+			//if(!fgIsObstacle( getFlagAcc()(i,j,k-1)) ) vFront = gaVel(i,j,k-1);
+			
+#			if DDF_DIMENSION==3
+			const Real xvort = 
+				(vUp[2] - vCurr[2])*mDxInv +
+				(vBack[1] - vCurr[1])*mDxInv;
+			const Real yvort = 
+				(vBack[0] - vCurr[0])*mDxInv +
+				(vRight[2] - vCurr[2])*mDxInv;
+			const Real zvort = 
+				(vRight[1] - vCurr[1])*mDxInv +
+				(vUp[0] - vCurr[0])*mDxInv; 
+#			else
+			const Real xvort = 0.;
+			const Real yvort = 0.;
+#			define VELX(x,y) (!fgIsObstacle( getFlagAcc()(x,y,k)) ? gaVel(x,y,k)[0] : vCurr[0])
+#			define VELY(x,y) (!fgIsObstacle( getFlagAcc()(x,y,k)) ? gaVel(x,y,k)[1] : vCurr[1])
+			const Real zvort = 
+				( 0.5*(VELY(i+1,j)+VELY(i+1,j+1)) - 
+				  0.5*(VELY(i-1,j)+VELY(i-1,j+1)) ) * 0.5*mDxInv -
+
+				( 0.5*(VELX(i,j+1)+VELX(i+1,j+1)) - 
+				  0.5*(VELX(i,j-1)+VELX(i+1,j-1)) ) * 0.5*mDxInv ;
+#			endif
+			// */
+
+			gaDirVort.write(i,j,k) = Vec3(xvort, yvort, zvort);
+			gaTemp.write(i,j,k) = xvort*xvort + yvort*yvort + zvort*zvort;
+		};
+		void reduce(fsComputeVorticity &op) { };
+
+	protected:
+		Grid<Vec3> *mpVel;
+		Grid<Vec3> *mpDirVort;
+		Grid<Real> *mpTemp;
+		GridAccessor<Vec3,1> gaVel;
+		GridAccessor<Vec3,0> gaDirVort;
+		GridAccessor<Real,0> gaTemp;
+		Real mStrength;
+		Real mDx, mDxInv;
+}; // fsComputeVorticity */
+
+class fsAddVorticityConfinement : public GridOpBaseFlagbord<1> {
+	public:
+		fsAddVorticityConfinement(FlagGrid *flags, Grid<Vec3> *vel, 
+				Grid<Vec3> *dirVort, Grid<Real> *temp, Real str, Real dx) : 
+				GridOpBaseFlagbord<1>(), mpVel(vel), mpDirVort(dirVort), mpTemp(temp) 
+		{ 
+			mDx = dx;
+			mDxInv = 1. / dx;
+			mStrength = str;
+			//mStrength = str * mDxInv;
+			mpFlags = flags;
+
+			if(gDim==3) {
+				debMsg("fsAddVorticityConfinement","WARNING - 3D not yet implemented...");
+			}
+
+			applyOperatorToGrids(this);
+		};
+		~fsAddVorticityConfinement() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVortAbs.gridAccInit(mpTemp, AM_READ, gaCalls); 
+			gaDirVort.gridAccInit(mpDirVort, AM_READ, gaCalls); 
+			gaVel.gridAccInit(mpVel, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			int flag = getFlagAcc()(i,j,k);
+			if(fgIsObstacle(flag)) {
+				return; 
+			}
+
+			// dont compute near obstacles/domain sides
+			if( (fgIsObstacle(getFlagAcc()(i-1,j,k))) ||
+				 (fgIsObstacle(getFlagAcc()(i+1,j,k))) ||
+				 (fgIsObstacle(getFlagAcc()(i,j-1,k))) ||
+				 (fgIsObstacle(getFlagAcc()(i,j+1,k)))
+			  ) {
+				return; 
+			}
+			const int BORD=3;
+			if(i<BORD || j<BORD || i>mpFlags->getSizeX()-1-BORD || j>mpFlags->getSizeY()-1-BORD) {
+				return; 
+			}
+			if(gDim==3 && (k<BORD || k>mpFlags->getSizeZ()-1-BORD)) {
+				return; 
+			}
+
+			// important - centered differences (+1 vs 0) don't work here
+			/*
+			Vec3 vort(
+					(gaVortAbs(i+1,j,k)-gaVortAbs(i-1,j,k))*mDx,
+					(gaVortAbs(i,j+1,k)-gaVortAbs(i,j-1,k))*mDx,
+#					if DDF_DIMENSION==3
+					(gaVortAbs(i,j,k+1)-gaVortAbs(i,j,k-1))*mDx 
+#					else
+					0.
+#					endif
+					);
+			Real mag = norm(vort);
+
+			if(mag>0.) {
+				// normalize
+				const Real imag = 1./mag;
+				vort *= imag;
+
+				Vec3 dirVort = gaDirVort(i,j,k);
+				gaVel.write(i,j,k)[0] += (vort[1]*dirVort[2] - vort[2]*dirVort[1]) *mDx * mStrength;
+				gaVel.write(i,j,k)[1] += (vort[0]*dirVort[2] - vort[2]*dirVort[0]) *mDx * mStrength;
+				if(gDim==3) {
+				  gaVel.write(i,j,k)[2] += (vort[0]*dirVort[1] - vort[1]*dirVort[0]) *mDx * mStrength;
+				} // 3D
+			}
+			// */
+
+			if(gDim==2) {
+				if(1) {
+					Vec3 vort(
+							(gaVortAbs(i,j,k)-gaVortAbs(i-1,j,k)) / mDx,
+							( (gaVortAbs(i+0, j+1,k)+ gaVortAbs(i-1, j+1,k))*0.5 - 
+							  (gaVortAbs(i+0, j-1,k)+ gaVortAbs(i-1, j-1,k))*0.5 ) /( 2.*mDx)
+							, 0.);
+					Real mag = norm(vort);
+
+					if(mag>0.) {
+						// normalize
+						const Real imag = 1./mag;
+						vort *= imag;
+
+						// average to face
+						Vec3 dirVort = ( gaDirVort(i,j,k) + gaDirVort(i-1,j,k) ) * 0.5;
+						gaVel.write(i,j,k)[0] += (vort[1]*dirVort[2])  * mStrength;
+					}
+				} // X
+				if(1) {
+					Vec3 vort(
+							( (gaVortAbs(i+1, j+0 ,k)+ gaVortAbs(i+1, j-1 ,k))*0.5 - 
+							  (gaVortAbs(i-1, j+0 ,k)+ gaVortAbs(i-1, j-1 ,k))*0.5 ) / (2.*mDx),
+							(gaVortAbs(i,j,k)-gaVortAbs(i,j-1,k)) / mDx
+							, 0.);
+					Real mag = norm(vort);
+
+					if(mag>0.) {
+						const Real imag = 1./mag;
+						vort *= imag;
+
+						Vec3 dirVort = ( gaDirVort(i,j,k) + gaDirVort(i,j-1,k) ) * 0.5;
+						gaVel.write(i,j,k)[1] += (vort[0]*dirVort[2])  * mStrength;
+					}
+				} // Y
+			// 2D
+			} else {
+				// 3D
+				if(1) {
+					Vec3 vort(
+							(gaVortAbs(i,j,k)-gaVortAbs(i-1,j,k)) / mDx,
+							( (gaVortAbs(i+0, j+1,k)+ gaVortAbs(i-1, j+1,k))*0.5 - 
+							  (gaVortAbs(i+0, j-1,k)+ gaVortAbs(i-1, j-1,k))*0.5 ) /( 2.*mDx) , 
+							( (gaVortAbs(i+0, j,k+1)+ gaVortAbs(i-1, j,k+1))*0.5 - 
+							  (gaVortAbs(i+0, j,k-1)+ gaVortAbs(i-1, j,k-1))*0.5 ) /( 2.*mDx) );
+					Real mag = norm(vort);
+
+					if(mag>0.) {
+						// normalize
+						const Real imag = 1./mag;
+						vort *= imag;
+
+						// average to face
+						Vec3 dirVort = ( gaDirVort(i,j,k) + gaDirVort(i-1,j,k) ) * 0.5;
+						gaVel.write(i,j,k)[0] += (vort[1]*dirVort[2])  * mStrength;
+						gaVel.write(i,j,k)[0] += (vort[2]*dirVort[1])  * mStrength;
+					}
+				} // X
+				if(1) {
+					Vec3 vort(
+							( (gaVortAbs(i+1, j+0 ,k)+ gaVortAbs(i+1, j-1 ,k))*0.5 - 
+							  (gaVortAbs(i-1, j+0 ,k)+ gaVortAbs(i-1, j-1 ,k))*0.5 ) / (2.*mDx),
+							(gaVortAbs(i,j,k)-gaVortAbs(i,j-1,k)) / mDx ,
+							( (gaVortAbs(i, j+0 ,k+1)+ gaVortAbs(i, j-1 ,k+1))*0.5 - 
+							  (gaVortAbs(i, j+0 ,k-1)+ gaVortAbs(i, j-1 ,k-1))*0.5 ) / (2.*mDx) );
+					Real mag = norm(vort);
+
+					if(mag>0.) {
+						const Real imag = 1./mag;
+						vort *= imag;
+
+						Vec3 dirVort = ( gaDirVort(i,j,k) + gaDirVort(i,j-1,k) ) * 0.5;
+						gaVel.write(i,j,k)[1] += (vort[0]*dirVort[2])  * mStrength;
+						gaVel.write(i,j,k)[1] += (vort[2]*dirVort[0])  * mStrength;
+					}
+				} // Y
+				if(1) {
+					Vec3 vort(
+							( (gaVortAbs(i+1, j   ,k+0)+ gaVortAbs(i+1, j   ,k-1))*0.5 - 
+							  (gaVortAbs(i-1, j   ,k+0)+ gaVortAbs(i-1, j   ,k-1))*0.5 ) / (2.*mDx) ,
+							( (gaVortAbs(i  , j+1 ,k+0)+ gaVortAbs(i  , j+1 ,k-1))*0.5 - 
+							  (gaVortAbs(i  , j-1 ,k+0)+ gaVortAbs(i  , j-1 ,k-1))*0.5 ) / (2.*mDx) ,
+							(gaVortAbs(i,j,k)-gaVortAbs(i,j-1,k)) / mDx );
+					Real mag = norm(vort);
+
+					if(mag>0.) {
+						const Real imag = 1./mag;
+						vort *= imag;
+
+						Vec3 dirVort = ( gaDirVort(i,j,k) + gaDirVort(i,j,k-1) ) * 0.5;
+						gaVel.write(i,j,k)[2] += (vort[0]*dirVort[1])  * mStrength;
+						gaVel.write(i,j,k)[2] += (vort[1]*dirVort[0])  * mStrength;
+					}
+				} // Z
+			} // 3D
+		};
+		void reduce(fsAddVorticityConfinement &op) { };
+
+	protected:
+		Grid<Vec3> *mpVel;
+		Grid<Vec3> *mpDirVort;
+		Grid<Real> *mpTemp;
+		GridAccessor<Vec3,0> gaVel;
+		GridAccessor<Vec3,0> gaDirVort;
+		GridAccessor<Real,1> gaVortAbs;
+		Real mStrength;
+		Real mDx, mDxInv;
+}; // fsAddVorticityConfinement */
+
+class spluginVorticityConfinement : public SolverPlugin {
+	public:
+		spluginVorticityConfinement() : SolverPlugin(),
+   				mVelName("-unnamed-"), 
+					mStrength(0.) {
+			debMsg("spluginVorticityConfinement","cons");
+		};
+		~spluginVorticityConfinement() {
+			debMsg("spluginVorticityConfinement","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginVorticityConfinement","parse");
+			mVelName = params.FindOneString("velocity", mVelName );
+			mTmpVec = params.FindOneString("tmp-vec", mTmpVec );
+			mTmpReal = params.FindOneString("tmp-real", mTmpReal );
+			mStrength = params.FindOneFloat("strength", mStrength );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginVorticityConfinement","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginVorticityConfinement"," dt="<<dt<<" vel:"<<mVelName );
+			Grid<Vec3>* vel = mpPlParams->getGridVec3(mVelName); 
+			Grid<Vec3>* dirVort = mpPlParams->getGridVec3(mTmpVec);
+			Grid<Real>* tmp = mpPlParams->getGridReal(mTmpReal);
+			//const nVec3i n = mpPlParams->getGridSize();
+			Real dx = mpPlParams->getDeltaX();
+
+			if(mStrength>0.) {
+				fsComputeVorticity(mpPlParams->getFluidSolver()->getGridFlags(), 
+						vel, dirVort, tmp, dx);
+				fsAddVorticityConfinement(mpPlParams->getFluidSolver()->getGridFlags(), 
+						vel, dirVort, tmp, mStrength * dt, dx);
+			}
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelName, mTmpVec, mTmpReal;
+		Real mStrength;
+};
+
+
+//*****************************************************************************
+// buoyancy
+
+class fsAddBuoyancyForces : public GridOpBaseFlagbord<1> {
+	public:
+		fsAddBuoyancyForces(FlagGrid *flags, Grid<Real> *src, Grid<Vec3> *dst, Vec3 str) : 
+			GridOpBaseFlagbord<1>(), mpSrc(src), mpDst(dst) { 
+			mStrength = str;
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsAddBuoyancyForces() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			// safety - always write
+			if(gaSrc(i,j,k)<=0.) return;
+			// TODO? add flag checks?
+
+			gaDst.write(i,j,k) += 
+				mStrength * gaSrc(i,j,k);
+		};
+		void reduce(fsAddBuoyancyForces &op) { };
+
+	protected:
+		Grid<Real> *mpSrc;
+		Grid<Vec3> *mpDst;
+		GridAccessor<Real,1> gaSrc;
+		GridAccessor<Vec3,0> gaDst;
+		Vec3 mStrength;
+}; // fsAddBuoyancyForces */
+
+// add buoyancy forces to vels
+class spAddBuoyancy : public SolverPlugin {
+	public:
+		spAddBuoyancy() : SolverPlugin(),
+   				mDensSrc("-unnamed1-"),
+   				mVelDst("-unnamed2-"), mStrength(1.) {
+			debMsg("spAddBuoyancy","cons");
+		};
+		~spAddBuoyancy() {
+			debMsg("spAddBuoyancy","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spAddBuoyancy","parse");
+			mDensSrc = params.FindOneString("density-src", mDensSrc );
+			mVelDst = params.FindOneString("vel-dst", mVelDst );
+			mStrength = params.FindOneVector("strength", mStrength );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spAddBuoyancy","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddBuoyancy","step "<<dt<<" velsgrid:"<<mDensSrc<<" to "<<mVelDst); 
+			Grid<Real>* DensSrc = mpPlParams->getGridReal(mDensSrc);
+			Grid<Vec3>* veldst = mpPlParams->getGridVec3(mVelDst);
+
+			// along inverse dir of gravity
+			//Vec3 str= mStrength *dt * -mpPlParams->mGravity; // * mpPlParams->getDeltaX();
+			Vec3 str = mStrength *dt;
+			fsAddBuoyancyForces(mpPlParams->getFluidSolver()->getGridFlags(), DensSrc, veldst, str);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mDensSrc, mVelDst;
+		Vec3 mStrength;
+};
+
+// init grid from image
+class spluginInitFromImage : public SolverPlugin {
+	public:
+		spluginInitFromImage() : SolverPlugin(),
+   				mSrcName("-unnamed1-"),
+   				mDst("-unnamed2-"), mStrength(1.),
+				mStartFrame(0), mTimeScale(1.), mMode(0), mThreshold(-1e10),
+   				mSubtractConst(0.), mBitmap(),mLastFrameLoad(-1)	{
+			debMsg("spluginInitFromImage","cons");
+
+			mBitmap.setAbortOnError(false);
+			mBitmap.initMem(10,10);
+			mBitmap.resetToZero();
+		};
+		~spluginInitFromImage() {
+			debMsg("spluginInitFromImage","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			debMsg("spluginInitFromImage","parse");
+			mSrcName = params.FindOneString("src-file", mSrcName );
+			mDst = params.FindOneString("gridname", mDst );
+
+			mStrength = params.FindOneVector("strength", mStrength );
+			mStartFrame = params.FindOneInt("start-frame", mStartFrame );
+			mTimeScale = params.FindOneFloat("time-scale", mTimeScale );
+
+			mMode = params.FindOneInt("mode", mMode );
+			mThreshold = params.FindOneFloat("threshold", mThreshold );
+			mSubtractConst = params.FindOneFloat("subtract", mSubtractConst );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginInitFromImage","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			FluidSolver* solver = mpPlParams->getFluidSolver(); 
+			Grid<Real>* dst = mpPlParams->getGridReal(mDst);
+
+			const int solver_frame = solver->getFrameNum();
+			const int solver_aniframe = solver->getAniFrameNum();
+			//int frameNo = mStartFrame + (int)(solver->getSimTime()*mTimeScale);
+			int frameNo = mStartFrame + (int)(solver_aniframe*mTimeScale);
+
+			std::string filename = mSrcName;
+			if( mSrcName.find("%",0) != std::string::npos ) {
+				char buf[512];
+				snprintf(buf,512,mSrcName.c_str(), frameNo);
+				filename = std::string(buf);
+			}
+
+			debMsg("spluginInitFromImage","src name:"<<filename<<" to "<<mDst); 
+			if(mLastFrameLoad<0 || mLastFrameLoad!=frameNo) {
+				mBitmap.resetToZero();
+
+				if(!mBitmap.initFromFile( filename )) {
+					debMsg("spluginInitFromImage","Unable to laod...");
+				}
+				mLastFrameLoad = frameNo;
+			} else {
+				debMsg("spluginInitFromImage","Reusing previous load");
+			}
+
+			int width=mBitmap.getSize()[0]; 
+			int height=mBitmap.getSize()[1];
+			nVec3i gridsize = dst->getSize();
+			// modify src grid
+			FOR_IJK_GRID_BND(dst, 0) {
+				int bi = (int)(i*width /gridsize[0]);
+				int bj = (int)(j*height/gridsize[1]);
+				Real val = 1. / 3. * (
+						mBitmap(bi,bj)[0]*mStrength[0] + 
+						mBitmap(bi,bj)[1]*mStrength[1] + 
+						mBitmap(bi,bj)[2]*mStrength[2] );
+				val -= mThreshold;
+
+				(*dst)(i,j,k) -= mSubtractConst;
+				if ( (*dst)(i,j,k) < 0. )
+					(*dst)(i,j,k) = 0.;
+
+				// check for threshold
+				if(val>0.) {
+					val *= dt;
+					switch(mMode) {
+						case 0: (*dst)(i,j,k) += val; break;
+						case 1: (*dst)(i,j,k) -= val; break;
+						case 2: (*dst)(i,j,k) *= val; break;
+						case 3: (*dst)(i,j,k) /= val; break;
+						default:
+							errFatal("spluginInitFromImage","Invalid mode "<<mMode, SIMWORLD_PLUGINERROR);
+					}; // mode
+				}
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mSrcName, mDst;
+		Vec3 mStrength;
+		int mStartFrame; 
+		Real mTimeScale;
+		int mMode; // 0=add , 1=sub, 2=mult, 3=div
+		Real mThreshold;
+		Real mSubtractConst;
+
+		SimpleImage mBitmap;
+		int mLastFrameLoad;
+};
+
+
+//*****************************************************************************
+
+SolverPlugin* MakeSmokePlugin(std::string name) {
+
+	if(name.compare( string("init-density-testcase") )==0) {
+		return new spluginInitDensityTestcase;
+
+	} else if(name.compare( string("init-density-inflow") )==0) {
+		return new spluginInitDensityInflow;
+	} else if(name.compare( string("init-inflow") )==0) {
+		// same name as above
+		return new spluginInitDensityInflow;
+
+	} else if(name.compare( string("vorticity-confinement") )==0) {
+		return new spluginVorticityConfinement;
+	} else if(name.compare( string("add-buoyancy") )==0) {
+		return new spAddBuoyancy;
+
+	} else if(name.compare( string("init-from-image") )==0) {
+		return new spluginInitFromImage;
+
+	}
+	return NULL;
+}
+
+
+} // end namespace DDF 
+
+

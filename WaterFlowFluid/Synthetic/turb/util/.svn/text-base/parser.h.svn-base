@@ -1,0 +1,148 @@
+/*
+ * pbrt source code Copyright(c) 1998-2007 Matt Pharr and Greg Humphreys
+ *
+ * All Rights Reserved.
+ * For educational use only; commercial use expressly forbidden.
+ * NO WARRANTY, express or implied, for this software.
+ * (See file License.txt for complete license)
+ */
+
+#ifndef PBRT_PBRT_H
+#define PBRT_PBRT_H
+
+// Global Include Files
+#if !defined(__APPLE__) && !defined(__OpenBSD__)
+#include <malloc.h> // for _alloca, memalign
+#endif
+#if !defined(WIN32) && !defined(__APPLE__) && !defined(__OpenBSD__)
+#include <alloca.h>
+#endif
+#ifdef __linux__
+#include <fpu_control.h>
+#endif
+#ifdef WIN32
+#include <float.h>
+#endif
+#include <math.h>
+#include <stdlib.h>
+#define _GNU_SOURCE 1 //NOBOOK
+
+#include <stdio.h>
+#include <string.h>
+#include <string>
+#include <vector>
+#include <map>
+#include <iostream>
+#include <algorithm>
+
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
+#include <assert.h>
+
+// Platform-specific definitions
+#if defined(WIN32)
+#define memalign(a,b) _aligned_malloc(b, a)
+#elif defined(__APPLE__)
+#define memalign(a,b) valloc(b)
+#elif defined(__OpenBSD__)
+#define memalign(a,b) malloc(b)
+#endif
+
+#ifdef sgi
+#define for if (0) ; else for
+#endif
+
+#ifdef __APPLE__
+#define powf pow
+#define sinf sin
+#define cosf cos
+#define tanf tan
+#define asinf asin
+#define acosf acos
+#define atanf atan
+#define atan2f atan2
+#define logf log
+#define log10f log10
+#define expf exp
+#define sqrtf sqrt
+
+#if __GNUC__ == 3
+extern "C" {
+  int isinf(double);
+  int isnan(double);
+}
+#endif // ONLY GCC 3
+#endif // __APPLE__
+
+#ifdef WIN32
+#pragma warning (disable: 4267 4251 4065 4102)
+#endif // WIN32
+
+#ifdef WIN32
+#pragma warning( disable: 4190 )
+// extern "C" nonsense when returning a template
+#endif
+
+
+#ifdef WIN32
+//#	ifdef CORE_SOURCE
+#	ifdef COMPILE_PLUGIN
+#		define COREDLL __declspec(dllimport)
+#	else
+#		define COREDLL __declspec(dllexport)
+#	endif
+#	define DLLEXPORT __declspec(dllexport)
+	// windos helper defines
+#	define u_int unsigned int
+#	define strdup _strdup
+#else
+#	define COREDLL
+#	define DLLEXPORT
+	// use u_int etc (mac e.g. /usr/include/sys/types.h)
+#include <sys/types.h>
+#endif
+
+
+
+#ifdef WIN32
+#define PBRT_PATH_SEP ";"
+#else
+#define PBRT_PATH_SEP ":"
+#endif
+
+class ParamSet;
+
+COREDLL void parseSearchPath(const std::string &path);
+COREDLL bool ParseFile(const std::string &filename);
+COREDLL bool ParseString(const std::string &content);
+
+COREDLL void pbrtWorldBegin();
+COREDLL void pbrtWorldEnd();
+
+COREDLL void pbrtPluginTest(const std::string &name, const ParamSet &params);
+
+COREDLL void ddfParseSolverParams(const std::string &name, const ParamSet &params);
+COREDLL void ddfParseGlutGuiParams(const std::string &name, const ParamSet &params);
+COREDLL void ddfParseGrid(const std::string &name, const ParamSet &params);
+COREDLL void ddfParseNoiseField(const std::string &name, const ParamSet &params);
+
+// solver parsing
+COREDLL void ddfSolverBlockBegin();
+COREDLL void ddfSolverBlockEnd(); 
+COREDLL void ddfInitBlockBegin();
+COREDLL void ddfInitBlockEnd(); 
+COREDLL void ddfParseSolver(const std::string &name, const ParamSet &params);
+COREDLL void ddfParsePlugin(const std::string &name, const ParamSet &params);
+COREDLL void ddfReferenceSolver(const std::string &name, const ParamSet &params);
+
+// search for fluid solve with given name
+//COREDLL DDF::FluidSolver* ddfWorldFindSolve(const std::string name);
+
+// parser data for each solver is stored in SolverParams
+
+#endif // PBRT_PBRT_H
+
+

@@ -1,0 +1,106 @@
+#ifndef QUICKLIST_H
+#define QUICKLIST_H
+
+template<class T>
+class QuicklistElement {
+public:
+	T data;
+	QuicklistElement* next;
+};
+
+template<class T>
+class QuicklistElementManager {
+public:	
+	QuicklistElementManager(int numelems) {
+		mCurrentIndex = 0;
+		mNumElems = numelems;
+		mBuffer = new QuicklistElement<T>[mNumElems];
+	}
+
+	~QuicklistElementManager() {
+		delete[] mBuffer;
+	}
+
+	QuicklistElement<T>* dispense(void) {
+		if (mCurrentIndex < mNumElems)
+			return &mBuffer[mCurrentIndex++];
+		else
+			return NULL;
+	}
+
+	QuicklistElement<T>* dispense(const T& data) {
+		if (mCurrentIndex < mNumElems) {
+			mBuffer[mCurrentIndex].data = data;
+			return &mBuffer[mCurrentIndex++];
+		} else
+			return NULL;
+	}
+protected:
+	int mNumElems, mCurrentIndex;
+	QuicklistElement<T>* mBuffer;
+};
+
+template<class T>
+class Quicklist {
+public:
+	typedef QuicklistElement<T> Element;
+
+	Quicklist(void) : mFirst(NULL), mNumElems(0)
+	{ }
+
+	void insert(Element* elem)
+	{
+		elem->next = mFirst;
+		mFirst = elem;
+		mNumElems++;
+	}
+
+	bool erase(Element* elem) {
+		if (mFirst == NULL) return false;
+		if (mFirst == elem) {
+			mFirst = mFirst->next;
+			mNumElems--;
+			return true;
+		}
+
+		Element* e = mFirst;
+		while (e->next) {
+			if (e->next == elem) {
+				e->next = e->next->next;
+				mNumElems--;
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	bool erase(Element* prev, Element* elem) {
+		if (mFirst == NULL) return false;
+		if (prev==NULL) {
+			if (elem==mFirst) {
+				mFirst = mFirst->next;
+				mNumElems--;
+				return true;
+			} else 
+				return false;
+		} else {
+			prev->next = elem->next;
+			mNumElems--;
+			return true;
+		}
+		return false;
+	}
+
+	inline Element* begin(void) { return mFirst; }
+
+	inline int size(void) const { return mNumElems; }
+
+protected:
+	Element* mFirst;
+	int mNumElems;
+};
+
+
+#endif // #ifndef QUICKLIST_H
+
+

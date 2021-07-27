@@ -1,0 +1,7 @@
+cylinder_static
+center 0.75 0.37 0.37
+height 0.74
+radius 0.05
+angle 90
+axis 1 0 0
+color 0.1 0.4 0.8

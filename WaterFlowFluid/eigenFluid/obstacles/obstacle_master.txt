@@ -1,0 +1,11 @@
+#box ./obstacles/box1.txt
+#box ./obstacles/box2.txt
+#cylinder ./obstacles/cylinde_paddle.txt
+#cylinder ./obstacles/cylinde_direct.txt
+#cylinder_static ./obstacles/cylinder_static1.txt
+#cylinder_static ./obstacles/cylinder_static2.txt
+#cylinder_static ./obstacles/cylinder_static3.txt
+#cylinder_static ./obstacles/cylinder_static4.txt
+#cylinder_static ./obstacles/cylinder_static5.txt
+#cylinder_static ./obstacles/cylinder_static6.txt
+sphere ./obstacles/sphere.txt

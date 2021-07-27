@@ -1,0 +1,12 @@
+cylinder
+center -0.6 0.48 0.52
+height 0.1
+radius 0.3
+period 10
+rotating 1
+color 0.1 0.4 0.8
+use_sine 0
+velocity 0.20 0 0
+reset_pos 1
+use_trigger 1
+fname ./obstacles/cylinde_direct_pos.txt

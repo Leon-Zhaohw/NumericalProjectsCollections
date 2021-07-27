@@ -1,0 +1,545 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2008 Nils Thuerey
+ *
+ * Visco-elasticity plugins
+ *
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+
+// safety boundary for semi lagrange advection step
+#define SLADVBOUND 2
+
+namespace DDF { 
+
+class opComputeStrain : public GridOpBaseFlagbord<SLADVBOUND> {
+	public:
+		opComputeStrain(FlagGrid *flags, Grid<Vec3> *vel, Grid<Vec3> *epsdiag, 
+				Grid<Vec3> *epsoff, Real alpha, Real gamma, Real dt) : 
+			GridOpBaseFlagbord<SLADVBOUND>(), mpVel(vel), mpEpsDiag(epsdiag), 
+			mpEpsOff(epsoff), mDt(dt), mAlpha(alpha), mGamma(gamma) { 
+
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~opComputeStrain() { }; 
+		void resetVariables() { };
+		void reduce(opComputeStrain &op) { };
+		void buildCallList() { 
+			gaVel.gridAccInit(mpVel, AM_READ, gaCalls); 
+			gaEpsDiag.gridAccInit(mpEpsDiag, AM_WRITE, gaCalls); 
+			gaEpsOff.gridAccInit(mpEpsOff, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		}; 
+
+		// same as semi-lagrange advection, only clamp instead of interpolation
+		inline void operator() (int i, int j, int k) { 
+			// always init...?
+			if (fgIsObstacle(getFlagAcc()(i,j,k)) ) {
+				return;
+			}
+			if (!fgIsFluid(getFlagAcc()(i,j,k)) ) {
+				return;
+			} 
+			// rely on velocity extrapolation to handle boundaries
+
+			Vec3& diag = gaEpsDiag.write(i,j,k);
+			Vec3& off  = gaEpsOff.write(i,j,k);
+
+			// elastic strains
+			Real ux = gaVel(i+1,j,k)[0]-gaVel(i,j,k)[0];
+			Real vy = gaVel(i,j+1,k)[1]-gaVel(i,j,k)[1];
+
+			// store derivs at lower left corner of cell / edges
+			Real uy = gaVel(i,j,k)[0] - gaVel(i,j-1,k)[0];
+			Real vx = gaVel(i,j,k)[1] - gaVel(i-1,j,k)[1];
+
+			diag[0] += mDt * ux;
+			diag[1] += mDt * vy;
+			off[0] += mDt * 0.5*( uy + vx );
+
+			if(gDim==3) {
+				Real wz = gaVel(i,j,k+1)[2]-gaVel(i,j,k)[2];
+				diag[2] += mDt * wz; 
+
+				Real uz = gaVel(i,j,k)[0] - gaVel(i,j,k-1)[0];
+				Real vz = gaVel(i,j,k)[1] - gaVel(i,j,k-1)[1];
+				Real wx = gaVel(i,j,k)[2] - gaVel(i-1,j,k)[2];
+				Real wy = gaVel(i,j,k)[2] - gaVel(i,j-1,k)[2];
+				off[1] += mDt * 0.5*( uz + wx );
+				off[2] += mDt * 0.5*( vz + wy );
+			}
+			//off = Vec3(0.);
+
+			// rotational correction
+			if(gDim==2) {
+				//diag[0] += mDt * off[0] * (ux - uy) * 0.5;
+				//diag[1] += mDt * off[0] * (uy - ux) * 0.5; 
+				//off[0] += mDt * diag2[0] * (ux - uy) * 0.5;
+				//off[1] += mDt * off[0] * (uy - ux) * 0.5;
+			}
+
+			// plastic update
+			Vec3 diagOrg = diag;
+			Vec3 offOrg  = off;
+			Vec3 diagMod = diag - Vec3( ( diag[0]+diag[1]+diag[2] ) / (Real)gDim );
+			if(gDim==2) diagMod[2] = 0.;
+
+			Real epsModNorm = sqrt( normNoSqrt(diag) + 2. *normNoSqrt(off) );
+			if(epsModNorm>0.) {
+				Real fac = mDt * mAlpha * MAX((Real)0., epsModNorm-mGamma) / epsModNorm ; 
+				diag -= diagMod * fac;
+				off  -=  offOrg * fac;
+			} // */
+
+#			ifndef WIN32
+			// sanity check
+			if(!finite( normNoSqrt(diag) + normNoSqrt(off) )) {
+				debMsg("opComputeStrain","Warning invalid strain "<<diag<<" , "<<off );
+				diag = Vec3(0.);
+				off = Vec3(0.);
+			}
+#			endif
+
+		};
+	protected:
+		Grid<Vec3> *mpVel, *mpEpsDiag, *mpEpsOff;
+		Real mDt, mAlpha, mGamma;
+		GridAccessor<Vec3,1> gaVel; 
+		GridAccessor<Vec3,0> gaEpsDiag, gaEpsOff;
+}; // opComputeStrain */
+
+class opAddStrainForces : public GridOpBaseFlagbord<SLADVBOUND> {
+	public:
+		opAddStrainForces(FlagGrid *flags, Grid<Vec3> *vel, Grid<Vec3> *epsdiag, 
+				Grid<Vec3> *epsoff, Real str, Real w=0.5) : 
+			GridOpBaseFlagbord<SLADVBOUND>(), mpVel(vel), mpEpsDiag(epsdiag), 
+			mpEpsOff(epsoff), mStrength(str), mWeight(w) { 
+
+			mInvWeight = 1.-mWeight;
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~opAddStrainForces() { }; 
+		void resetVariables() { };
+		void reduce(opAddStrainForces &op) { };
+		void buildCallList() { 
+			gaVel.gridAccInit(mpVel, AM_WRITE, gaCalls); 
+			gaDiag.gridAccInit(mpEpsDiag, AM_READ, gaCalls); 
+			gaOff.gridAccInit(mpEpsOff, AM_READ, gaCalls); 
+			setFlags(mpFlags);
+		}; 
+
+		// same as semi-lagrange advection, only clamp instead of interpolation
+		inline void operator() (int i, int j, int k) { 
+			// always init...?
+			if (fgIsObstacle(getFlagAcc()(i,j,k)) ) {
+				return;
+			}
+			if (!fgIsFluid(getFlagAcc()(i,j,k)) ) {
+				return;
+			} 
+
+			// check nb's, necessary?
+			// rely on smoothing & interpolation to handle this currently
+			/* if( (!fgIsFluid(getFlagAcc()(i-1,j,k)) ) ||
+			    (!fgIsFluid(getFlagAcc()(i,j-1,k)) ) ||
+			    (gDim==3 && (!fgIsFluid(getFlagAcc()(i,j,k-1)) )) ) {
+				return;
+			}
+			if( (!fgIsFluid(getFlagAcc()(i+1,j,k)) ) ||
+			    (!fgIsFluid(getFlagAcc()(i,j+1,k)) ) ||
+			    (gDim==3 && (!fgIsFluid(getFlagAcc()(i,j,k+1)) )) ) {
+				return;
+			} // */
+
+			Vec3& vel = gaVel.write(i,j,k);
+			if(gDim==2) {
+				vel[0] += mInvWeight* mStrength*( gaOff(i,j+1,k)[0] - gaOff(i,j,k)[0] );
+				vel[1] += mInvWeight* mStrength*( gaOff(i+1,j,k)[0] - gaOff(i,j,k)[0] );
+				vel[0] += mWeight*    mStrength*( gaDiag(i,j,k)[0] - gaDiag(i-1,j,k)[0] );
+				vel[1] += mWeight*    mStrength*( gaDiag(i,j,k)[1] - gaDiag(i,j-1,k)[1] );
+			} else {
+				// 3D
+				if(mInvWeight!=0.) {
+					vel[0] += mInvWeight* mStrength*( 
+							gaOff(i,j+1,k)[0] - gaOff(i,j,k)[0] +
+							gaOff(i,j,k+1)[1] - gaOff(i,j,k)[1] );
+					vel[1] += mInvWeight* mStrength*( 
+							gaOff(i+1,j,k)[0] - gaOff(i,j,k)[0] +
+							gaOff(i,j,k+1)[2] - gaOff(i,j,k)[2] );
+					vel[2] += mInvWeight* mStrength*( 
+							gaOff(i+1,j,k)[1] - gaOff(i,j,k)[1] +
+							gaOff(i,j+1,k)[2] - gaOff(i,j,k)[2] );
+				}
+				if(mWeight!=0.) {
+					vel[0] += mWeight* mStrength*( gaDiag(i,j,k)[0] - gaDiag(i-1,j,k)[0] );
+					vel[1] += mWeight* mStrength*( gaDiag(i,j,k)[1] - gaDiag(i,j-1,k)[1] );
+					vel[2] += mWeight* mStrength*( gaDiag(i,j,k)[2] - gaDiag(i,j,k-1)[2] );
+				}
+			}
+
+// debug test !!!!!!!!!!! NTCUT
+			/* if(j>40) {
+					vel[0] = 
+					vel[1] = 
+					vel[2] = 0.;
+			}
+// debug test !!!!!!!!!!! NTCUT */
+		};
+	protected:
+		Grid<Vec3> *mpVel, *mpEpsDiag, *mpEpsOff;
+		Real mStrength;
+		GridAccessor<Vec3,0> gaVel; 
+		GridAccessor<Vec3,1> gaDiag, gaOff;
+		Real mWeight, mInvWeight;
+}; // opAddStrainForces */
+
+// interface for maccormack advection of the velocities
+class spComputeStrain : public SolverPlugin {
+	public:
+		spComputeStrain() : 
+					SolverPlugin(), mNameFlags("flags"),
+   				mNameVel("vel-curr"), 
+					mNameEpsDiag("-unnamed1-"), mNameEpsOff("-unnamed2-") ,
+					mNameTemp1("-unnamed-temp1-"), mNameTemp2("-unnamed-temp2-") ,
+					mAlpha(0.), mGamma(0.)
+			{ }; 
+		~spComputeStrain() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameVel = params.FindOneString("vel",mNameFlags);
+			mNameEpsDiag = params.FindOneString("eps-diag",mNameEpsDiag);
+			mNameEpsOff  = params.FindOneString("eps-off",mNameEpsOff);
+
+			mAlpha    = params.FindOneFloat("alpha",mAlpha);
+			mGamma    = params.FindOneFloat("gamma",mGamma);
+			return true;
+		};
+		virtual bool initPlugin() {
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spComputeStrain","step "<<dt);
+			const Real mStrength = 0.5;
+
+			FlagGrid*   flags    = mpPlParams->getGridInt(mNameFlags);
+			Grid<Vec3>* vel      = mpPlParams->getGridVec3(mNameVel);
+			Grid<Vec3>* epsDiag  = mpPlParams->getGridVec3(mNameEpsDiag);
+			Grid<Vec3>* epsOff   = mpPlParams->getGridVec3(mNameEpsOff);
+
+			opComputeStrain(flags, vel, epsDiag, epsOff, mAlpha, mGamma, dt);
+
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNameVel, mNameEpsDiag, mNameEpsOff, mNameTemp1, mNameTemp2;
+		Real mAlpha, mGamma;
+};
+
+// interface for maccormack advection of the velocities
+class spAddStrainForce : public SolverPlugin {
+	public:
+		spAddStrainForce() : 
+					SolverPlugin(), mNameFlags("flags"),
+   				mNameVel("vel-curr"), 
+					mNameEpsDiag("-unnamed1-"), mNameEpsOff("-unnamed2-") ,
+					mNameTemp1("-unnamed-temp1-"), mNameTemp2("-unnamed-temp2-") ,
+					mElaForce(0.) , mWeight(0.5)
+			{ }; 
+		~spAddStrainForce() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameVel = params.FindOneString("vel",mNameFlags);
+			mNameEpsDiag = params.FindOneString("eps-diag",mNameEpsDiag);
+			mNameEpsOff  = params.FindOneString("eps-off",mNameEpsOff);
+			mElaForce  = params.FindOneFloat("strength",mElaForce);
+			mWeight  = params.FindOneFloat("diag-vs-off-weight",mWeight);
+			return true;
+		};
+		virtual bool initPlugin() {
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddStrainForce","step "<<dt);
+			const Real mStrength = 0.5;
+
+			FlagGrid*   flags    = mpPlParams->getGridInt(mNameFlags);
+			Grid<Vec3>* vel      = mpPlParams->getGridVec3(mNameVel);
+			Grid<Vec3>* epsDiag  = mpPlParams->getGridVec3(mNameEpsDiag);
+			Grid<Vec3>* epsOff   = mpPlParams->getGridVec3(mNameEpsOff);
+
+			opAddStrainForces(flags, vel, epsDiag, epsOff, dt * mElaForce, mWeight);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNameVel, mNameEpsDiag, mNameEpsOff, mNameTemp1, mNameTemp2;
+		Real mElaForce, mWeight;
+		//bool mAdvectLs;
+};
+
+
+
+
+/******************************************************************************
+ *
+ * Irving version
+ *
+ *****************************************************************************/
+
+class opComputeStrainIrv : public GridOpBaseFlagbord<SLADVBOUND> {
+	public:
+		opComputeStrainIrv(FlagGrid *flags, Grid<Vec3> *vel, Grid<Vec3> *epsdiag, 
+				Grid<Vec3> *epsupp, 
+				Grid<Vec3> *epslow, 
+				Real alpha, Real gamma, Real dt) : 
+			GridOpBaseFlagbord<SLADVBOUND>(), mpVel(vel), mpEpsDiag(epsdiag), 
+			mpEpsUpp(epsupp), 
+			mpEpsLow(epslow), 
+			mDt(dt), mAlpha(alpha), mGamma(gamma) { 
+
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~opComputeStrainIrv() { }; 
+		void resetVariables() { };
+		void reduce(opComputeStrainIrv &op) { };
+		void buildCallList() { 
+			gaVel.gridAccInit(mpVel, AM_READ, gaCalls); 
+			gaEpsDiag.gridAccInit(mpEpsDiag, AM_WRITE, gaCalls); 
+			gaEpsUpp.gridAccInit(mpEpsUpp, AM_WRITE, gaCalls); 
+			gaEpsLow.gridAccInit(mpEpsLow, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		}; 
+
+		// same as semi-lagrange advection, only clamp instead of interpolation
+		inline void operator() (int i, int j, int k) { 
+			// always init...?
+			if (fgIsObstacle(getFlagAcc()(i,j,k)) ) {
+				return;
+			}
+			if (!fgIsFluid(getFlagAcc()(i,j,k)) ) {
+				return;
+			} 
+			// rely on velocity extrapolation to handle boundaries
+
+			Vec3& diag = gaEpsDiag.write(i,j,k);
+			Vec3& upp  = gaEpsUpp.write(i,j,k);
+			Vec3& low  = gaEpsLow.write(i,j,k);
+
+			// elastic strains
+			Real ux = gaVel(i+1,j,k)[0]-gaVel(i,j,k)[0];
+			Real vy = gaVel(i,j+1,k)[1]-gaVel(i,j,k)[1];
+
+			// store derivs at lower left corner of cell / edges
+			Real uy = gaVel(i,j,k)[0] - gaVel(i,j-1,k)[0];
+			Real vx = gaVel(i,j,k)[1] - gaVel(i-1,j,k)[1];
+
+			diag[0] += mDt * ux;
+			diag[1] += mDt * vy;
+			upp[0] += mDt * 0.5*( uy + vx );
+			low[0] += mDt * 0.5*( uy + vx );
+
+			/*
+			if(gDim==3) {
+				Real wz = gaVel(i,j,k+1)[2]-gaVel(i,j,k)[2];
+				diag[2] += mDt * wz; 
+
+				Real uz = gaVel(i,j,k)[0] - gaVel(i,j,k-1)[0];
+				Real vz = gaVel(i,j,k)[1] - gaVel(i,j,k-1)[1];
+				Real wx = gaVel(i,j,k)[2] - gaVel(i-1,j,k)[2];
+				Real wy = gaVel(i,j,k)[2] - gaVel(i,j-1,k)[2];
+				off[1] += mDt * 0.5*( uz + wx );
+				off[2] += mDt * 0.5*( vz + wy );
+			} // */
+			//off = Vec3(0.);
+
+			// rotational correction
+			if(gDim==2) {
+				//diag[0] += mDt * off[0] * (ux - uy) * 0.5;
+				//diag[1] += mDt * off[0] * (uy - ux) * 0.5; 
+				//off[0] += mDt * diag2[0] * (ux - uy) * 0.5;
+				//off[1] += mDt * off[0] * (uy - ux) * 0.5;
+			}
+
+			// plastic update
+			Vec3 diagOrg = diag;
+			Vec3 uppOrg  = upp;
+			Vec3 lowOrg  = low;
+			Vec3 diagMod = diag - Vec3( ( diag[0]+diag[1]+diag[2] ) / (Real)gDim );
+			if(gDim==2) diagMod[2] = 0.;
+
+			Real epsModNorm = sqrt( normNoSqrt(diag) + normNoSqrt(upp) + normNoSqrt(low) );
+			if(epsModNorm>0.) {
+				Real fac = mDt * mAlpha * MAX((Real)0., epsModNorm-mGamma) / epsModNorm ; 
+				diag -= diagMod * fac;
+				upp  -=  uppOrg * fac;
+				low  -=  lowOrg * fac;
+			} // */
+
+#			ifndef WIN32
+			// sanity check
+			if(!finite( normNoSqrt(diag) + normNoSqrt(upp) + normNoSqrt(low) )) {
+				debMsg("opComputeStrainIrv","Warning invalid strain "<<diag<<" , "<<upp<<", "<<low );
+				diag = 
+				upp = 
+				low = Vec3(0.);
+			}
+#			endif
+
+		};
+	protected:
+		Grid<Vec3> *mpVel, *mpEpsDiag, *mpEpsUpp, *mpEpsLow;
+		Real mDt, mAlpha, mGamma;
+		GridAccessor<Vec3,1> gaVel; 
+		GridAccessor<Vec3,0> gaEpsDiag, gaEpsUpp, gaEpsLow;
+}; // opComputeStrainIrv */
+
+// interface for maccormack advection of the velocities
+class spComputeStrainIrv : public SolverPlugin {
+	public:
+		spComputeStrainIrv() : 
+					SolverPlugin(), mNameFlags("flags"),
+   				mNameVel("vel-curr"), 
+					mNameEpsDiag("-unnamed1-"), 
+					mNameEpsOffUpp("-unnamed2-") ,
+					mNameEpsOffLow("-unnamed2-") ,
+					mNameTemp1("-unnamed-temp1-"), mNameTemp2("-unnamed-temp2-") ,
+					mAlpha(0.), mGamma(0.)
+			{ }; 
+		~spComputeStrainIrv() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameVel = params.FindOneString("vel",mNameFlags);
+			mNameEpsDiag = params.FindOneString("eps-diag",mNameEpsDiag);
+			mNameEpsOffUpp  = params.FindOneString("eps-off-upp",mNameEpsOffUpp);
+			mNameEpsOffLow  = params.FindOneString("eps-off-low",mNameEpsOffLow);
+
+			mAlpha    = params.FindOneFloat("alpha",mAlpha);
+			mGamma    = params.FindOneFloat("gamma",mGamma);
+			return true;
+		};
+		virtual bool initPlugin() {
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spComputeStrainIrv","step "<<dt);
+			const Real mStrength = 0.5;
+
+			FlagGrid*   flags    = mpPlParams->getGridInt(mNameFlags);
+			Grid<Vec3>* vel      = mpPlParams->getGridVec3(mNameVel);
+			Grid<Vec3>* epsDiag  = mpPlParams->getGridVec3(mNameEpsDiag);
+			Grid<Vec3>* epsOffU  = mpPlParams->getGridVec3(mNameEpsOffUpp);
+			Grid<Vec3>* epsOffL  = mpPlParams->getGridVec3(mNameEpsOffLow);
+
+			opComputeStrainIrv(flags, vel, epsDiag, epsOffU, epsOffL, mAlpha, mGamma, dt);
+
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNameVel, mNameEpsDiag, 
+			mNameEpsOffUpp, mNameEpsOffLow, 
+			mNameTemp1, mNameTemp2;
+		Real mAlpha, mGamma;
+};
+
+// interface for maccormack advection of the velocities
+class spAddStrainForceIrv : public SolverPlugin {
+	public:
+		spAddStrainForceIrv() : 
+					SolverPlugin(), mNameFlags("flags"),
+   				mNameVel("vel-curr"), 
+					mNameEpsDiag("-unnamed1-"), 
+					mNameEpsOffUpp("-unnamed2-") ,
+					mNameEpsOffLow("-unnamed2-") ,
+					mNameTemp1("-unnamed-temp1-"), mNameTemp2("-unnamed-temp2-") 
+			{ }; 
+		~spAddStrainForceIrv() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameVel = params.FindOneString("vel",mNameFlags);
+			mNameEpsDiag = params.FindOneString("eps-diag",mNameEpsDiag);
+			mNameEpsOffUpp  = params.FindOneString("eps-off-upp",mNameEpsOffUpp);
+			mNameEpsOffLow  = params.FindOneString("eps-off-low",mNameEpsOffLow);
+
+			mElaForce  = params.FindOneFloat("strength",mElaForce);
+			return true;
+		};
+		virtual bool initPlugin() {
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddStrainForceIrv","step "<<dt);
+			const Real mStrength = 0.5;
+
+			FlagGrid*   flags    = mpPlParams->getGridInt(mNameFlags);
+			Grid<Vec3>* vel      = mpPlParams->getGridVec3(mNameVel);
+			Grid<Vec3>* epsDiag  = mpPlParams->getGridVec3(mNameEpsDiag);
+			Grid<Vec3>* epsOffU  = mpPlParams->getGridVec3(mNameEpsOffUpp);
+			Grid<Vec3>* epsOffL  = mpPlParams->getGridVec3(mNameEpsOffLow);
+
+			//opAddStrainForcesIrv(flags, vel, epsDiag, epsOffU, epsOffL, dt * mElaForce);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNameVel, mNameEpsDiag, 
+			mNameEpsOffUpp, mNameEpsOffLow, 
+			mNameTemp1, mNameTemp2;
+		Real mElaForce;
+		//bool mAdvectLs;
+};
+
+//*****************************************************************************
+// ...
+
+SolverPlugin* MakeViscoElasPlugin(std::string name) {
+
+	if(name.compare( "compute-strain" )==0) {
+		return new spComputeStrain;
+	} else if(name.compare( "add-strain-forces" )==0) {
+		return new spAddStrainForce;
+
+	} else if(name.compare( "compute-strain-irv" )==0) {
+		return new spComputeStrainIrv;
+	} else if(name.compare( "add-strain-forces-irv" )==0) {
+		return new spAddStrainForceIrv;
+
+	} else if(name.compare( "testTMPTMP" )==0) {
+		return NULL;
+
+	}
+	return NULL;
+}
+
+} // end namespace DDF 
+

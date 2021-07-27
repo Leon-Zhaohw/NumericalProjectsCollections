@@ -1,0 +1,30 @@
+LookAt .5  .7  1.1   0.5 0 0.2   0 1 0
+Camera "perspective" "float fov" [40.0]
+Sampler "bestcandidate" "integer pixelsamples" [1]
+Film "image" "integer xresolution" [400] "integer yresolution" [300] "string filename" ["render_dyn.exr"]
+
+VolumeIntegrator "single" "float stepsize" [.001] # low quality
+
+WorldBegin
+
+LightSource "point" "point from" [-3 4 -0.5] "color I" [2100 1500 1500]
+#LightSource "point" "point from" [0 6 0] "color I" [50 25 25] 
+
+AttributeBegin
+	Include "volume_dyn.pbrt"
+	"color sigma_a" [100 100 100] 
+	"color sigma_s" [80 80 80]
+AttributeEnd
+
+# floor
+Material "matte" "color Kd" [0.0 0.03 0.20] # blue bg
+Translate 0  0.01 0
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+	"point P" [-50 0.0 -50  50 0.0 -50  50 0.0 50  -50 0.0 50]
+
+# black background
+Material "matte" "color Kd" [0 0 0]
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+"point P" [ -500 -100 100  500 -100 100   500 100 100  -500 100 100 ]
+
+WorldEnd

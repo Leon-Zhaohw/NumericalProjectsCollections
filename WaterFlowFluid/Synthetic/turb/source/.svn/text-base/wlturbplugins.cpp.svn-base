@@ -1,0 +1,198 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2008 Nils Thuerey
+ *
+ * Wave equation solver for mesh
+ *
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+#include "randomstream.h"
+
+
+
+
+#if DDF_WLTURB==1
+#include "waveletTurbulencer.h"
+#include "vectornoise.h"
+#endif
+
+namespace DDF { 
+#if DDF_WLTURB==1
+
+class spWlturb : public SolverPlugin {
+	public:
+		spWlturb() : SolverPlugin() ,
+			mNameVel("<<unini>>") , mNameInflow("<<unini>>") , 
+			mNameFlags("flags") ,mNameXL("<<unini>>") ,
+			mInitedObstacles(false)
+			{ };
+
+		~spWlturb() { }; 
+		virtual bool initPlugin() { 
+			Grid<Real>* dxl    = mpPlParams->getGridReal(mNameXL);
+			Grid<Real>* dxl2    = mpPlParams->getGridReal(mNameXL + "-old");
+			mWlt.initFromDDF( mpPlParams->getFluidSolver(), dxl, dxl2 );
+
+			std::string conf = mWlt.getConfigString();
+			debMsg("spWlturb::parseParams","Config: "<<conf ); 
+			return true; 
+		};
+
+		virtual bool parseParams(const ParamSet& params) { 
+			mNameVel = params.FindOneString("vel",mNameVel);
+			mNameInflow = params.FindOneString("inflow",mNameInflow);
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameXL = params.FindOneString("density-xl",mNameXL);
+
+			mWlt.parseParamsFromDDF(params);
+			return true; 
+		};
+
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			FluidSolver* solver = mpPlParams->getFluidSolver(); 
+
+			// init obstacles first time...
+			if(!mInitedObstacles) {
+				const std::string mNameFlags("flags");
+				debMsg("spWlturb::step","Direct obstacle init from "<<mNameFlags);
+
+				FlagGrid* flags = mpPlParams->getGridInt(mNameFlags);
+				if (!intVecIsEqual( flags->getSize() , mWlt.getSizeSm() )) {
+					errFatal("spWlturb::step","flags Sizes dont match! "<< flags->getSize() <<" != "<<mWlt.getSizeSm() , SIMWORLD_PLUGINERROR);
+				}
+
+				//unsigned char* obs = mWlt.getArrayObstacles();
+				Grid<int>* wlobs = mWlt.getGridObstacles();
+				FOR_IJK_GRID(flags) {
+					if(fgIsObstacle(flags->getGlobal(i,j,k))) {
+						wlobs->getGlobal(i,j,k) = 1;
+					} else {
+						wlobs->getGlobal(i,j,k) = 0;
+					}
+				}
+			}
+
+			// init velocities from grid
+			if(mWlt.getFilenameVelocity().length() == 0) {
+				debMsg("spWlturb::step","Direct velocity init from "<<mNameVel);
+				Grid<Vec3>* vel    = mpPlParams->getGridVec3(mNameVel);
+				FlagGrid* flags = mpPlParams->getGridInt(mNameFlags);
+
+				if (!intVecIsEqual( vel->getSize() , mWlt.getSizeSm() )) {
+					errFatal("spWlturb::step","Vel Sizes dont match! "<< vel->getSize() <<" != "<<mWlt.getSizeSm() , SIMWORLD_PLUGINERROR);
+				}
+
+
+				// TODO, get rid of doubly allocated velocity array here!
+				float *xvel = mWlt.getArrayXvel();
+				float *yvel = mWlt.getArrayYvel();
+				float *zvel = mWlt.getArrayZvel();
+				const nVec3i grsize = vel->getSize();
+				
+				Grid<Vec3>* wlvel = mWlt.getGridVel();
+				FOR_IJK_GRID(vel) {
+
+					Vec3 v = vel->getGlobal(i,j,k);
+					// interpolate from NB cells to center
+					if(i<grsize[0]-1) {
+						if(!fgIsObstacle( flags->getGlobal(i+1,j,k) )) {
+							v[0] += vel->getGlobal(i+1,j,k)[0];
+							v[0] *= 0.5;
+						}
+					}
+					if(j<grsize[1]-1) {
+						if(!fgIsObstacle( flags->getGlobal(i,j+1,k) )) {
+							v[1] += vel->getGlobal(i,j+1,k)[1];
+							v[1] *= 0.5;
+						}
+					}
+					if(k<grsize[2]-1) {
+						if(!fgIsObstacle( flags->getGlobal(i,j,k+1) )) {
+							v[2] += vel->getGlobal(i,j,k+1)[2];
+							v[2] *= 0.5;
+						}
+					}
+					wlvel->getGlobal(i,j,k) = v; 
+
+					const int index = mWlt.getIndex(i,j,k);
+					xvel[index] = v[0];
+					yvel[index] = v[1];
+					zvel[index] = v[2];
+				}
+			}
+
+
+			// init inflow from grid, allocated real grid is always needed
+			Grid<Real>* grid_inflow = mpPlParams->getGridReal(mNameInflow);
+			if (!intVecIsEqual( grid_inflow->getSize() , mWlt.getSizeSm() )) {
+				errFatal("spWlturb::step","Inflow Sizes dont match! "<< grid_inflow->getSize() <<" != "<<mWlt.getSizeSm() , SIMWORLD_PLUGINERROR);
+			}
+
+			if(mWlt.getFilenameInflow().length() == 0) {
+				debMsg("spWlturb::step","Direct inflow init from "<<mNameInflow);
+
+				/*
+				//float *infl = mWlt.getArrayInflow();
+				Grid<Real>* wlinflow = mWlt.getGridInflow();
+				FOR_IJK_GRID(grid_inflow) {
+					//const int index = mWlt.getIndex(i,j,k);
+					//infl[index] = grid_inflow->getGlobal(i,j,k);
+					wlinflow->getGlobal(i,j,k) = grid_inflow->getGlobal(i,j,k);
+					//infl[index] += i/40.;
+				} */
+			} 
+			// else load from file during wlturb step
+
+			// perform actual step...
+			mWlt.step(grid_inflow);
+
+			// make sure the current grid pointer is valid
+			Grid<Real>* densXl = mpPlParams->getGridReal(mNameXL);
+			if(mWlt.getVectorNoise()->getDensityBig() != &densXl->getGlobal(0,0,0)) {
+				std::string mNameXlOld = "wlturb-xl-old";
+				Grid<Real>* densXl2 = mpPlParams->getGridReal(mNameXlOld);
+				swapGrids(mpPlParams, mNameXL, mNameXlOld);
+			}
+
+			debMsg("spWlturb"," done ");
+			return true;
+		};
+
+	protected:
+		//Real mTest;
+		WaveletTurbulencer mWlt;
+		std::string mNameVel, mNameInflow, mNameFlags, mNameXL;
+
+		bool mInitedObstacles;
+};
+
+
+
+#endif // DDF_WLTURB==1
+
+//*****************************************************************************
+// MakeMeshWavePlugin function has always to be defined
+SolverPlugin* MakeWlturbPlugin(std::string name) { 
+#	if DDF_WLTURB==1
+	if(name.compare( "wlturb" )==0) {
+		return new spWlturb;
+
+	} else if(name.compare( "--------------" )==0) {
+		return NULL;
+
+	} // */
+#	endif // DDF_MESHSURFACE==1 
+	return NULL;
+}
+
+}; // DDF
+
+

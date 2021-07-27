@@ -1,0 +1,186 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * Basic grid class
+ *
+ *****************************************************************************/
+
+#ifndef DDF_PATCHES_H
+#define DDF_PATCHES_H
+
+#include "globals.h"
+#include "vectorbase.h"
+namespace DDF {
+
+// patch grid configuration 
+
+//#ifndef DDF_USEPATCHES
+//#define DDF_USEPATCHES false
+//#endif // DDF_USEPATCHES
+//const bool gUsePatches = DDF_USEPATCHES;
+
+// size of a single patch (constant)
+#ifndef DDF_PATCHSIZE
+#if DDF_DEBUG==1
+#define DDF_PATCHSIZE 6
+#else
+#define DDF_PATCHSIZE 16
+#endif
+#endif // DDF_PATCHSIZE
+const int gPatchSize = DDF_PATCHSIZE;
+
+#ifndef DDF_DEBUG
+#define DDF_DEBUG 0
+#endif // DDF_DEBUG
+
+// globals, allocated in globals.cpp
+extern int gPatchIdCounter;
+
+//*****************************************************************************
+// container for the data of a single patch, grid helper class
+// all public access...
+class Patch {
+	public:
+		// init newPatch
+		Patch(void *data, int elemsize, int boundary, nVec3i off, 
+				int id, int gridid, int threadid) :
+			mpData(data), 
+			mElemSize(elemsize),
+			mBoundary(boundary),
+			mOffset(off),
+			mPatchId(id), mParentId(gridid), mThreadId(threadid),
+			mAllocBytes(0) , mLastPassId(-1),
+			mLocked(false)
+			{ };
+		~Patch() { 
+			// memory is managed by grid/patchmanager
+		};
+
+		bool isInside(int x,int y, int z) {
+			//debMsg("Patch::isInside","At "<<PRINT_VEC(x,y,z)<<", off="<<mOffset<<" = "<<mOffset[0]<<","<<mOffset[1]<<","<<mOffset[0] );
+			if(x < mOffset[0]  ) return false;
+			if(y < mOffset[1]  ) return false;
+			if(z < mOffset[2]  ) return false;
+			if(x>= mOffset[0]+gPatchSize) return false;
+			if(y>= mOffset[1]+gPatchSize) return false;
+			if(z>= mOffset[2]+gPatchSize) return false;
+			return true;
+		}
+
+		std::string toString() {
+			std::ostringstream out;
+			out <<"id=#"<<mPatchId<<", data="<<(long)(mpData)<<", elemsize="<<mElemSize<<", boundary="<<mBoundary<<", off="<<mOffset<<", parent=#"<<mParentId
+				<<" lastPass="<<mLastPassId<<" lock="<<mLocked
+				<<" ";
+
+			if(DDF_DEBUG) {
+				int s = getByteSize()/sizeof(Real);
+				Real *p = (Real*)mpData;
+				for(int i=0; i<s; i++) {
+					out <<p[i]<<",";
+				}
+				out <<"|";
+			}
+
+			return out.str();
+		}
+
+		typedef unsigned int PatchKey;
+		static PatchKey makeKey(nVec3i o) {
+			PatchKey k = 0;
+			unsigned int c;
+			//const nVec3i oOrg = o; // debug
+			o += nVec3i(gPatchSize*128);
+			o /= gPatchSize;
+			o -= nVec3i(128);
+			// TODO debug check range -128 to 127
+			if(DDF_DEBUG) {
+				for(int i=0; i<3; i++) {
+					if(o[i]<-100 || o[i]>100) errFatal("makeKey","Invalid patch key generated! "<<o,SIMWORLD_GRIDERROR);
+				}
+			}
+			c = (o[0]+0) & 0xFF; k+=c;
+			c = (o[1]+0) & 0xFF; k+=c<<8;
+			c = (o[2]+0) & 0xFF; k+=c<<16;
+			//debMsg("makeKey","for o="<<oOrg<<", is "<<o<<" k="<<k); // debug
+			return k;
+		}
+
+		// acess functions
+		size_t getByteSize() { return mElemSize*CUBEFUNC(gPatchSize+2*mBoundary); }
+		void   setAllocBytes(size_t set) { mAllocBytes = set; }
+
+		inline bool getLocked() { return mLocked; }
+		inline void setLocked(bool set) { mLocked = set; }
+
+		inline int  getLastPassId() { return mLastPassId; }
+		inline void setLastPassId(int set) { mLastPassId = set; }
+
+		// public data members
+		//! data array pointer
+		void *mpData;
+		//! size of an element (in bytes)
+		int mElemSize;
+		//! no of elements for boundary
+		int mBoundary;
+		//! patch offset (global)
+		nVec3i mOffset;
+		//! patch id
+		int mPatchId;
+		//! identifier of corresponding grid
+		int mParentId;
+		//! allocator thread id
+		int mThreadId;
+		//! debugging, allocated size in Bytes (set by allocator)
+		size_t mAllocBytes;
+		//! test - store 3d neighbors
+		Patch* mpNbs[27];
+
+		//! debug - store id of last pass that was performed on this patch
+		// (for preventing multiple handlings of a single patch)
+		int mLastPassId;
+		//! state - locked or not...
+		bool mLocked;
+}; // Patch
+
+
+// use size of vectors for allocation
+//typedef Real PatchManagerAllocType;
+
+//*****************************************************************************
+// container for the data of a single patch, grid helper class
+class PatchManager {
+	private:
+		PatchManager() : mBytesAlloced(0) { };
+		~PatchManager() { };
+	public:
+		static PatchManager* getSingleton();
+
+		// memory allocation
+		Patch* getPatchMem(int gridid, int elemsize, int boundary, nVec3i off, int threadid);
+		void releasePatchMem(Patch* freep);
+		void cleanup();
+
+		// access / info functions
+		size_t getBytesAllloced() { return mBytesAlloced; }
+		std::string getInfoString();
+
+	private:
+		// patch management
+		std::vector<Patch*> mPmPatches;
+		std::vector<Patch*> mAllocated;
+		std::vector<Patch*> mFreed;
+		// stats
+		size_t mBytesAlloced;
+
+}; // PatchManager
+
+// global pointer for singleton
+extern PatchManager *gpPatchManager;
+// PatchManager* PatchManager::getSingleton() defined in globals.cpp
+
+}; // namespace DDF
+
+#endif // DDF_PATCHES_H

@@ -1,0 +1,1 @@
+cylinder_static ./obstacles/cylinder_middle_big.txt

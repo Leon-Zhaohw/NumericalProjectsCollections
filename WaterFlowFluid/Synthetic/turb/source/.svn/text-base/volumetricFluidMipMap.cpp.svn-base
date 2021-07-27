@@ -1,0 +1,571 @@
+/******************************************************************************
+*
+* DDF - volumetricFluidMipMap.cpp
+* This class contains functionality to load and store grid data into the format
+* Volumetric Fluid MipMap (.vfmm)
+*
+*****************************************************************************/
+
+
+#include "volumetricFluidMipMap.h"
+
+
+
+namespace DDF {
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// VFMMLoader class
+	/////////////////////////////////////////////////////////////////////
+
+	VFMMLoader::VFMMLoader() {
+
+	}
+
+
+	VFMMLoader::~VFMMLoader()
+	{
+
+	}
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportFluidVolume( std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, Vec3 winMin, Vec3 winMax )
+	{
+		// open hi gz file file
+		fileName = fileName + VFMM_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"wb9");
+
+		// write number of mip-map levels
+		//////////////////////////////////
+		short numMips = 1;
+		gzwrite(gzFile, &numMips, sizeof(short));
+
+		// write resolution of mip map
+		//////////////////////////////
+		short reso_x = (short)(winMax.x - winMin.x) + 1;
+		short reso_y = (short)(winMax.y - winMin.y) + 1;
+		short reso_z = (short)(winMax.z - winMin.z) + 1;
+
+		gzwrite(gzFile, &reso_x, sizeof(short));
+		gzwrite(gzFile, &reso_y, sizeof(short));
+		gzwrite(gzFile, &reso_z, sizeof(short));
+
+		// global center
+		short minCorner_x = (short)(winMin.x);
+		short minCorner_y = (short)(winMin.y);
+		short minCorner_z = (short)(winMin.z);
+
+		gzwrite(gzFile, &minCorner_x, sizeof(short));
+		gzwrite(gzFile, &minCorner_y, sizeof(short));
+		gzwrite(gzFile, &minCorner_z, sizeof(short));
+
+		// write grid data
+		///////////////////
+		for (int z = winMin.z; z <= winMax.z; z++) {
+			for (int y = winMin.y; y <= winMax.y; y++) {
+				for (int x = winMin.x; x <= winMax.x; x++) {
+
+					float phi = (float)phiGrid->getGlobal(x,y,z);
+					float vec_x = (float)velGrid->getGlobal(x,y,z).x;
+					float vec_y = (float)velGrid->getGlobal(x,y,z).y;
+					float vec_z = (float)velGrid->getGlobal(x,y,z).z;
+
+					gzwrite(gzFile, &phi, sizeof(float));
+					gzwrite(gzFile, &vec_x, sizeof(float));
+					gzwrite(gzFile, &vec_y, sizeof(float));
+					gzwrite(gzFile, &vec_z, sizeof(float));
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportFluidVolume( std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, AABB box )
+	{
+		exportFluidVolume(fileName, phiGrid, velGrid, box.min(), box.max());
+	}
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportFluidVolume( std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid )
+	{
+		nVec3i reso_i = phiGrid->getSize();
+		Vec3 max = Vec3(reso_i.x - 1, reso_i.y - 1, reso_i.z - 1);
+		Vec3 min = Vec3(0,0,0);
+		exportFluidVolume(fileName, phiGrid, velGrid, min, max);
+	}
+
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportRealGrid( std::string fileName, Grid<Real>* realGrid )
+	{
+		// open hi gz file file
+		fileName = fileName + REAL_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"wb9");
+
+		// write number of mip-map levels
+		//////////////////////////////////
+		short numMips = 1;
+		gzwrite(gzFile, &numMips, sizeof(short));
+
+		// write resolution of mip map
+		//////////////////////////////
+		short reso_x = (short)(realGrid->getSizeX());
+		short reso_y = (short)(realGrid->getSizeY());
+		short reso_z = (short)(realGrid->getSizeZ());
+
+		gzwrite(gzFile, &reso_x, sizeof(short));
+		gzwrite(gzFile, &reso_y, sizeof(short));
+		gzwrite(gzFile, &reso_z, sizeof(short));
+
+		// global center
+		short minCorner_x = (short)(0);
+		short minCorner_y = (short)(0);
+		short minCorner_z = (short)(0);
+
+		gzwrite(gzFile, &minCorner_x, sizeof(short));
+		gzwrite(gzFile, &minCorner_y, sizeof(short));
+		gzwrite(gzFile, &minCorner_z, sizeof(short));
+
+		// write grid data
+		///////////////////
+		for (int z = 0; z < reso_z; z++) {
+			for (int y = 0; y < reso_y; y++) {
+				for (int x = 0; x < reso_x; x++) {
+
+					float val = (float)realGrid->getGlobal(x,y,z);
+					gzwrite(gzFile, &val, sizeof(float));
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+	}
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportVec3Grid( std::string fileName, Grid<Vec3>* vecGrid )
+	{
+		// open hi gz file file
+		fileName = fileName + VEC_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"wb9");
+
+		// write number of mip-map levels
+		//////////////////////////////////
+		short numMips = 1;
+		gzwrite(gzFile, &numMips, sizeof(short));
+
+		// write resolution of mip map
+		//////////////////////////////
+		short reso_x = (short)(vecGrid->getSizeX());
+		short reso_y = (short)(vecGrid->getSizeY());
+		short reso_z = (short)(vecGrid->getSizeZ());
+
+		gzwrite(gzFile, &reso_x, sizeof(short));
+		gzwrite(gzFile, &reso_y, sizeof(short));
+		gzwrite(gzFile, &reso_z, sizeof(short));
+
+		// global center
+		float minCorner_x = (short)(0);
+		float minCorner_y = (short)(0);
+		float minCorner_z = (short)(0);
+
+		gzwrite(gzFile, &minCorner_x, sizeof(short));
+		gzwrite(gzFile, &minCorner_y, sizeof(short));
+		gzwrite(gzFile, &minCorner_z, sizeof(short));
+
+		// write grid data
+		///////////////////
+		for (int z = 0; z < reso_z; z++) {
+			for (int y = 0; y < reso_y; y++) {
+				for (int x = 0; x < reso_x; x++) {
+
+					float vec_x = (float)vecGrid->getGlobal(x,y,z).x;
+					float vec_y = (float)vecGrid->getGlobal(x,y,z).y;
+					float vec_z = (float)vecGrid->getGlobal(x,y,z).z;
+
+					gzwrite(gzFile, &vec_x, sizeof(float));
+					gzwrite(gzFile, &vec_y, sizeof(float));
+					gzwrite(gzFile, &vec_z, sizeof(float));
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+	}
+
+
+	/////////////////////////////////////////////////////////////////////
+	Vec3 VFMMLoader::importFluidVolume( std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid )
+	{
+		// open gz file file
+		fileName = fileName + VFMM_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"rb");
+		if (gzFile == NULL) return Vec3(0,0,0);
+			//errFatal("volumetricFluidMipMap.cpp","file handle invalid: " << (fileName.c_str()) << "\n", SIMWORLD_INITERROR);  
+		
+		// read number of mip-maps
+		//////////////////////////
+		short numMipMaps = 0;
+		if (gzread(gzFile, &numMipMaps, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read resolution
+		//////////////////
+		short resolution_x = 0;
+		short resolution_y = 0;
+		short resolution_z = 0;
+
+		if (gzread(gzFile, &resolution_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read minCorner
+		//////////////////
+		short minCorner_x = 0;
+		short minCorner_y = 0;
+		short minCorner_z = 0;
+
+		if (gzread(gzFile, &minCorner_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+
+		//hack
+		minCorner_z = 2;
+		
+		// read grid data
+		/////////////////
+
+		for (int z = 0; z < resolution_z; z++) {
+			for (int y = 0; y < resolution_y; y++) {
+				for (int x = 0; x < resolution_x; x++) {
+	
+					float phi = 0.0f;
+					if (gzread(gzFile, &phi, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					phiGrid->setGlobal(phi, x, y, z);
+
+					float vec_x = 0;
+					float vec_y = 0;
+					float vec_z = 0;
+					if (gzread(gzFile, &vec_x, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_y, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_z, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					velGrid->setGlobal(Vec3(vec_x, vec_y, vec_z), x, y, z);
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+
+
+		// return resolution
+		return Vec3(resolution_x, resolution_y, resolution_z);
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	DDF::AABB VFMMLoader::importFluidVolumeToBox( std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid )
+	{
+		// open gz file file
+		fileName = fileName + VFMM_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"rb");
+		if (gzFile == NULL) { 
+			//errFatal("volumetricFluidMipMap.cpp","file handle invalid: " << (fileName.c_str()) << "\n", SIMWORLD_INITERROR);  
+			AABB badBox = AABB();
+			badBox.index = -1;
+			return badBox;
+		}
+		// read number of mip-maps
+		//////////////////////////
+		short numMipMaps = 0;
+		if (gzread(gzFile, &numMipMaps, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read resolution
+		//////////////////
+		short resolution_x = 0;
+		short resolution_y = 0;
+		short resolution_z = 0;
+
+		if (gzread(gzFile, &resolution_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read minCorner
+		//////////////////
+		short minCorner_x = 0;
+		short minCorner_y = 0;
+		short minCorner_z = 0;
+
+		if (gzread(gzFile, &minCorner_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read grid data
+		/////////////////
+
+		for (int z = minCorner_z; z < resolution_z + minCorner_z; z++) {
+			for (int y = minCorner_y; y < resolution_y + minCorner_y; y++) {
+				for (int x = minCorner_x; x < resolution_x + minCorner_x; x++) {
+
+					float phi = 0.0f;
+					if (gzread(gzFile, &phi, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					//phiGrid->setGlobal(phi, x, y, z);
+					phiGrid->setGlobal(phi, x, y, z);
+
+					float vec_x = 0;
+					float vec_y = 0;
+					float vec_z = 0;
+					if (gzread(gzFile, &vec_x, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_y, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_z, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					velGrid->setGlobal(Vec3(vec_x, vec_y, vec_z), x, y, z);
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+
+
+		// return box
+		AABB box = AABB(Vec3(minCorner_x, minCorner_y, minCorner_z), Vec3(minCorner_x + resolution_x - 1, minCorner_y + resolution_y - 1, minCorner_z + resolution_z - 1));
+		return box;
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::importRealGrid( std::string fileName, Grid<Real>* realGrid )
+	{
+		// open gz file file
+		fileName = fileName + REAL_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"rb");
+		if (gzFile == NULL) errFatal("volumetricFluidMipMap.cpp","file handle invalid: " << (fileName.c_str()) << "\n", SIMWORLD_INITERROR);  
+
+		// read number of mip-maps
+		//////////////////////////
+		short numMipMaps = 0;
+		if (gzread(gzFile, &numMipMaps, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read resolution
+		//////////////////
+		short resolution_x = 0;
+		short resolution_y = 0;
+		short resolution_z = 0;
+
+		if (gzread(gzFile, &resolution_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read minCorner
+		//////////////////
+		short minCorner_x = 0;
+		short minCorner_y = 0;
+		short minCorner_z = 0;
+
+		if (gzread(gzFile, &minCorner_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read grid data
+		/////////////////
+
+		for (int z = 0; z < resolution_z; z++) {
+			for (int y = 0; y < resolution_y; y++) {
+				for (int x = 0; x < resolution_x; x++) {
+
+					float val = 0.0f;
+					if (gzread(gzFile, &val, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					realGrid->setGlobal(val, x, y, z);
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::importVec3Grid( std::string fileName, Grid<Vec3>* vecGrid )
+	{
+		// open gz file file
+		fileName = fileName + VEC_Ext;
+		gzFile gzFile = gzopen(fileName.c_str(),"rb");
+		if (gzFile == NULL) errFatal("volumetricFluidMipMap.cpp","file handle invalid: " << (fileName.c_str()) << "\n", SIMWORLD_INITERROR);  
+
+		// read number of mip-maps
+		//////////////////////////
+		short numMipMaps = 0;
+		if (gzread(gzFile, &numMipMaps, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read resolution
+		//////////////////
+		short resolution_x = 0;
+		short resolution_y = 0;
+		short resolution_z = 0;
+
+		if (gzread(gzFile, &resolution_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &resolution_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read minCorner
+		//////////////////
+		short minCorner_x = 0;
+		short minCorner_y = 0;
+		short minCorner_z = 0;
+
+		if (gzread(gzFile, &minCorner_x, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_y, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+		if (gzread(gzFile, &minCorner_z, sizeof(short)) != sizeof(short)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+
+
+		// read grid data
+		/////////////////
+
+		for (int z = 0; z < resolution_z; z++) {
+			for (int y = 0; y < resolution_y; y++) {
+				for (int x = 0; x < resolution_x; x++) {
+
+					float vec_x = 0;
+					float vec_y = 0;
+					float vec_z = 0;
+
+					if (gzread(gzFile, &vec_x, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_y, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					if (gzread(gzFile, &vec_z, sizeof(float)) != sizeof(float)) { errFatal("volumetricFluidMipMap.cpp","gzread failed", SIMWORLD_INITERROR);  }
+					vecGrid->setGlobal(Vec3(vec_x, vec_y, vec_z), x, y, z);
+				}
+			}
+		}
+
+		// flush and close file
+		gzclose(gzFile);
+	}
+	/////////////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportFluidVolumeDLM(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, Vec3 winMin, Vec3 winMax) {
+
+		// init string converter
+		convert cvt;
+
+		// build filenames
+		std::string phi_fileName = fileName + "_phi" + DLM_Ext;
+		std::string velX_fileName = fileName + "_velX" + DLM_Ext;
+		std::string velY_fileName = fileName + "_velY" + DLM_Ext;
+		std::string window_fileName = fileName + "_win" + DLM_Ext;
+
+		// compute resolution
+		Vec3 resolution = winMax - winMin + Vec3(1,1,1);
+
+		// write phi
+		//////////////
+		std::fstream file;
+		file.open (phi_fileName.c_str(), std::ios::out);
+
+		// write data
+		int z = 2; // z = constant: mZAxisPlane
+		for (int x = winMin.x; x < winMin.x + resolution.x; x++) {
+
+			// write y values as line
+			for (int y = winMin.y; y < winMin.y + resolution.y - 1; y++) {
+				float val = phiGrid->getGlobal(x,y,z);
+				file << val << ",";
+			}
+			// last value in line (\n ending)
+			float val = phiGrid->getGlobal(x,resolution.y - 1,z);
+			file << val << std::endl;
+		}
+
+		// flush and close files
+		file.close();
+
+
+		// write vx
+		//////////////
+		file.open (velX_fileName.c_str(), std::ios::out);
+
+		// write data
+		//int z = 2; // z = constant: mZAxisPlane
+		for (int x = winMin.x; x < winMin.x + resolution.x; x++) {
+
+			// write y values as line
+			for (int y = winMin.y; y < winMin.y + resolution.y - 1; y++) {
+				Vec3 val = velGrid->getGlobal(x,y,z);
+				file << val.x << ",";
+			}
+			// last value in line (\n ending)
+			Vec3 val = velGrid->getGlobal(x,resolution.y - 1,z);
+			file << val.x << std::endl;
+		}
+
+		// flush and close files
+		file.close();
+
+		// write vy
+		//////////////
+		file.open (velY_fileName.c_str(), std::ios::out);
+
+		// write data
+		//int z = 2; // z = constant: mZAxisPlane
+		for (int x = winMin.x; x < winMin.x + resolution.x; x++) {
+
+			// write y values as line
+			for (int y = winMin.y; y < winMin.y + resolution.y - 1; y++) {
+				Vec3 val = velGrid->getGlobal(x,y,z);
+				file << val.y << ",";
+			}
+			// last value in line (\n ending)
+			Vec3 val = velGrid->getGlobal(x,resolution.y - 1,z);
+			file << val.y << std::endl;
+		}
+
+		// flush and close files
+		file.close();
+
+
+		// export window
+		////////////////
+		file.open (window_fileName.c_str(), std::ios::out);
+
+		// write data
+		file << winMin.x << ',' << winMin.y << ',' << winMin.z << std::endl;
+		file << winMax.x << ',' << winMax.y << ',' << winMax.z << std::endl;
+
+		// flush and close files
+		file.close();
+
+	}
+
+
+	/////////////////////////////////////////////////////////////////////
+	void VFMMLoader::exportFluidVolumeDLM(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, AABB box) {
+		exportFluidVolumeDLM(fileName, phiGrid, velGrid, box.min(), box.max());
+	}
+
+	
+} // DDF

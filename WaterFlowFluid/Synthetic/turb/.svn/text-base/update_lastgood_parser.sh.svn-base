@@ -1,0 +1,27 @@
+#!/bin/bash
+
+#MDATE=$(date +"%y%m%d")
+#echo ${MDATE}
+#FILEN="${HOME}/bu/ddf_${MDATE}_r${RANDOM}.tar.bz"
+#echo ${FILEN}
+echo From: ${1}
+
+#tar cjvf ${FILEN} \
+#	./source/ \
+#	./util/ \
+#	./testCmakeCalls.txt ./makebu.sh ./CMakeLists.txt ./config.h.cmake
+#
+#ls -srtl ~/bu |tail -3
+#
+
+if test -e "${1}"; then
+	echo Exists, copying...
+	cp -v ${1}/pbrtlex.cpp ./util/lastgood_parser/pbrtlex.cpp
+	cp -v ${1}/pbrtparse.cpp ./util/lastgood_parser/pbrtparse.cpp
+	cp -v ${1}/pbrtparse.cpp.h ./util/lastgood_parser/pbrtparse.cpp.h
+	cp -v ${1}/pbrtparse.cpp.h ./util/lastgood_parser/pbrtparse.hpp
+	# one of those should work...
+	cp -v ${1}/pbrtparse.hpp ./util/lastgood_parser/pbrtparse.cpp.h
+	cp -v ${1}/pbrtparse.hpp ./util/lastgood_parser/pbrtparse.hpp
+fi
+

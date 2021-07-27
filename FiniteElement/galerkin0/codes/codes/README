@@ -1,0 +1,30 @@
+
+This directory contains a collection of matlab codes for solving either 
+pure convection or convection/diffusion on [-1,1]^2.
+
+At present, only three convection codes are here.  (I have more,
+but they're not yet cleaned up.)
+
+To run those that are here, type in matlab:
+
+N=33; c_acc         % explicit convection, with "accurate" start up
+N=33; cfast         % same as above, but simple start-up
+N=33; conv_diff     % same as above, + implicit diffusion
+N=33; cd_overint    % same as above, with dealiased convection
+
+for polynomial order N=33.  Look at the source for these driver 
+codes to see the differences.  
+
+The first two solve pure convection (no diffusion) with
+plane rotation.
+
+The next two solve semi-implicit convect-diffusion with a
+sheared rotating velocity field. ( quiver(xx,yy,cx,cy) 
+to see the field.)
+
+The first three drivers are without dealiasing.
+
+
+
+
+

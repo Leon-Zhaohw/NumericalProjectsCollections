@@ -1,0 +1,16 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007 Nils Thuerey
+ *
+ * CMake config.h template file
+ *
+ *****************************************************************************/
+
+
+#cmakedefine HAVE_MALLOC_H 1
+
+#cmakedefine HAVE_ZLIB 1
+
+#cmakedefine HAVE_PNGLIB 1
+

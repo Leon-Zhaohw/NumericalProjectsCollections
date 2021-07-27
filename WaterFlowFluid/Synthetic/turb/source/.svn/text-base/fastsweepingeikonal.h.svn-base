@@ -1,0 +1,61 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2008 Johannes Schmid
+ *
+ * Header for a Fast Sweeping Method (FSM) solver for the Eikonal equation
+ * 
+ *****************************************************************************/
+
+#ifndef FASTSWEEPINGEIKONAL_H
+
+#include "globals.h"
+#include "solverparams.h"
+#include "vectorbase.h"
+#include "fastmarch.h"
+
+namespace DDF {
+
+enum FSFlags {
+	FSBOUNDARY,
+	FSINTERFACE,
+	FSINSIDE,
+	FSOUTSIDE
+};
+
+class FastSweepingEikonal
+{
+public:
+	//! Constructor 
+	FastSweepingEikonal(int sizex, int sizey, int sizez, int slice2d, FluidSolver* pFluidSolver);
+	//! Destructor 
+	~FastSweepingEikonal();
+
+	void solveEikonal(FlagGrid* fsFlags, Grid<Real>* pPhi, Real epsilon, bool doVelTransport);
+
+	static const Real mFarValue;
+
+	void setMaxIter(int set) { mMaxIterations=set; }
+
+protected:
+
+	int getUpwindCells(/*GridCellCoord* cells, */Real* phi, char* dir, int x, int y, int z, int flag);
+	Real computeDistance(int x, int y, int z, int flag, Real* uwphi, int uwcnt);
+	void velExtrapolation(int x, int y, int z, Real phiNew, Real* uwphi, char* uwdir, int uwcnt);
+
+	Grid<Real>* mpPhi;
+	FlagGrid* mpFSFlags;
+	int mSizex, mSizey, mSizez;
+	int m2DSlice;
+	Real mEpsilon;
+
+	int mNumIterations;
+	int mMaxIterations;
+
+	FmValueTransport<Vec3> mVT;
+};
+
+} // namespace DDF
+
+#define FASTSWEEPINGEIKONAL_H
+#endif // FASTSWEEPINGEIKONAL_H

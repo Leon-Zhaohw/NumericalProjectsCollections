@@ -44,7 +44,11 @@ Bounded Biharmonic Weights for Real-Time Deformationhttps://igl.ethz.ch/projects
 
 Smooth Shape-Aware Functions with Controlled Extremahttps://igl.ethz.ch/projects/monotonic/
 
+**Practicalities**
 
+http://www.tkim.graphics/DYNAMIC_DEFORMABLES/**Dynamic Deformables:
+Implementation and Production Practicalities**
+*SIGGRAPH Courses, 2020*
 
 ### FiniteElement
 
@@ -74,11 +78,19 @@ https://people.sc.fsu.edu/~jburkardt/m_src/
 
 Mixed Finite Elements for Variational Surface Modelinghttps://igl.ethz.ch/projects/mixed-fem/
 
+galerkin0
+
+Notes on Galerkin methods for incompressible flow simulation. https://www.mcs.anl.gov/~fischer/me528/
+
 ### Bubble
 
 **AcousticBubbles**
 
 Toward Animating Water with Complex Acoustic Bubbleshttps://www.cs.cornell.edu/projects/Sound/bubbles/
+
+boling
+
+**A simple boiling module**http://www.tkim.graphics/
 
 ### BoundaryElement
 
@@ -88,7 +100,15 @@ The Boundary Element Method with Programming这本书的源代码
 
 ### FluidSolidInteraction
 
+### FireFlameSmoke
 
+compress
+
+***Compressing Fluid Subspaces\***http://www.tkim.graphics/COMPRESSING/source.html
+
+resim
+
+***Subspace Fluid Re-Simulation\***http://www.tkim.graphics/RESIM/
 
 ### LinearSystem
 
@@ -185,11 +205,19 @@ phong
 
 Phong Deformation: A better C0 interpolant for embedded deformationhttp://graphics.stanford.edu/~djames/publications/
 
+days
+
+**A massive fractal in days, not years.**
+
 ### FLIP_MPM
 
 simpleflip
 
 https://www.cs.ubc.ca/~rbridson/。文件写入和展示画面部分有问题，不过对我只看变量的我来说等于没问题。
+
+narrowBand
+
+http://ntoken.com/pubs.html#Thuerey_2016_ofblend **Narrow Band FLIP for Liquid Simulations**
 
 ### Physics
 
@@ -226,6 +254,22 @@ https://www.pplusplus.lima-city.de/lib/data/femfluid/FEM%20Fluid%20Source.zip
 flux
 
 A Flux-Interpolated Advection Scheme for Fluid Simulationhttps://ryichando.graphics/
+
+perceptual
+
+Perceptual Evaluation of Liquid Simulation Methodshttps://ge.in.tum.de/publications/2017-sig-um/
+
+**Synthetic**
+
+Synthetic Turbulence using Artificial Boundary Layershttp://ntoken.com/pubs.html#Thuerey_2016_ofblend
+
+close
+
+***Closest Point Turbulence Source Code\***http://www.tkim.graphics/CPT/source.html
+
+eigenFluid
+
+http://www.tkim.graphics/**Scalable laplacian eigenfluids.**
 
 ### Lights&Shadow
 
@@ -278,6 +322,12 @@ http://graphics.stanford.edu/~djames/publications/
 项目地址：https://cs.uwaterloo.ca/~c2batty/
 
 代码地址：https://github.com/nepluno/libWetCloth
+
+论文名称：**Eulerian solid-fluid coupling**
+
+项目地址：http://www.tkim.graphics/
+
+代码地址：https://github.com/yunteng/EULERSF
 
 ### Gemotry
 
@@ -521,6 +571,12 @@ https://github.com/songrun/SeamAwareDecimater
 
 代码地址：https://github.com/electronicarts/dem-bones
 
+论文名称：Implicit Skinning: Real-Time Skin Deformation with Contact Modeling
+
+项目地址：他人实现
+
+代码地址：https://github.com/likangning93/HRBF-Skin
+
 ### Water&Flow&Fluid
 
 论文名称：Functional Optimization of Fluidic Devices with Differentiable Stokes Flow
@@ -566,6 +622,20 @@ https://github.com/songrun/SeamAwareDecimater
 项目地址：https://cs.uwaterloo.ca/~c2batty/
 
 代码地址：https://github.com/christopherbatty/FluidRigidCoupling2D
+
+论文名称：Fluid mixing
+
+项目地址：https://sites.google.com/view/valentinresseguier/projects
+
+代码地址：https://github.com/vressegu/mixing
+
+论文名称：Models under location uncertainty
+
+项目地址：https://sites.google.com/view/valentinresseguier/projects
+
+代码地址：https://github.com/vressegu/LU_SALT_SelfSim
+
+https://github.com/vressegu/sqgmu
 
 ### BubbleFilmFoam
 
@@ -707,6 +777,30 @@ IEEE Transactions on Pattern Analysis and Machine Intelligence (PAMI), 2019
 
 代码地址：http://pages.cs.wisc.edu/~sifakis/project_pages/SIGGRAPH_ASIA_Code_Release.zip
 
+论文名称：**Resolving Fluid Boundary Layers with. Particle Strength Exchange and Weak Adaptivity(siggraph 2016)**
+
+项目地址：https://zhxx1987.github.io/#cod
+
+代码地址：https://github.com/zhxx1987/IVOCK
+
+论文名称：A PPPM fast Summation Method for Fluids and beyond
+
+项目地址：https://zhxx1987.github.io/#cod
+
+代码地址：https://github.com/zhxx1987/PPPM_VORTEX_Bouyant_Flow_sample
+
+论文名称：FLIP-liquidSolverwithAnMGPCGpressureSolver
+
+项目地址：https://zhxx1987.github.io/#cod
+
+代码地址：https://github.com/zhxx1987/tbb_liquid_amgpcg
+
+论文名称：Interpolations of Smoke and Liquid Simulations
+
+项目地址：http://www.ntoken.com/proj_ofblend.html
+
+代码地址：https://github.com/thunil/ofblend
+
 ### FLIP&MPM
 
 论文名称：Lagrangian-Eulerian Multi-Density Topology Optimization with the Material Point Method
@@ -844,6 +938,12 @@ https://zhipeiyan.github.io/
 http://vcg.isti.cnr.it/~cignoni/
 
 https://cs.uwaterloo.ca/~c2batty/
+
+http://gamma.cs.unc.edu/software/#collision 碰撞检测的一大堆
+
+http://www.tkim.graphics/
+
+https://www.cwimd.nl/doku.php?id=codes:start
 
 ### 未成功打开
 

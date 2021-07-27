@@ -1,0 +1,534 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2008 Johannes Schmid
+ *
+ * Implementation for a Fast Iterative Method (FIM) solver for the Eikonal equation
+ * 
+ *****************************************************************************/
+
+#include "fastiterativeeikonal.h"
+#include "fastmarch.h"
+
+#define FIMDEBUG 0
+
+namespace DDF {
+
+const Real gFIFarValue = 10000000.0;
+
+FastIterativeEikonal::FastIterativeEikonal(int sizex, int sizey, int sizez,
+												 FluidSolver* pFluidSolver) :
+	mpPhi(NULL), mpFIFlags(NULL), mpFluidSolver(pFluidSolver),
+	mSizex(sizex), mSizey(sizey), mSizez(sizez),
+	mMaxTime(4), mEpsilon(0.001), mDoValTransport(false),
+	mCntInitial(0), mCntEncountered(0), mCntReactivated(0), mNumIterations(0), mMaxIterations(0)
+{
+	mMaxIterations = mSizex*3; // this value was chosen without proper analysis
+}
+
+
+FastIterativeEikonal::~FastIterativeEikonal()
+{
+}
+
+void FastIterativeEikonal::addToInitialList(int x, int y, int z)
+{
+	/*
+	int flag = mpFIFlags->getGlobal(x,y,z);
+	assert(flag == INTERFACE)
+	*/
+
+	GridCellCoord entry;
+	entry.x = x;
+	entry.y = y;
+	entry.z = z;
+	mActiveList.push_back(entry);
+	mCntInitial++;
+}
+
+void FastIterativeEikonal::setInitialList(std::list<GridCellCoord>& initList)
+{
+	mActiveList.clear();
+	mActiveList = initList;
+	mCntInitial = initList.size();
+}
+
+void FastIterativeEikonal::activateInitialList(void)
+{
+	std::list<GridCellCoord>::const_iterator it, it_end;
+	it_end = mActiveList.end();
+	for (it = mActiveList.begin(); it != it_end; ++it) {
+		const GridCellCoord& c = *it;
+		mpFIFlags->getGlobal(c.x,c.y,c.z) = FIACTIVE;
+	}
+}
+
+//
+// FastIterativeEikonal::visitNeighbour
+// This method adds a cell to the active list, if it satisfies
+// all of the following conditions:
+// * its coordinates are valid
+// * it is not already in the active list
+// * it is not an interface cell (fiflag == FIINTERFACE)
+// * it is not across the interface (sigh of phi value corresponds to marching direction)
+// * has either not been visited before, or this visit results in a better value for it
+int FastIterativeEikonal::visitNeighbour(int x, int y, int z, const std::list<GridCellCoord>::iterator& insert_it)
+{
+	if(x<1) return 1; // plain array test
+	if(y<1) return 2;
+	if(x>(mSizex-2)) return 3;
+	if(y>(mSizey-2)) return 4;
+	if(gDim==3) { // 3D
+		if(z<1) return 5;
+		if(z>(mSizez-2)) return 6;
+	} else {
+		// ToDo: could add some sanity check here (similar to FMM)
+	}
+
+	const int flag = mpFIFlags->getGlobal(x,y,z);
+	if (flag == FIACTIVE)			// is already in active list
+		return 10;
+	if (flag == FIINTERFACE)		// don't touch interface cells
+		return 11;
+
+	const Real phi = mpPhi->getGlobal(x,y,z);
+	if (phi*TDIR < 0)		// is across the interface
+		return 12;
+
+	char uwdir[3];
+	Real uwphi[3];
+	int uwcnt;
+	uwcnt = getUpwindCells(uwphi, uwdir, x, y, z);
+	Real phiNew = computeDistance(x, y, z, uwphi, uwcnt);
+
+	if (flag == FIALIVE)
+	{
+		// this node was already processed, we'll see if we can get a
+		// better phi-value now
+
+		if (phiNew*TDIR + mEpsilon >= phi*TDIR)
+			return 13;		// no better phi-value
+			
+		mCntReactivated++;
+	} else if (flag == FIFAR)
+		mCntEncountered++;
+
+	mpPhi->getGlobal(x,y,z) = phiNew;
+	mpFIFlags->getGlobal(x,y,z) = FIACTIVE;
+
+	mActiveList.insert(insert_it, GridCellCoord(x,y,z));
+	return 0;
+}
+
+int FastIterativeEikonal::getUpwindCells(/*GridCellCoord* cells, */Real* phi, char* dir, int x, int y, int z)
+{
+	int okcnt = 0;
+	Real phiplus, phiminus;
+	int fplus, fminus;
+
+	const int VALID_UW = FIINTERFACE;
+
+	// condition for upwind value:
+	// cell is active or alive AND
+	//		(|phi| is smaller than neighbour in other direction
+	//		OR neighbour in other direction is not active or alive)
+	//
+	// WARNING: the special case where both cells are valid and
+	// both phis are equal must also be respected!!
+
+	fplus  = mpFIFlags->getGlobal(x+1,y,z);
+	fminus = mpFIFlags->getGlobal(x-1,y,z);
+	phiplus  = mpPhi->getGlobal(x+1,y,z);
+	phiminus = mpPhi->getGlobal(x-1,y,z);
+	if ((fplus >= VALID_UW) &&
+		((phiplus*TDIR <= phiminus*TDIR) || (fminus < VALID_UW)))
+	{
+			phi[okcnt] = phiplus;
+			dir[okcnt] = 0;
+			okcnt++;
+	}
+	else if ((fminus >= VALID_UW) &&
+		((phiminus*TDIR < phiplus*TDIR) || (fplus < VALID_UW)))
+	{
+			phi[okcnt] = phiminus;
+			dir[okcnt] = 1;
+			okcnt++;
+	}
+
+	fplus  = mpFIFlags->getGlobal(x,y+1,z);
+	fminus = mpFIFlags->getGlobal(x,y-1,z);
+	phiplus  = mpPhi->getGlobal(x,y+1,z);
+	phiminus = mpPhi->getGlobal(x,y-1,z);
+	if ((fplus >= VALID_UW) &&
+		((phiplus*TDIR <= phiminus*TDIR) || (fminus < VALID_UW)))
+	{
+			phi[okcnt] = phiplus;
+			dir[okcnt] = 2;
+			okcnt++;
+	}
+	else if ((fminus >= VALID_UW) &&
+		((phiminus*TDIR < phiplus*TDIR) || (fplus < VALID_UW)))
+	{
+			phi[okcnt] = phiminus;
+			dir[okcnt] = 3;
+			okcnt++;
+	}
+
+	if (gDim==3) {
+		fplus  = mpFIFlags->getGlobal(x,y,z+1);
+		fminus = mpFIFlags->getGlobal(x,y,z-1);
+		phiplus  = mpPhi->getGlobal(x,y,z+1);
+		phiminus = mpPhi->getGlobal(x,y,z-1);
+		if ((fplus >= VALID_UW) &&
+			((phiplus*TDIR <= phiminus*TDIR) || (fminus < VALID_UW)))
+		{
+				phi[okcnt] = phiplus;
+				dir[okcnt] = 4;
+				okcnt++;
+		}
+		else if ((fminus >= VALID_UW) &&
+			((phiminus*TDIR < phiplus*TDIR) || (fplus < VALID_UW)))
+		{
+				phi[okcnt] = phiminus;
+				dir[okcnt] = 5;
+				okcnt++;
+		}
+	}
+
+	return okcnt;
+}
+
+Real FastIterativeEikonal::computeDistance(int x, int y, int z, Real* uwphi, int uwcnt)
+{
+	Real ret = (TDIR>0) ? std::numeric_limits<Real>::max() : -std::numeric_limits<Real>::max();
+	switch(uwcnt) {
+	case 3: {
+		
+		// take all values
+		Real ca=uwphi[0]*TDIR, cb=uwphi[1]*TDIR, cc=uwphi[2]*TDIR;
+
+		if (ca > cb) std::swap(ca, cb);
+		if (cb > cc) std::swap(cb, cc);
+		if (ca > cb) std::swap(ca, cb);
+
+		ret = ca + 1.0;
+		if (ret > cb) {
+			ret = 0.5 * (ca + cb + sqrt(2-(ca-cb)*(ca-cb)));
+			
+			if (ret > cc) {
+				const Real csqrt = std::max(0.0, -2.0*(ca*ca+cb*cb-cb*cc+cc*cc-ca*(cb+cc))+3);
+				ret = 1.0/3*(ca + cb + cc + sqrt(csqrt));
+			}
+		}
+
+		ret *= TDIR;
+		} break; 
+
+	case 2: {
+		// take just the 2 ok values
+		if (fabs(uwphi[0]-uwphi[1]) >= 1.0) {
+			ret = std::min(uwphi[0]*TDIR,uwphi[1]*TDIR)*TDIR + TDIR;
+		} else {
+			// t=0.5*( a+b+ (2*g*g-(b-a)*(b-a))^0.5)
+			const Real csqrt = MAX(0. , 2.-(uwphi[1]-uwphi[0])*(uwphi[1]-uwphi[0]) );
+			// clamp to make sure the sqrt is valid
+			ret = 0.5*( uwphi[0]+uwphi[1]+ TDIR*sqrt(csqrt) );
+			//debMsg("RET","a="<<a<<" b="<<b<<" ret="<<ret );
+		}
+		} break; 
+
+	case 1: {
+		// just use the one remaining value
+		ret = uwphi[0] + TDIR; // direction = +- 1
+		} break; 
+
+	default:
+		errMsg("FIM::computeDistance"," at "<<x<<","<<y<<","<<z<< ", invalid case "<<uwcnt<<", phi values "<<uwphi[0]<<" "<<uwphi[1]<<" "<<uwphi[2]);
+		debugPrintGrid(z,x,y);
+		exit(1);
+
+		break;
+	}
+
+	return ret;
+}
+
+void FastIterativeEikonal::solveEikonal(int dir, int maxTime, Real epsilon, bool doValTransport)
+{
+	mMaxTime = maxTime;
+	mEpsilon = epsilon;
+	mDoValTransport = doValTransport;
+	mAnyz = mActiveList.front().z;
+	TDIR = dir;
+
+	if (doValTransport) {
+		mVT.setFsolver(mpFluidSolver);
+		mVT.initMarching();
+	}
+
+	char uwdir[3];
+	Real uwphi[3];
+	int uwcnt;
+	int anyz = mActiveList.front().z;
+
+	// the deal with isInitialFront and allConverged is the following:
+	// since, after advection, the level set isn't a signed distance field anymore,
+	// it is possible that the updates to the cells next to the interface can result
+	// increasing phi values (phiNew > phi), which is otherwise not possible (or a bug).
+	// it turned out that such increasing values can lead to the FIM algorithm not to
+	// terminate when propagated through space. therefore, we first iterate only over the
+	// nodes next to the interface, until all of them have converged.
+	bool isInitialFront = true, allConverged = false;
+
+	// isAtBorder is set to true if the phiNew value was clamped to mMaxTime.
+	bool isAtBorder;
+
+#if FIMDEBUG>0
+	int activecnt;
+	Real eMin, eMax, eSum;
+#endif
+	
+	mNumIterations = 0;
+	ActiveList::iterator it, it_next, it_end;
+	while ((!mActiveList.empty()) && (mNumIterations < mMaxIterations))
+	{
+
+#if FIMDEBUG>0
+		eMin = 9999999.0;
+		eMax = 0.;
+		eSum = 0.;
+		activecnt = 0;
+#endif
+
+#if FIMDEBUG>1
+		debugPrintGrid(anyz);
+#endif
+		//debMsg("FastIterativeEikonal::solveEikonal", "Iteration "<<mNumIterations<<": isInitialFront="<<isInitialFront);
+
+#if FIMDEBUG>0
+		if (mNumIterations > mMaxIterations - 10) {
+			for (ActiveListIterator it2 = mActiveList.begin(); it2 != mActiveList.end(); ++it2)
+				printf("(%d,%d,%d) ", (*it2).x, (*it2).y, (*it2).z);
+			printf("\n");
+		}
+#endif
+
+		allConverged = true;
+
+		// one iteration loops over all cells which are currently in active list
+		int bla = mActiveList.size();
+		it_end = mActiveList.end();
+		it = mActiveList.begin();
+		while (it != it_end)
+		{
+			// storing next iterator in case we need to delete this entry
+			it_next = it;
+			++it_next;
+			
+			GridCellCoord& c = *it;
+			int x = c.x, y = c.y, z = c.z;
+
+			if (mpFIFlags->getGlobal(x, y, z) == FIINTERFACE) {
+				allConverged = false;
+				// skip interface nodes
+				mActiveList.erase(it);
+				visitNeighbour(x-1, y  , z, it_next);
+				visitNeighbour(x+1, y  , z, it_next);
+				visitNeighbour(x  , y-1, z, it_next);
+				visitNeighbour(x  , y+1, z, it_next);
+				if (gDim == 3) {
+					visitNeighbour(x  ,y  , z-1, it_next);
+					visitNeighbour(x  ,y  , z+1, it_next);
+				}
+			} else {
+				uwcnt = getUpwindCells(uwphi, uwdir, x, y, z);
+
+				// update phi value
+				Real phi = mpPhi->getGlobal(x, y, z);
+				Real phiNew = computeDistance(x, y, z, uwphi, uwcnt);
+
+				// cap phi value to mMaxTime to ensure a monotonic distance field
+				if (phiNew*TDIR > mMaxTime) {
+					phiNew = TDIR*mMaxTime;
+					isAtBorder = true;
+				} else
+					isAtBorder = false;
+
+				// increasing phi values (|phiNew| > |phi|) are only allowed during
+				// the computation of the initial front (i.e. the neighbours of the
+				// interface). there, increasing values can occur due to the distortion
+				// of the distance field property during the levelset advection.
+				// once the marching front fulfils the distance field property, an
+				// increasing value indicates a bug.
+				if (phiNew*TDIR > phi*TDIR + mEpsilon) {
+					if (!isInitialFront) {
+						errFatal("FastIterativeEikonal::solveEikonal", "increasing phi value: "
+							<< phi << " to " << phiNew, -1);
+					} else {
+#if FIMDEBUG>0
+						warnMsg("FastIterativeEikonal::solveEikonal", "increasing phi value at intial front: "
+							<< phi << " to " << phiNew);
+#endif
+					}
+
+					//phiNew = phi;
+				}
+
+				mpPhi->getGlobal(x,y,z) = phiNew;
+			
+#if FIMDEBUG>0
+				Real e = (fabs(phi) < 10000.0) ? fabs(phi-phiNew) : 0.0;
+				if (e<eMin)	eMin = e;
+				if (e>eMax) eMax = e;
+				eSum += e;
+				activecnt++;
+#endif
+
+				// check for convergence
+				if (fabs(phi-phiNew) < mEpsilon)
+				{
+					// while we are iterating over the initial front, do not
+					// process any converged cells and delay the onward marching
+					// until the whole front has converged.
+					if (!isInitialFront) {
+						// otherwise remove c from activelist
+						mActiveList.erase(it);
+						mpFIFlags->getGlobal(x,y,z) = FIALIVE;
+
+						// add 1-ring neighbours to active list (validity checks
+						// are done within visitNeighbour) if we are still within
+						// the narrow band of mMaxTime
+						if (phiNew*TDIR < mMaxTime) 
+						{
+							visitNeighbour(x-1, y  , z, it_next);
+							visitNeighbour(x+1, y  , z, it_next);
+							visitNeighbour(x  , y-1, z, it_next);
+							visitNeighbour(x  , y+1, z, it_next);
+							if (gDim == 3) {
+								visitNeighbour(x  ,y  , z-1, it_next);
+								visitNeighbour(x  ,y  , z+1, it_next);
+							}
+						}
+				
+						if (mDoValTransport) {
+							// value transport = velocity extrapolation (currently).
+							// to remain compatible with the value transport of the
+							// FMM implementation, we use the same mechanism
+							// (FmValueTransport). therefore, we have to make up
+							// the (normalized) transport weights from our stored
+							// upwind values.
+							Real weights[6];
+							
+							for (int i=0; i<6; i++)
+								weights[i] = 0.0;
+
+							if (uwcnt == 1)
+								weights[(int)uwdir[0]] = 1.0;
+							else {
+								Real wnorm = 0.0;
+								for (int i=0; i<uwcnt; i++) {
+									Real w = fabs(phiNew - uwphi[i]);
+									//if (w > mEpsilon) {
+										weights[(int)uwdir[i]] = w;
+										wnorm += w;
+									//}
+								}
+
+								if (wnorm > 0.0)
+									wnorm = 1.0/wnorm;
+								else {
+									// wnorm == 0 can happen if phiNew was clamped
+									// to mMaxTime before. In that case, handle
+									// the situation gracefully. If not, it is a bug!
+									if (isAtBorder) {
+										for (int i=0; i<uwcnt; i++)
+											weights[(int)uwdir[i]] = 1.0;
+										wnorm = 1./3;
+									} else
+										errFatal("FastIterativeEikonal","Zero transportation weights! (phi="<<phi<<",phiNew="<<phiNew<<",uwcnt="<<uwcnt<<",uwphi0="<<uwphi[0]<<",uwphi1="<<uwphi[1]<<",uwphi2="<<uwphi[2]<<")",-1);
+								}
+								
+								for (int i=0; i<6; i++)
+									weights[i] *= wnorm;
+							} 
+							mVT.transpTouch(x,y,z,0,0,0,weights,phiNew); 
+						} // if (mDoValTransport)
+					} // if (!isInitialFront)
+				} // if (fabs(phi-phiNew) < mEpsilon)
+				else
+				{
+					allConverged = false;
+				}
+			} // if (mpFIFlags->getGlobal(x, y, z) == FIINTERFACE)
+			it = it_next;
+		} // while (it != it_end)
+		
+		if (allConverged)
+			isInitialFront = false;
+
+#if FIMDEBUG>0
+		printf("Iteration %d: Active cells %d (%d), Error avg %.4f, min %.4f, max %.4f\n",
+			mNumIterations, activecnt, mActiveList.size(), eSum/activecnt, eMin, eMax);
+#endif
+		mNumIterations++;
+	}
+
+	if (mNumIterations == mMaxIterations)
+		errFatal("FastIterativeEikonal::solveEikonal", "max iterations reached", -1);
+
+	// copy values into boundary
+	for(int i=0;i<        1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i+1,j,k); }
+	for(int i=mSizex-2;i<mSizex-1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i+1,j,k) = mpPhi->getGlobal(i,j,k); }
+	for(int i=0;i<mSizex;i++) 
+		for(int j=0;j<        1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i,j+1,k); }
+	for(int i=0;i<mSizex;i++) 
+		for(int j=mSizey-2;j<mSizey-1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j+1,k) = mpPhi->getGlobal(i,j,k); }
+	if(gDim==3) {
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=0;k<        1;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i,j,k+1); }
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=mSizez-2;k<mSizez-1;k++) { mpPhi->getGlobal(i,j,k+1) = mpPhi->getGlobal(i,j,k); }
+	}
+
+	debMsg("FastIterativeEikonal::solveEikonal","Stats - initial:"<<mCntInitial<<" encountered:"<<mCntEncountered<<" reactivated:"<<mCntReactivated<<" numIterations:" << mNumIterations <<" " );
+	mCntInitial = mCntEncountered = mCntReactivated = 0;
+}
+
+
+void FastIterativeEikonal::debugPrintGrid(int z, int focusx, int focusy)
+{
+	for (int j=mSizey-1; j>=0; j--) {
+		for (int i=0; i<mSizex; i++) {
+			Real phi = mpPhi->getGlobal(i,j,z);
+			int flag = mpFIFlags->getGlobal(i,j,z);
+			if ((i==focusx)&&(j==focusy))
+				printf(">");
+			else
+				printf(" ");
+			if (flag == FIBOUNDARY)
+				printf("-----");
+			else if (flag == FIFAR)
+				printf(" far ");
+			else if (phi > 1000)
+				printf("  inf");
+			else if (phi < -1000)
+				printf(" -inf");
+			else
+				printf("%5.2f", phi);
+			printf("|%d",flag);
+		}
+		printf("\n");
+	}
+	printf("\n");
+}
+
+} // namespace DDF
+

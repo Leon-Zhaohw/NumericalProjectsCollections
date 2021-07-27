@@ -1,0 +1,117 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * Geometry file reader
+ *
+ *****************************************************************************/
+
+#include "geomfile.h"
+#include "arrays.h"
+
+namespace DDF {
+
+
+GeomFile::GeomFile() :
+	mTwodGeominitSliceFactor(0.5),
+	mGridSize(-1), mSimSize(-1), mpGrid(NULL),
+	mHaveData(false), mIndexOrder(0)
+{ 
+	// ...
+};
+
+GeomFile::~GeomFile() { 
+	// ...
+};
+
+// read gz file
+bool GeomFile::initFromFile(std::string filename) {
+	int readErr = 0;
+
+	gzFile gzf;
+	//std::ostringstream outname;
+	//outname << mpGlob->getOutFilename();
+	gzf = gzopen(filename.c_str(), "rb");
+	if(gzf) {
+		int sx=-1,sy=-1,sz=-1;
+		gzread(gzf, &sx, sizeof(int) );
+		gzread(gzf, &sy, sizeof(int) );
+		gzread(gzf, &sz, sizeof(int) );
+		if(sx<1) { sx=1; readErr=1; }
+		if(sy<1) { sy=1; readErr=2; }
+		if(sz<1) { sz=1; readErr=3; }
+		mGridSize = nVec3i(sx,sy,sz);
+
+		if(!readErr) {
+			mpGrid = new ArrayPlain<short int>;
+			mpGrid->initializeArray(mGridSize[0],mGridSize[1],mGridSize[2]);
+			mpGrid->allocate();
+
+			int slice = (int)( mGridSize[2]*mTwodGeominitSliceFactor );
+			debMsg("initFromGeomFile","slice = "<<mTwodGeominitSliceFactor<<" ss"<<mGridSize[2]);
+
+			for (int k=0; k<mGridSize[2]; ++k) 
+			   for (int j=0; j<mGridSize[1]; j++)  {
+				   for (int i=0; i<mGridSize[0]; i++) {
+					   int f = 0;
+					   if ( gzread(gzf, &f, sizeof(int) ) != sizeof(int) ) {
+						   readErr = 4;
+						   k = mGridSize[2];
+						   j = mGridSize[1];
+						   i = mGridSize[0];
+					   } else {
+							 // WARNING - yz inverted access!
+							 if (gDim==2) {
+								 if (mIndexOrder==1) {
+									 // Blender
+									 if (k==slice) (*mpGrid)(i,j,k) = f;
+								 } else {
+									 if (j==slice) (*mpGrid)(i,k,j) = f; // default == 0
+									 //std::cout<<" "<<(*mpGrid)(i,k,j);
+								 }
+							 } else {
+								 if (mIndexOrder==1)  (*mpGrid)(i,j,k) = f; // Blender
+								 else                 (*mpGrid)(i,k,j) = f; // default == 0
+							 }
+					   }
+						 // celltype ids from elbeem export:
+					   //if(f&CFBnd)     f = 4;
+					   //if(f&CFFluid)   f = 2;
+					   //if(f&CFEmpty)   f = 1;
+					   //{ f=0; } // default
+				   }
+					//std::cout<<"\n ";
+			}
+		}
+		gzclose( gzf );
+		mHaveData = true;
+		debMsg("GeomFile::initFromFile", "Done with "<< filename <<", size="<<mGridSize<<", indexOrder="<<mIndexOrder<<".");
+	} else {
+		//errMsg("GeomFile::initFromFile","Unable to read "<< filename <<"...");
+		// rather, abort...
+		errFatal("GeomFile::initFromFile","Unable to read grid file '"<< filename <<"', aborting init...", SIMWORLD_GENERICERROR);
+	}
+
+	if(readErr != 0) {
+		errFatal("GeomFile::initFromFile","Unable to properly read grid file '"<< filename <<"', error #"<<readErr<<".", SIMWORLD_GENERICERROR);
+	}
+	return (readErr!=0);
+};
+
+// get value at given position
+// cut off 1-boundary
+int GeomFile::operator()(int i, int j,int k) const {
+	if (!mpGrid) return 0;
+	const int srci = CLAMP_RET( (i*(mGridSize[0]-2))/(mSimSize[0]-2), 0, mGridSize[0]-1);
+	const int srcj = CLAMP_RET( (j*(mGridSize[1]-2))/(mSimSize[1]-2), 0, mGridSize[1]-1);
+	const int srck = CLAMP_RET( (k*(mGridSize[2]-2))/(mSimSize[2]-2), 0, mGridSize[2]-1); 
+	//debMsg("op","g "<<mGridSize<<" s "<<mSimSize );
+	return (*mpGrid)(srci,srcj,srck);
+	return 0;
+};
+
+
+} // DDF
+
+

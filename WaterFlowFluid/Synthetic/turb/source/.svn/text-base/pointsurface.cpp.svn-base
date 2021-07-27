@@ -1,0 +1,347 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2008 Nils Thuerey
+ *
+ * Temp file for test plugins
+ *
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+
+#include "pointsurface.h" 
+#include "ExpeKdTree.h"
+
+// surface point location
+// pos -> grid pos, round downwards, thus (0..1] is cell 0
+// display in glutGui adds 0.5dx to account for this
+
+namespace DDF { 
+
+SurfacePointSet::~SurfacePointSet() {
+	if (mpKdTree) 
+		delete mpKdTree;
+};
+
+
+SurfacePointSet::SurfacePointSet() : 
+	mHIFac(1.), mMaxIter(5), mSigmaR( 1. ), mSigmaN( 1. ), 
+	debugImls(false),
+	h_i(1.), h_iSqr(1.), h_iSqrInv(1.), 
+	pPoints(), mpKdTree(NULL)
+{
+	// warning - params are overwritten by plugin
+	newPoints.clear();
+	delPoint.clear();
+	removeCnt = 0;
+};
+
+// delete old, make new...
+void SurfacePointSet::rebuildKdtree() 
+{
+	if (getKdTree()) {
+		delete getKdTree();
+		setKdTree(NULL);
+	}
+	debMsg("spPointsAdvect","Rebuilding kdtree for "<<p()->size()<<" points ");
+	Expe::KdTree *kdtree = new Expe::KdTree(p());
+	kdtree->setMaxDepth(7);
+	kdtree->create(); 
+	//kdtree->setMaxNofNeighbors(256);
+
+	setKdTree(kdtree);
+	debMsg("SurfacePointSet","Kdtree done, depth="<<kdtree->getCurrentDepth() );
+}
+
+
+void SurfacePointSet::setParams(Real _mHIFac, int _mMaxIter, Real _mSigmaR, Real _mSigmaN, Real dx)
+{
+	this->mHIFac = _mHIFac;
+	this->mMaxIter = _mMaxIter;
+	this->mSigmaR = _mSigmaR; 
+	this->mSigmaN = _mSigmaN; 
+
+
+	this->h_i = dx * this->mHIFac; 
+	this->h_iSqr = (this->h_i*this->h_i);
+	this->h_iSqrInv = 1./(this->h_i*this->h_i);
+}
+
+// finalize insertions and deletions from internal lists
+void SurfacePointSet::handleInsertDeletes()
+{
+	if(delPoint.size() != pPoints.size()) 
+		delPoint.resize( pPoints.size() );
+
+	if (this->removeCnt > 0) {
+		debMsg("RIMLS","DelPoints "<< this->delPoint.size() );
+		//if(1) 
+		for (int nbi=0; nbi<(int)pPoints.size(); nbi++) {
+			if(this->delPoint[nbi]) {
+				//pPoints[nbi].setPos( Vec3(-1000.) );
+				if( nbi< (int)pPoints.size()-1 ) {
+					pPoints[nbi] = pPoints[pPoints.size()-1];
+					this->delPoint[nbi] = this->delPoint[pPoints.size()-1];
+				}
+				pPoints.pop_back();
+				this->delPoint.pop_back();
+				nbi--;
+			}
+		}
+	}
+	if (this->newPoints.size()>0) { 
+		debMsg("RIMLS","NewPoints "<< this->newPoints.size() );
+		for (int nbi=0; nbi<(int)this->newPoints.size(); nbi++) {
+			pPoints.push_back( this->newPoints[nbi] );
+		}
+	}
+	this->delPoint.clear();
+	this->newPoints.clear(); 
+}
+
+#define EXPF(val) exp( -SQUARE( val ) ) 
+#define f_phi(val)   (     pow( 1. - ((val)*(h_iSqrInv)) , 4. ) ) 
+#define f_dphi(val)  ( 4.* pow( 1. - ((val)*(h_iSqrInv)) , 3. ) * -(h_iSqrInv) )
+
+// perform one projection step onto the implicit surface
+void SurfacePointSet::projectPoint(
+		//Expe::KdTree *kdtree,vector<SurfacePoint> *sp, 
+		Vec3 x, Real& f, Vec3& gradF, bool* p_noPointsNear,
+		Vec3* sumNorm)
+{
+	// compute correction from neighborhood
+	int iter=0;
+	Real sumW, sumF; 
+	Vec3 sumGw, sumN, sumGF;
+	if(p_noPointsNear) *p_noPointsNear = false;
+
+	// query kd tree
+	mpKdTree->doQueryBall(x, h_i);
+	const Expe::KdTree::NeighborList& nl = *(mpKdTree->getNeighborList()); 
+
+	// TODO , make optional?
+	// no points near? , resort to kQuery
+	if( 1 && (mpKdTree->getNofFoundNeighbors() <= 0 ) )
+	{
+		mpKdTree->setMaxNofNeighbors(3); //  average how many?
+		mpKdTree->doQueryK( x );
+		mpKdTree->setMaxNofNeighborsDefault();
+
+		// return distance to nearest point
+		if( mpKdTree->getNofFoundNeighbors() > 0 ) {
+
+			// average all results
+			Vec3 p_pos    = Vec3(0.);
+			Vec3 p_normal = Vec3(0.); 
+			for (int kdIter=0;kdIter<(int)mpKdTree->getNofFoundNeighbors();kdIter++)
+			{
+				p_pos    += pPoints[ nl[0].index ].getPos();
+				p_normal += pPoints[ nl[0].index ].getNormal();
+			}
+			Real div = 1./(Real)mpKdTree->getNofFoundNeighbors();
+			p_pos    *= div;
+			p_normal *= div;
+
+			gradF = p_pos - x;
+			f = normalize(gradF);
+
+			// check sign
+			Real sign = dot( p_normal, x-p_pos);
+			if(sign<0.) f *= -1.;
+
+			//debMsg("AA1"," "<<mpKdTree->getNofFoundNeighbors() <<" new "<<f<<" "<<gradF <<"       "<<p_pos<< " "<<x);
+			if(sumNorm) *sumNorm = p_normal;
+			return;
+		} 
+	}
+
+
+	do {
+		sumW= sumF= 0.;
+		sumGw= sumGF= sumN= Vec3(0.); 
+
+		for (int kdIter=0;kdIter<(int)mpKdTree->getNofFoundNeighbors();kdIter++)
+		{
+			const int nbi = nl[kdIter].index;
+
+			const Vec3 p_pos    = pPoints[nbi].getPos();
+			const Vec3 p_normal = pPoints[nbi].getNormal();
+
+			Vec3 px = x - p_pos;
+			Real normPx = normNoSqrt(px);
+			//if(normPx*normPx*h_iSqrInv>2.) continue;
+			if(normPx > h_iSqr) continue;
+			normPx = sqrtf(normPx);
+
+			if(debugImls) debMsg("aa","at "<<"x="<<x<<" p="<<p_pos<<" hi="<<h_i<<" normPx="<<normPx<<" h_iSqrInv="<<h_iSqrInv<<"   "<<(normPx*normPx*h_iSqrInv) );
+
+			Real fx = dot(px, p_normal);
+
+			Real alpha = 1.;
+			if (iter > 0) {
+				alpha = 
+					EXPF( (fx-f)/mSigmaR ) *
+					EXPF( norm(p_normal - gradF) /mSigmaN ) ;
+			} else {
+				alpha = 1.;
+			}
+
+			const Real w       =           alpha * f_phi(  SQUARE(normPx) ); 
+			const Vec3 grad_w  = px * 2. * alpha * f_dphi( SQUARE(normPx) );
+
+			sumW += w;
+			sumGw += grad_w;
+
+			sumF += w* fx;
+			sumGF += grad_w * fx;
+
+			sumN += w* p_normal;
+
+			if(1 && debugImls) debMsg("RIMLS2","    at "<<" iter="<<iter << " nbi="<<nbi<<
+					" px="<<px << " f="<<f <<
+					" w="<<w << " grad_w="<<grad_w <<
+					" alpha="<<alpha << " sumF="<<sumF  <<
+					" sumW="<<sumW  << " sumGF="<<sumGF  <<
+					" sumN="<<sumN  << " "); 
+		} // nbi
+
+		if(sumW>0.) {
+			f = sumF / sumW;
+			gradF = (sumGF - f * sumGw + sumN) / sumW;
+		} else {
+			// no points in neighborhood, abort...
+			// old handling - k-query should get rid of this...
+			f = 0.; 
+			gradF = Vec3(0.);
+			if(p_noPointsNear) *p_noPointsNear = true;
+			iter = mMaxIter;
+		}
+
+		if(debugImls) debMsg("RIMLS3","  at "<<" iter="<<iter << //" nbi="<<nbi<<
+				" f="<<f << " sumF="<<sumF  << " sumW="<<sumW  <<
+				" sumGF="<<sumGF  << " sumN="<<sumN  << " "); // DEBUG
+
+	} while(++iter < mMaxIter);
+
+
+	if(debugImls) debMsg("RIMLSF","at "<<" x="<<x 
+					<< " iter="<<iter<<
+					" f="<<f <<" gradF="<<gradF  <<
+					" corr="<< (gradF * f) <<" norm="<< (norm(gradF * f)) ); // DEBUG
+
+	if(sumNorm) *sumNorm = sumN; 
+} // project point
+
+
+
+// perform multiple projection step onto the implicit surface,
+// moving the original point towards the surface, modifies x!
+void SurfacePointSet::projectPointIter(
+		//Expe::KdTree *kdtree,vector<SurfacePoint> *sp, 
+		Vec3& x, Real& f, Vec3& gradF, bool* p_noPointsNear, Real* p_sign, int* p_iterations)
+{
+	Real norm_fgradf = 0.;
+	const Real norm_fgradf_threshold = 0.01;
+	int iter2 = 0;
+	Real sign = 1.;
+
+//run in GDB, check hang!??
+
+	// do multiple iterations to project point onto surface
+	do {
+		SurfacePointSet::projectPoint( x,f,gradF, p_noPointsNear);
+
+		// move point position
+		x -= gradF * f; 
+		// compute norm_fgradf
+		norm_fgradf = norm(gradF * f);
+
+		//if(debugImls) debMsg("RIMLS4","at "<<PRINT_IJK<<" x="<<x << " iter="<<iter<< 
+			// " f="<<f <<" gradF="<<gradF /<<" sumF="<<sumF <<" sumW="<<sumW );
+
+		// determine sign by correction from first projection-step
+		if(iter2==0)  {
+			if (f>0.) { sign = 1.; } else { sign = -1.; }
+		}
+
+		iter2++;
+	} while (norm_fgradf > norm_fgradf_threshold);
+
+	if(p_sign) *p_sign = sign;
+	if(p_iterations) *p_iterations = iter2;
+	return;
+}
+
+
+
+// projet normal
+void SurfacePointSet::projectNormal(
+		Vec3 x, Vec3& set_n, Real& f, Vec3& gradF, bool* p_noPointsNear,
+		Vec3* sumNorm)
+{
+	// compute correction from neighborhood
+	int iter=0;
+	if(p_noPointsNear) *p_noPointsNear = false;
+	Real sumW;
+	Vec3 sumN;
+	Vec3 newN = Vec3(0.);
+
+	// query kd tree
+	mpKdTree->doQueryBall(x, h_i);
+	const Expe::KdTree::NeighborList& nl = *(mpKdTree->getNeighborList()); 
+
+	do {
+		sumW= 0.;
+		sumN= Vec3(0.); 
+
+		for (int kdIter=0;kdIter<(int)mpKdTree->getNofFoundNeighbors();kdIter++)
+		{
+			const int nbi = nl[kdIter].index;
+			const Vec3 p_pos    = pPoints[nbi].getPos();
+			const Vec3 p_normal = pPoints[nbi].getNormal();
+
+			Vec3 px = x - p_pos;
+			Real normPx = normNoSqrt(px);
+
+			if(normPx > h_iSqr) continue;
+			normPx = sqrtf(normPx);
+
+			Real fx = dot(px, p_normal);
+
+			Real alpha = 1.;
+			if (iter > 0) {
+				alpha = 
+					EXPF( (fx-f)/mSigmaR ) *
+					EXPF( norm(p_normal - gradF) /mSigmaN ) ;
+			} else {
+				alpha = 1.;
+			}
+
+			const Real w = alpha * f_phi(  SQUARE(normPx) ); 
+
+			sumW += w; 
+			sumN += w* p_normal;
+		} // nbi
+
+		if(sumW>0.) {
+			newN = sumN / sumW;
+		} else {
+			// stop... no neighbors...
+			iter = mMaxIter;
+		}
+
+	} while(++iter < mMaxIter);
+
+	set_n = newN;
+} // project normal
+
+
+
+
+}; // DDF
+
+

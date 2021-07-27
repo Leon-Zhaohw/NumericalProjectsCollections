@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# usage:
+# set compiler environment vars for cmake, call compile_check. E.g. for mac:
+# export DDF_GUIAUTORUN=1; export CXX="/opt/gcc-4.4/usr/local/bin/g++"; export CC="/opt/gcc-4.4/usr/local/bin/gcc"; ./compile_check.sh 
+
+# to be used with cmake 2.4
+CMAKE_BACKWARDS_COMPATIBILITY=2.4
+export CMAKE_BACKWARDS_COMPATIBILITY=2.4
+
+
+# -----------------------------------------------------------------------------
+# parameters
+
+# openmp on/off?
+OPENMP_SETTING=0
+
+# test mesh test case?
+TEST_MESH=1
+
+
+
+MDATE=$(date +"%y%m%d")
+SOURCEDIR="${PWD}"
+TARGETDIR="${PWD}/tempCompileCheck"
+
+CFG_LIST="smoke levelset pls"
+
+# also add mesh test case?
+if test ${TEST_MESH}; then
+	echo Using mesh test
+	CFG_LIST="${CFG_LIST} mesh"
+fi
+echo Configs: ${CFG_LIST}
+
+#CFG_LIST="smoke"  # DEBUGTEST
+
+# the following three arrays configure the executables to be generated
+# WARNING - dir list has to be a single string!?
+DIR_LIST=("
+		build-2d-debug build-2dgui 
+		build-3d-debug build-3dgui ")
+#DIR_LIST=("build-2d-debug")  # DEBUGTEST
+
+DIR_PARAMS=(
+		" -DTWOD=1 -DGLUTGUI=0 -DMESHSURFACE=0             -DDEBUG=1 -DDOUBLEPRECISION=1" 
+		" -DTWOD=1 -DGLUTGUI=1 -DMESHSURFACE=0                 " 
+		" -DTWOD=0 -DGLUTGUI=0 -DMESHSURFACE=${TEST_MESH}  -DDEBUG=1 -DDOUBLEPRECISION=1 " 
+		" -DTWOD=0 -DGLUTGUI=1 -DMESHSURFACE=${TEST_MESH}      " 
+		)
+
+# TODO, this array is not really necessary, check for GLUTGUI setting
+DIR_EXE=( 
+		"ddfCmd" "ddfGlutGui"
+		"ddfCmd" "ddfGlutGui" 
+		)
+
+if test -e "CMakeLists.txt"; then
+	echo CMakeFile found.
+else
+	echo CMakeFile not found, aborting...
+	exit
+fi
+
+# check for existing build
+if test -e "CMakeCache.txt" || test -e "Makefile" || test -e "CMakeFiles"; then
+	echo
+	echo Found CMake data!!! Warning:
+	echo Do not run compile_check in ddf directories with build data - instead, remove all CMake build data, create a directory, run cmake there \(otherwise CMake will always rebuild the main directory, it is safer to use a separate build directory anyways! :\). Then re-run compile_check in the main directory.
+	echo
+fi
+
+
+
+# -----------------------------------------------------------------------------
+# setup dirs
+mkdir tempCompileCheck 2>/dev/null
+cd tempCompileCheck
+
+echo Dirs:
+for DIRFILE in ${DIR_LIST} 
+do
+	mkdir ${DIRFILE} 2>/dev/null
+	echo ${DIRFILE}, params = ${DIR_PARAMS[$CNT]} 
+done
+
+# -----------------------------------------------------------------------------
+# build
+export DDF_GUIAUTORUN=1
+CNT=0
+for DIRFILE in ${DIR_LIST} 
+do
+	echo
+	echo
+	echo Configuring ${CNT}: ${TARGETDIR}/${DIRFILE} with ${DIR_PARAMS[$CNT]} 
+	cd ${TARGETDIR}/${DIRFILE}
+
+	cmake ../.. -DOPENMP=${OPENMP_SETTING} ${DIR_PARAMS[$CNT]}  2>&1 | cat > out_cmake.txt
+
+	echo Compiling ${CNT}: ${TARGETDIR}/${DIRFILE}
+	VERBOSE=1 make -k -j 4 2>&1 | cat > out_make.txt
+
+	for CFGFILE in ${CFG_LIST} 
+	do
+		# skip 2d mesh runs
+		if  [[ ${CFGFILE} =~ "mesh" ]] && ( [[ ${DIR_PARAMS[$CNT]} =~ "TWOD=1" ]]  ||  [[ "${TEST_MESH}" == 0 ]] ) ; then
+			# echo ... skipping 2d-mesh run
+			echo Skipping ${DIR_EXE[$CNT]}  with compileCheck_${CFGFILE}.cfg
+		else
+			echo Running ${DIR_EXE[$CNT]}  with compileCheck_${CFGFILE}.cfg
+
+
+			# remove previous result
+			if test -e out_${CFGFILE}_0002.png; then
+				rm -f out_${CFGFILE}_0002.png ${TARGETDIR}/${CFGFILE}_${DIRFILE}_result.png ${TARGETDIR}/${CFGFILE}_${DIRFILE}_REF.png
+			fi
+			DDF_HIDEGUI=1 ./${DIR_EXE[$CNT]}  ../../compile_check_data/compileCheck_${CFGFILE}.cfg > out_${CFGFILE}.txt
+
+			# check result
+			if test -e out_${CFGFILE}_0002.png; then
+				cp out_${CFGFILE}_0002.png ${TARGETDIR}/${CFGFILE}_${DIRFILE}_result.png
+				# echo cp ${SOURCEDIR}/compile_check_data/${CFGFILE}_${DIRFILE}.png ${TARGETDIR}/${CFGFILE}_${DIRFILE}_REF.png
+				cp ${SOURCEDIR}/compile_check_data/${CFGFILE}_${DIRFILE}_result.png ${TARGETDIR}/${CFGFILE}_${DIRFILE}_REF.png 2>/dev/null
+			else
+				echo Result image out_${CFGFILE}_0002.png was not generated, aborting...
+				exit;
+			fi  #chekc
+
+		fi # 2d mesh
+	done
+
+	let "CNT+=1"
+done
+
+
+# check 
+cd ${TARGETDIR}
+echo Done
+

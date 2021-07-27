@@ -1,0 +1,52 @@
+#!/bin/bash
+
+MDATE=$(date +"%y%m%d")
+#echo ${MDATE}
+FILEN="${HOME}/bu/ddf_${MDATE}_r${RANDOM}.tar.bz"
+#echo ${FILEN}
+
+tar --exclude .svn -cjvf ${FILEN} \
+	./source/ \
+	./util/ \
+	./wlturbulence/ \
+	./tools/ \
+	./data/*cfg \
+	./*.sh \
+	./compile_check_data/*cfg \
+	./testCmakeCalls.txt ./makebu.sh ./CMakeLists.txt ./config.h.cmake
+
+ls -srtl ~/bu |tail -3
+
+echo
+echo copies
+echo
+
+if test -e "/home/thuereyn/mounts/home/bu/"; then
+	echo /home/thuereyn/mounts/home/bu/ exists copying...
+	cp ${FILEN} /home/thuereyn/mounts/home/bu/
+	ls -srtl /home/thuereyn/mounts/home/bu |tail -3
+fi
+
+# if test -e "/Volumes/thuereyn/bu/"; then
+# 	echo /Volumes/thuereyn/bu/ exists copying...
+# 	cp ${FILEN} /Volumes/thuereyn/bu/
+# fi
+# if test -e "/Volumes/thuereyn-1/bu/"; then
+# 	echo /Volumes/thuereyn-1/bu/ exists copying...
+# 	cp ${FILEN} /Volumes/thuereyn-1/bu/
+# fi
+# if test -e "/Volumes/thuereyn-2/bu/"; then
+# 	echo /Volumes/thuereyn-2/bu/ exists copying...
+# 	cp ${FILEN} /Volumes/thuereyn-2/bu/
+# fi
+# 
+# if test -e "/Volumes/My Book/backup/"; then
+#    echo /Volumes/My\ Book/backup/ exists copying...
+#    cp ${FILEN} /Volumes/My\ Book/backup/
+# fi 
+# 
+# if test -e "/Volumes/LaCie/backup/"; then
+#    echo /Volumes/LaCie/backup/ exists copying...
+#    cp ${FILEN} /Volumes/LaCie/backup/
+# fi 
+# 

@@ -1,0 +1,1077 @@
+/******************************************************************************
+ *
+ * DDF - fluid simulator
+ * Copyright 2007, 2008 Nils Thuerey
+ *
+ * Solver class, container for plugins
+ *
+ *****************************************************************************/
+
+// lsdebug
+#include "globals.h"
+#include "vectorbase.h"
+
+#include "levelset.h"
+#include "fastmarch.h"
+#include "solverparams.h"
+#include "solverplugin.h"
+#include "paramset.h"
+
+#include "vortexpart.h"
+#include "conjugategrad.h"
+#include "boundbox.h"
+#include "randomstream.h"
+#include <fstream>
+#include <sstream>
+
+#include "isosurface.h"
+
+// define global solver list
+map<string, DDF::FluidSolver*> gFluidSolvers;
+DDF::FluidSolver *gpFsolver = NULL;
+
+namespace DDF { 
+// search for fluid solve with given name
+FluidSolver* ddfWorldFindSolver(const std::string solverName) {
+	if(gFluidSolvers.find(solverName) != gFluidSolvers.end() ) {
+		return gFluidSolvers[solverName];
+	}
+
+	errMsg("ddfWorldFindSolver","Solver '"<<solverName<<"' not found!");
+	std::cout<<helperPrintMap(gFluidSolvers,"ddfWorldFindSolver")<<"\n";
+	return NULL;
+}
+
+// from GUI
+extern std::string gLastPluginSubstepName;
+
+// ctor
+FluidSolver::FluidSolver(const std::string& name) : 
+	mpParams(NULL),
+	mDt(0.), mDim(0), mGravity(0.),
+	mHaveLsFreeSurf(false),
+	mpFlags(NULL), 
+	mStepCounter(0), mSubStepCounter(0), mSubStepSolver(0),
+	mFsPartSampling(-1),
+	mName(name), mSolverInited(false),
+	mMapMeshSurfaces(), mpPointSet(NULL)
+{
+	mpLevelSet = NULL;
+ 	mpVorticitySys = NULL;
+	//mpMeshSurface = NULL; // replaced by mMapMeshSurfaces
+	mpMeshAni = NULL;
+	mpVertexColorData = NULL;
+	mpWaveData = NULL;
+	mpTexCoordData = NULL;
+
+	// debug test inits
+	mGravity = Vec3( 0., 0., 0.);
+};
+
+// dtor
+FluidSolver::~FluidSolver() {
+	// free plugins
+	for (int i=0; i< (int)mPlugins.size(); i++)
+		delete mPlugins[i];
+	for (int i=0; i< (int)mInitPlugins.size(); i++)
+		delete mInitPlugins[i];
+	for (int i=0; i< (int)mEndPlugins.size(); i++)
+		delete mEndPlugins[i];
+
+	mPlugins.clear();
+	mEndPlugins.clear();
+	mInitPlugins.clear();
+	mPluginTimes.clear();
+	delete mpParams;
+	if (mpVorticitySys != NULL) delete mpVorticitySys;
+
+	//todo, handle free'ing other pointers...
+};
+
+// *****************************************************************************
+//! init solver
+bool FluidSolver::initFluid() {
+	if(!mpParams) {
+		errMsg("FluidSolver::initFluid","Fatal - no params given...");
+		return false;
+	}
+	mpParams->setFluidSolver( this );
+
+	// restrict z-axis in 2D
+	if (gDim==2) {
+		nVec3i nn = mpParams->getGridSize();
+		nn[2] = gPatchSize;
+		mpParams->setGridSize(nn);
+	}
+
+	const nVec3i n = mpParams->getGridSize();
+	// set time to zero
+	mpParams->addToSimTime( -mpParams->getSimTime() );
+	mpFlags = mpParams->getGridInt("flags");
+
+	// init from unittests
+	const int nMax = mpParams->getDimMax();
+
+	mTwodKs = 0;
+	mTwodKe = n[2];
+	if (gDim==2) {
+		mTwodKs = gPatchSize/2;
+		mTwodKe = mTwodKs+1;
+	}
+	const int ks = mTwodKs;
+	const int ke = mTwodKe;
+
+	// setup boundaries
+	for (int k=ks; k< ke; k++) 
+		for (int j=0; j< n[1]-0; j++) 
+			for (int i=0; i< n[0]-0; i++) {
+				int set = FFLUID;
+				if( k<=0 || j<=0 || i<=0 ||
+					 (k>=n[2]-1) || (j>=n[1]-1) || (i>=n[0]-1)) { set = FOBSTACLE; }
+				mpFlags->getGlobal(i,j,k) = set;
+			}
+	mDim = n;
+
+	// read global params
+	mGravity = mpParams->mGravity;
+	if(! initFromGeomFile(mpParams->mpGeomGrid) ) {
+		// old default inits
+		Grid<Vec3> *mpCurrVel = mpParams->getGridVec3("vel-curr");
+
+		if (0) { // init velocity
+			Grid<Vec3> *mpOldVel = mpParams->getGridVec3("vel-old"); 
+
+			// warning - dont init boundary values?
+			// debMsg("DD","at "<<n<<" "<<n[1]/4*1<<"to  "<< n[1]/4*3<<", "<<n[0]/2-1<<" to "<<n[0]/2+1 );
+			for (int k=ks+0; k<ke-0; k++) 
+			//for (int k=n[2]/4*1; k<n[2]/4*3; k++) 
+				for (int j=n[1]/4*1; j<n[1]/4*3; j++) 
+					for (int i=n[0]/2-1; i<=n[0]/2+1; i++) {
+						if (testObstacleNbs(nVec3i(i,j,k))) continue;
+						//mpCurrVel->getGlobal(i,j,k) = Vec3( 0., 0., 1.);
+						mpCurrVel->getGlobal(i,j,k) = Vec3( 0., -2., 0.);
+						//debMsg("DD","at "<<PRINT_IJK);
+						if (gDim==2) mpCurrVel->getGlobal(i,j,k)[2] = 0.; // reset z
+
+						mpOldVel->getGlobal(i,j,k) = mpCurrVel->getGlobal(i,j,k);
+					} 
+		}
+
+		if (0) { // init velocity3
+			for (int j=0; j<n[1]; j++) 
+				for (int k=n[2]/4*1; k<n[2]/4*3; k++) 
+					for (int i=n[0]/2-1; i<=n[0]/2+1; i++) {
+						if (testObstacleNbs(nVec3i(i,j,k))) continue;
+						mpCurrVel->getGlobal(i,j,k) = Vec3( 1., 0., 0.);
+					} 
+		}
+
+		if (0) { // second vel test
+			for (int k=ks; k<ke; k++) 
+				for (int j=1; j<n[1]-1; j++) 
+					for (int i=1; i<n[0]-1; i++) {
+						if (testObstacleNbs(nVec3i(i,j,k))) continue;
+						//mpCurrVel->getGlobal(i,j,k) += Vec3( 0, j/(Real)n[1], 0.);
+						mpCurrVel->getGlobal(i,j,k) += Vec3( 0, 0.5, 0.);
+					} 
+		}
+
+		if (0) { // init test obstacle
+			for (int k=ks; k<ke; k++) 
+				for (int j=n[1]/4*1; j<n[1]/4*2; j++) 
+					for (int i=n[0]/3-1; i<=n[0]/3+0; i++) {
+						mpFlags->getGlobal(i,j,k) = FOBSTACLE;
+					} 
+		}
+
+	}
+
+	if (mpParams->mHostVorticitySystem)
+		mpVorticitySys = new VorticitySystem(this);
+	
+	//run InitPlugins used to be called here, now called externally after this function is run
+
+	// OLD post init stuff...
+
+	// init some tracer particles
+	/*initTracerParticles(10);
+
+	// reset error array to default -1 (if it exists)
+	if(getParams()->haveGridReal("error-val")) {
+		GridOpTouchMemory<Real>(mpFlags, getParams()->getGridReal("error-val"), -1.);
+	} 
+
+	// density test init
+	if(0) 
+		if(mpParams->haveGridReal("density")) {
+			// default density init
+			Grid<Real> *dens = mpParams->getGridReal("density");
+			for (int k=ks; k<ke; k++) 
+				for (int j=12; j<20; j++) 
+					for (int i=12; i<20; i++) {
+						dens->getGlobal(i,j,k) = 1.;
+					}
+	}*/
+
+	//setSolverInited(true);
+	return true;
+};
+
+//! run init plugins once, similar to simulateFluid
+void FluidSolver::runInitPlugins() {
+	mDt = mpParams->getTimestep();
+	DDF::myTime_t tStart = DDF::getTime();
+
+	// run plugins
+	for (int i=0; i< (int)mInitPlugins.size(); i++) {
+
+		// execute
+		DDF::myTime_t plStart = DDF::getTime();
+		if (! mInitPlugins[i]->performStep(mDt) ) {
+			errFatal("FluidSolver::runInitPlugins","Plugin step "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+		}
+		DDF::myTime_t plEnd = DDF::getTime();
+		//mPluginTimes[i] += (double)(plEnd-plStart);
+	} 
+
+	// timing...
+	DDF::myTime_t tEnd = DDF::getTime();
+	debMsg("FluidSolver::runInitPlugins",mpParams->mName<<" t="<<mpParams->getSimTime() <<", dt="<<mDt<<", took "<< DDF::getTimeString(tEnd-tStart)<<" ");
+};
+
+//! run end plugins once, similar to simulateFluid
+void FluidSolver::finalize() {
+	mDt = mpParams->getTimestep();
+	DDF::myTime_t tStart = DDF::getTime();
+
+	// finalize main loop plugins
+	for (int i=0; i< (int)mPlugins.size(); i++)
+		mPlugins[i]->finish();
+
+	// run end plugins
+	for (int i=0; i< (int)mEndPlugins.size(); i++) {
+
+		// execute
+		DDF::myTime_t plStart = DDF::getTime();
+		if (! mEndPlugins[i]->performStep(mDt) ) {
+			errFatal("FluidSolver::runEndPlugins","Plugin step "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+		}
+		DDF::myTime_t plEnd = DDF::getTime();
+		//mPluginTimes[i] += (double)(plEnd-plStart);
+	} 
+
+	// timing...
+	DDF::myTime_t tEnd = DDF::getTime();
+	debMsg("FluidSolver::finalize",mpParams->mName<<" t="<<mpParams->getSimTime() <<", dt="<<mDt<<", took "<< DDF::getTimeString(tEnd-tStart)<<" ");
+};
+
+void FluidSolver::initLevelSet(int eiksolver)
+{
+	if (mpLevelSet != NULL) {
+		debMsg("FluidSolver::initLevelSet","Level set already initialized!");
+		//return;
+	} else {
+		debMsg("FluidSolver::initLevelSet","Level set init, gridsize="<<mDim<<", "<< DDF::getSettingsString() );
+		mpLevelSet = new LevelSet;
+		mpLevelSet->setFsolver(this);
+		mpLevelSet->initializeLevelSet( mDim[0], mDim[1], mDim[2] );
+		//mpLevelSet->getPhiAr().resetArray( 0. );
+		mpLevelSet->set2dSlice(mTwodKs);
+	}
+
+	mpLevelSet->setFirstInit(true);
+
+	Grid<Real>* pPhi = getParams()->getGridReal("phi-curr");
+	FlagGrid* pFlags = getParams()->getGridInt("fm-flags");
+	FlagGrid* flFlags = getParams()->getGridInt("flags");
+	mpLevelSet->initFromGridFlags(pPhi);
+	switch (eiksolver) {
+		default:
+		case LS_FMM:
+			mpLevelSet->reinitMarching(2*pPhi->getSizeX(), pPhi, pFlags,flFlags, false);
+			break;
+		case LS_FIM:
+			mpLevelSet->reinitFI(2*pPhi->getSizeX(), pPhi, pFlags, false);
+			break;
+		case LS_FSM:
+			mpLevelSet->reinitFS(pPhi, pFlags, false);
+			break;
+	}
+	reinitFlagsFromLevelset(false);
+
+	mpLevelSet->setFirstInit(false);
+	mHaveLsFreeSurf = true;
+}
+
+// init helper (slow!)
+bool FluidSolver::testObstacleNbs(nVec3i p) {
+	if (fgIsObstacle(mpFlags->getGlobal(p[0],p[1],p[2]))) return true;
+	if (fgIsObstacle(mpFlags->getGlobal(p[0]+1,p[1],p[2]))) return true;
+	if (fgIsObstacle(mpFlags->getGlobal(p[0]-1,p[1],p[2]))) return true;
+	if (fgIsObstacle(mpFlags->getGlobal(p[0],p[1]+1,p[2]))) return true;
+	if (fgIsObstacle(mpFlags->getGlobal(p[0],p[1]-1,p[2]))) return true;
+	if (gDim==3) {
+		if (fgIsObstacle(mpFlags->getGlobal(p[0],p[1],p[2]+1))) return true;
+		if (fgIsObstacle(mpFlags->getGlobal(p[0],p[1],p[2]-1))) return true;
+	}
+	return false;
+}
+
+
+
+// *****************************************************************************
+bool FluidSolver::initFromGeomFile(GeomFile* gf) { 
+	//const int N = m;
+	const int sx = mDim[0];
+	const int sy = mDim[1];
+	const int sz = mDim[2];
+
+	// first init from geomfile values
+	if(gf && gf->getHaveData()) {
+		int ks = 1;
+		int ke = sz-1;
+
+		if(gDim==2) {
+			//int slice = sz*gf->mTwodGeominitSliceFactor;
+			ks = gPatchSize/2; ke = ks+1;
+		}
+
+		int outfls=0, infls=0, obss=0, fluids=0, empties=0, total=0;
+		for (int k=ks; k<ke; k++) 
+			for (int j=1; j<sy-1; j++) 
+				for (int i=1; i<sx-1; i++) {
+					// access is yz inverted in geomfile!
+					const int gfv = (*gf)(i,j,k);
+					int flag = 0;
+					total++;
+
+					if(gfv & 16) {
+						flag |= FOUTFLOW | FFLUID;
+						outfls++;
+					}
+					else if(gfv & 8) {
+						flag |= FINFLOW | FFLUID;
+						infls++;
+					}
+					else if(gfv & 4) {
+						flag |= FOBSTACLE;
+						obss++;
+					}
+					else if(gfv & 2) {
+						flag |= FFLUID;
+						fluids++;
+					}
+					else if(gfv & 1) {
+						flag |= FEMPTY;
+						empties++;
+					} else {
+						//debMsg("?"," at "<<PRINT_IJK<<" gfv = "<<gfv );
+					}
+					// TODO, do sanity check?
+
+					mpFlags->getGlobal(i,j,k) = flag;
+				}
+
+		debMsg("FluidSolver::initFromGeomFile","S="<<sx<<","<<sy<<","<<ke<<", Stats: empties="<<empties<<" fluids="<<fluids<<" obss="<<obss<<" infls="<<infls<<" outfls="<<outfls<<". total="<<
+				total<<", prog="<< mpParams->mOutputProgram);
+		return true;
+	}
+	return false;
+} 
+
+// setup plugin stack
+void FluidSolver::addPlugins(vector<SolverPlugin*>& plugins) {
+	debMsg("addPlugins","adding "<<plugins.size() ); 
+	mPluginTimes.clear();
+
+	// store plugin stack, and perform first init
+	for (int i=0; i< (int)plugins.size(); i++) {
+		mPlugins.push_back( plugins[i] );
+		mPluginTimes.push_back( 0. );
+
+		if(! mPlugins[i]->initPlugin() ) {
+			errFatal("FluidSolver::addPlugins","Init "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+		}
+	}
+}
+
+// setup init plugin stack
+void FluidSolver::addInitPlugins(vector<SolverPlugin*>& plugins) {
+	debMsg("addInitPlugins","adding "<<plugins.size() ); 
+	mPluginTimes.clear();
+
+	// store plugin stack, and perform first init
+	for (int i=0; i< (int)plugins.size(); i++) {
+		mInitPlugins.push_back( plugins[i] );
+
+		if(! mInitPlugins[i]->initPlugin() ) {
+			errFatal("FluidSolver::addInitPlugins","Init "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+		}
+	}
+}
+
+// setup end plugin stack
+void FluidSolver::addEndPlugins(vector<SolverPlugin*>& plugins) {
+	debMsg("addInitPlugins","adding "<<plugins.size() ); 
+	
+	// store plugin stack, and perform first init
+	for (int i=0; i< (int)plugins.size(); i++) {
+		mEndPlugins.push_back( plugins[i] );
+
+		if(! mEndPlugins[i]->initPlugin() ) {
+			errFatal("FluidSolver::addEndPlugins","Init "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+		}
+	}
+}
+
+
+//! advance by time t
+bool FluidSolver::simulateFluid() {
+	mDt = mpParams->getTimestep();
+	DDF::myTime_t tStart = DDF::getTime();
+
+	debMsg("\nsimulateFluid"," for '"<<this->getName()<<"' ");
+	if(!isSolverInited()) {
+		errFatal("simulateFluid","Not inited!? 'SolverEnd' statement missing...?", SIMWORLD_GENERICERROR);
+	}
+
+	if (mPlugins.size() == 0) {
+		mpParams->setQuit(true);
+		return false;
+	}
+
+	// run plugins
+	for (int i=0; i< (int)mPlugins.size(); i++) {
+		//debMsg("FluidSolver::simulateFluid","Substep "<<i<<"/"<<mPlugins.size()<<" = "<<mpParams->mSubstepDebug );
+		if(mpParams->mSubstepDebug==false || 
+				(mpParams->mSubstepDebug && (mSubStepCounter%(int)mPlugins.size()==i)) ) {
+
+			if (mpParams->mSubstepDebug) {
+				debMsg("FluidSolver::simulateFluid","Substep "<<i<<"/"<<mPlugins.size()<<" = "<<mPlugins[i]->getName() );
+				// write: "solver-name"::"plugin-name" in gui
+				std::ostringstream name;
+				name << this->getName() << "::" << mPlugins[i]->getName();
+				gLastPluginSubstepName = name.str();
+			} else {
+				gLastPluginSubstepName = std::string("");
+			}
+
+			// plugin active? start&stop time
+			if(! mPlugins[i]->isCurrentlyActive( mpParams->getSimTime() ) ) {
+				if (mpParams->mSubstepDebug) {
+					debMsg("FluidSolver::simulateFluid","Substep "<<i<<"/"<<mPlugins.size()<<" skipped, plugin inactive");
+				}
+				continue;
+			}
+
+			// execute
+			DDF::myTime_t plStart = DDF::getTime();
+			if (! mPlugins[i]->performStep(mDt) ) {
+				errFatal("FluidSolver::simulateFluid","Plugin step "<<i<<" failed!", SIMWORLD_PLUGINERROR);
+			}
+			DDF::myTime_t plEnd = DDF::getTime();
+			mPluginTimes[i] += (double)(plEnd-plStart);
+
+
+			// debug checks
+
+			//print all grids with roi each time!
+			//if(1) { debMsg(" ","\n\n\n\n\n\n\n\n\n\n"); printAllGrids(); }
+			// debug check end
+		} // substep
+	}
+
+
+	// update world, stepcount, time
+	if(mpParams->mSubstepDebug) {
+		mSubStepCounter ++;
+	// TODO
+		mSubStepCounter %= (int)mPlugins.size();
+	}
+
+	if(mpParams->mSubstepDebug==false || 
+			(mpParams->mSubstepDebug && (mSubStepCounter==(int)mPlugins.size()-1)) ) {
+		mpParams->addToSimTime( mDt * mpParams->getDeltaX() );
+		mpParams->addToNoiseTime(mDt);
+		mStepCounter++;
+	}
+
+	// sanity check
+	// check for invalid values in all of the grids
+	if (mpParams->mSanityCheck>0.) {
+		const Real thresh = mpParams->mSanityCheck;
+		int gridcnt=0;
+		//debMsg("sanity","san "<<mpParams->mSanityCheck);
+
+		for (std::map<string, Grid<Real>* >::iterator iter=mpParams->mGridsReal.begin(); 
+				iter!=mpParams->mGridsReal.end(); iter++) {
+			if ( (*iter).second ) {
+				gridcnt++;
+				Grid<Real>* grid = (*iter).second;
+				if(grid->getSanityCheckMode()==0) continue;
+				int scm = grid->getSanityCheckMode();
+
+				FOR_IJK_GRID(grid) {
+					if ( ((scm==2)&&( ABS(grid->getGlobal(i,j,k)) > thresh)) 
+#						ifndef WIN32
+						|| ( !finite(grid->getGlobal(i,j,k)) )  
+#						endif						
+						) {
+						errFatal("SanityCheck","Failed on grid '"<<grid->getName()<<"', at "<<PRINT_IJK<<" = "<<grid->getGlobal(i,j,k) ,SIMWORLD_GRIDERROR );
+					} 
+				}
+			}
+		}
+		for(std::map<string, Grid<int>* >::iterator iter=mpParams->mGridsInt.begin(); 
+				iter!=mpParams->mGridsInt.end(); iter++) {
+			if ( (*iter).second ) {
+				gridcnt++;
+				Grid<int>* grid = (*iter).second;
+				if(grid->getName().compare("flags")==0) continue;
+				if(grid->getSanityCheckMode()==0) continue;
+				int scm = grid->getSanityCheckMode();
+
+				FOR_IJK_GRID(grid) {
+					if ( ((scm==2)&&( ABS(grid->getGlobal(i,j,k)) > thresh) )) {
+						errFatal("SanityCheck","Failed on grid '"<<grid->getName()<<"', at "<<PRINT_IJK<<" = "<<grid->getGlobal(i,j,k) ,SIMWORLD_GRIDERROR );
+					} 
+				}
+			}
+		}
+		for(std::map<string, Grid<Vec3>* >::iterator iter=mpParams->mGridsVec3.begin(); 
+				iter!=mpParams->mGridsVec3.end(); iter++) {
+			if ( (*iter).second ) {
+				gridcnt++;
+				Grid<Vec3>* grid = (*iter).second;
+				if(grid->getSanityCheckMode()==0) continue;
+				int scm = grid->getSanityCheckMode();
+ 
+				FOR_IJK_GRID(grid) {
+					for(int v=0; v<3; v++) {
+						if ( ((scm==2)&&( ABS(grid->getGlobal(i,j,k)[v]) > thresh)) 
+#							ifndef WIN32
+							||  ( !finite(grid->getGlobal(i,j,k)[v]) )  
+#							endif
+							) {
+							errFatal("SanityCheck","Failed on grid '"<<grid->getName()<<"', at "<<PRINT_IJK<<" = "<<grid->getGlobal(i,j,k) ,SIMWORLD_GRIDERROR );
+						} 
+					}
+				}
+			}
+		}
+
+		debMsg("FluidSolver::simulateFluid","SANITY CHECK active, threshold="<<thresh<<", checked "<<gridcnt<<" grids !!!" );
+	} // sanity check
+
+	// timing...
+	DDF::myTime_t tEnd = DDF::getTime();
+	//debMsg("SG-Fl","simtime="<<sgSimTime<<", Time = "<< DDF::getTimeString(tEnd-tStart) );
+	debMsg("FluidSolver::simulateFluid",mpParams->mName<<" t="<<mpParams->getSimTime() <<", dt="<<mDt<<", took "<< DDF::getTimeString(tEnd-tStart)<<" #steps:"<<mStepCounter); 
+
+	return true;
+};
+
+
+
+// *****************************************************************************
+
+//! init n particles randomly
+void FluidSolver::initTracerParticles(int n) {
+	for (int i=0; i<n; i++) {
+		Particle p;
+		p.initRandomPos(mDim, mpParams->getDeltaX() );
+		p.setPType( PTRACER );
+		mParticles.push_back(p);
+
+		if (0) debMsg("FluidSolver::init Tracer Particles","new "<<i<<"/"<<n<<" at "<<p.pos);
+	}
+}
+
+void FluidSolver::initFsParticles(int n) {
+	mFsPartSampling = n;
+
+	//for (int k=mTwodKs; k<mTwodKe; k++) 
+		//for (int j=0; j<m GridInitDim[1]; j++) 
+			//for (int i=0; i<m GridInitDim[0]; i++) {
+			FOR_IJK_GRID(mpFlags) {
+				if (fgIsFluid(mpFlags->getGlobal(i,j,k)) ) {
+					addFsParticles(i,j,k); 
+				}
+			}
+}
+void FluidSolver::addFsParticles(int i,int j, int k) {
+	const Real ndiv = 1. / ((Real)mFsPartSampling);
+
+	for (int pk=0; pk<mFsPartSampling; pk++) 
+	for (int pj=0; pj<mFsPartSampling; pj++) 
+	for (int pi=0; pi<mFsPartSampling; pi++) 
+	{
+		Particle p;
+		p.pos = Vec3(i,j,k);
+		p.pos += Vec3( 
+				(0.5+ (Real)pi)*ndiv, 
+				(0.5+ (Real)pj)*ndiv,
+				(0.5+ (Real)pk)*ndiv  );
+		p.pos *=  mpParams->getDeltaX() ;
+		if (gDim==2) p.pos[2]=0.;
+
+		p.setPType( PFLUIDMARKER );
+		mParticles.push_back(p);
+
+		//if (0) debMsg("FluidSolver::initFsParticles","new "<<i<<"/"<<n<<" at "<<p.pos);
+	}
+} // addFsParticles
+
+
+bool FluidSolver::advanceParticles(Real t, Grid<Vec3>* vels) {
+	const Vec3 dim = vec2R( mpFlags->getSize() );
+	const Real grsize = mpParams->getDeltaX() ;
+
+	for (size_t i=0; i<mParticles.size(); i++) {
+		const Vec3 &p = mParticles[i].pos;
+		nVec3i index = nVec3i( vec2I(p[0]*dim[0], p[1]*dim[1], p[2]*dim[2]) );
+		if (gDim==2) index[2] = mTwodKs; //gPatchSize/2;
+
+		// check if velocity position is valid
+		/*
+		Vec3 vel;
+		Vec3 *velp = vels->getGlobalPnt(index[0],index[1],index[2]); // get from grid
+		int pflag = getGridFlags()->getGlobal(index[0],index[1],index[2]); // get from grid
+
+		if (velp) {
+			// interpolate from grid
+			vel	= interpolateVelocity(p, vels); 
+			if (gDim==2) vel[2] = 0.;
+			vel *= grsize;
+		} else { vel = Vec3(0.); }
+
+		// reseed particles for small velocities
+		//if ((1) && (mParticles[i].getPType()==PTRACER) && (normNoSqrt(vel)<=0.01*VECTOR_EPSILON)) {
+		if ((1) && (mParticles[i].getPType()==PTRACER) && (!fgIsFluid(pflag)) ) {
+			mParticles[i].initRandomPos(mDim, mpParams->getDeltaX() ); // pos = Vec3( getRand(1., mDim[0]-1) / (Real)mDim[0] , getRand(1., mDim[1]-1) / (Real)mDim[1] , getRand(1., mDim[2]-1) / (Real)mDim[2] );
+		}
+		//debMsg("P"," at "<<p<<" i"<<index<<" v"<<vel); // debug
+		//debMsg("PPVV"," "<< (vel*t)<< " "<< (vel)<<" "<<t<<" "<<grsize<<" "<<dim<<" "<<p<<" "<<(p/grsize) );
+		// */
+
+		Vec3 vel(0.);
+
+		// check if velocity position is valid
+		if( (vels->checkIndexValid(index[0]-1,index[1]-1,index[2]-1)) &&
+		    (vels->checkIndexValid(index[0]+1,index[1]+1,index[2]+1)) ) {
+			// interpolate from grid
+			vel	= interpolateVelocity(p, vels, grsize); 
+			if (gDim==2) vel[2] = 0.;
+			vel *= grsize;
+
+			// reseed particles for small velocities
+			int pflag = getGridFlags()->getGlobal(index[0],index[1],index[2]); // get from grid
+			if ((1) && (mParticles[i].getPType()==PTRACER) && (!fgIsFluid(pflag)) ) {
+				mParticles[i].initRandomPos(mDim, mpParams->getDeltaX() ); // pos = Vec3( getRand(1., mDim[0]-1) / (Real)mDim[0] , getRand(1., mDim[1]-1) / (Real)mDim[1] , getRand(1., mDim[2]-1) / (Real)mDim[2] );
+			}
+
+		} else { 
+			// leave at 0 and reseed
+			mParticles[i].initRandomPos(mDim, mpParams->getDeltaX() ); // pos = Vec3( getRand(1., mDim[0]-1) / (Real)mDim[0] , getRand(1., mDim[1]-1) / (Real)mDim[1] , getRand(1., mDim[2]-1) / (Real)mDim[2] );
+		}
+		mParticles[i].advance(vel, t);
+	}
+
+	for (size_t i=0; i<mParticles.size(); i++) {
+		if (mParticles[i].getPType() & PDELETE) {
+			if (i<mParticles.size()-1) {
+				mParticles[i] = mParticles[ mParticles.size()-1 ];
+				mParticles.pop_back();
+				i--;
+			}
+		}
+	}
+
+	return true;
+};
+
+void FluidSolver::reinitFlagsFromLevelset(bool correctLsFromFlags) {
+	const Real invalidt = FastMarch<FmHeapComparatorOut,1>::getMarchInvalidTime();
+
+	//Grid<Vec3>* Currvel = mpParams->getGridVec3("vel-curr");
+	Grid<Real>* phiGrid = mpParams->getGridReal("phi-curr");
+
+	FOR_IJK_GRID(phiGrid) {
+		int& flag = mpFlags->getGlobal(i,j,k);
+
+		if (!fgIsObstacle(flag)) 
+		{ 
+			const Real phi = phiGrid->getGlobal(i,j,k);
+			if(phi<=invalidt) continue;
+
+			// reinit has to "manually" preserve certain flags, eg, in/out flows
+			int targOr = 0;
+			if (fgIsInflow(flag)) 
+				targOr |= FINFLOW;
+			if (fgIsOutflow(flag)) 
+				targOr |= FOUTFLOW;
+
+
+			if(phi<=0.) {
+				flag = FFLUID | targOr; // | F_TO_FLUID;
+			} else {
+				flag = FEMPTY | targOr;
+				//flag = FFLUID; // | F_TO_FLUID;
+			}
+		} else {
+			// correct LS values from flags?
+			if(correctLsFromFlags) {
+				// ? phiGrid->getGlobal(i,j,k) = 0.;
+				phiGrid->getGlobal(i,j,k) = 0.5;
+
+				// make sure level set values adjacent to obstacles
+				// dont get much smaller than -0.5, otherwise the extrapolation
+				// will extrapolate a surface into the obstacle during fast marching
+				{ const int ni=i-1, nj=j, nk=k; 
+					if( ni>=0 && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} }
+
+				{ const int ni=i+1, nj=j, nk=k; 
+					if(ni < phiGrid->getSizeX() && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} }
+
+				{ const int ni=i, nj=j-1, nk=k; 
+					if( nj >=0 && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} }
+
+				{ const int ni=i, nj=j+1, nk=k; 
+					if(nj < phiGrid->getSizeY() && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} }
+
+				if(gDim==3) { const int ni=i, nj=j, nk=k-1; 
+					if(nk>=0 && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} }
+				if(gDim==3) { const int ni=i, nj=j, nk=k+1; 
+					if(nk < phiGrid->getSizeZ() && fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+						if( phiGrid->getGlobal(ni,nj,nk) < -0.5)
+							phiGrid->getGlobal(ni,nj,nk) = -0.5;
+					} } 
+
+				/* { const int ni=i-1, nj=j, nk=k; 
+					if( fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+							phiGrid->getGlobal(ni,nj,nk) = -12.5;
+					} }
+
+				{ const int ni=i+1, nj=j, nk=k; 
+					if( fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+							phiGrid->getGlobal(ni,nj,nk) = -12.5;
+					} }
+
+				{ const int ni=i, nj=j-1, nk=k; 
+					if( fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+							phiGrid->getGlobal(ni,nj,nk) = -12.5;
+					} }
+
+				{ const int ni=i, nj=j+1, nk=k; 
+					if( fgIsFluid( mpFlags->getGlobal(ni,nj,nk) ) ) {
+							phiGrid->getGlobal(ni,nj,nk) = -12.5;
+					} } */
+
+			}
+		}
+	} // ijk
+
+	/*FOR_IJK(mTwodKs, mTwodKe,   0, m GridInitDim[1],   0, m GridInitDim[0] ) {
+		int& flag = mpFlags->getGlobal(i,j,k);
+		if(flag & F_TO_FLUID) flag = FFLUID;
+	} // */
+}
+
+
+
+// velocity interpolation helpers
+#		define PINIT_INTERPOL(offa,offb,offc) \
+				Real srcpi = pos[0]+(offa); \
+				Real srcpj = pos[1]+(offb); \
+				Real srcpk = pos[2]+(offc); \
+				int srci = (int)srcpi; \
+			 	int	srcj = (int)srcpj; \
+			 	int	srck = (int)srcpk; \
+				CLAMP_TO_GRID(srci,srcj,srck,vels); \
+				const float s1 = srcpi-(float)srci, s0 = 1.-s1; \
+				const float t1 = srcpj-(float)srcj, t0 = 1.-t1; \
+				const float f1 = srcpk-(float)srck, f0 = 1.-f1; 
+		/* end init */
+
+#		define VELACC vels->getGlobal
+#		if DDF_DIMENSION==3
+#		define PADV_INTERPOLATE(index) \
+				vel[index] = f0*( \
+					s0*(t0*VELACC(srci  ,srcj,srck)[index]  + t1*VELACC(srci  ,srcj+1,srck)[index] ) + \
+					s1*(t0*VELACC(srci+1,srcj,srck)[index]  + t1*VELACC(srci+1,srcj+1,srck)[index] ) ) \
+					+ f1 * ( \
+					s0*(t0*VELACC(srci  ,srcj,srck+1)[index]  + t1*VELACC(srci  ,srcj+1,srck+1)[index] ) + \
+					s1*(t0*VELACC(srci+1,srcj,srck+1)[index]  + t1*VELACC(srci+1,srcj+1,srck+1)[index] ) ) ;
+		/* end interp */
+#		else
+		// NOTE! srck not used for 2d!
+#		define PADV_INTERPOLATE(index) \
+				vel[index] = f0*( \
+					s0*(t0*VELACC(srci  ,srcj,srck)[index]  + t1*VELACC(srci  ,srcj+1,srck)[index] ) + \
+					s1*(t0*VELACC(srci+1,srcj,srck)[index]  + t1*VELACC(srci+1,srcj+1,srck)[index] ) ) ;
+		/* end interp */
+#		endif // DDF_DIMENSION==3
+
+// TODO slow velocity interpolation for particles, optimize...
+Vec3 FluidSolver::interpolateVelocity(Vec3 pos, Grid<Vec3>* vels, const Real dx) {
+	Vec3 vel;
+	pos /=  dx; // mpParams->getDeltaX();
+	if (gDim==2) pos[2] = gPatchSize/2;
+
+	Real koff= -0.5;
+	if (gDim==2) koff=0.;
+
+	{ PINIT_INTERPOL(0., -0.5, koff);
+	  PADV_INTERPOLATE(0); }
+
+	{ PINIT_INTERPOL(-0.5, 0., koff);
+	  PADV_INTERPOLATE(1); }
+
+#	if DDF_DIMENSION==3
+	{ PINIT_INTERPOL(-0.5, -0.5, 0.);
+	  PADV_INTERPOLATE(2); }
+#	else
+	vel[2] = 0.;
+#	endif
+
+	//debMsg("interpolateVelocity","At "<<pos<<" = "<<vel ); // DEBUG
+	return vel;
+} // interpolateVelocity
+
+
+// TODO slow velocity interpolation for vortex particles, optimize...
+Vec3 FluidSolver::interpolateVpVelocity(Vec3 pos, Grid<Vec3>* vels) {
+	Vec3 vel;
+	if (gDim==2) pos[2] = gPatchSize/2;
+
+	{ PINIT_INTERPOL(0.5, 0., 0.);
+	  PADV_INTERPOLATE(0); }
+
+	{ PINIT_INTERPOL(0., 0.5, 0.);
+	  PADV_INTERPOLATE(1); }
+
+#	if DDF_DIMENSION==3
+	{ PINIT_INTERPOL(0., 0., 0.5);
+	  PADV_INTERPOLATE(2); }
+#	else
+	vel[2] = 0.;
+#	endif
+
+	return vel;
+}
+
+#undef PIOFF 
+#undef PINIT_INTERPOL 
+#undef PADV_INTERPOLATE
+#undef VELACC
+
+
+//! debugging - print all grids (within RegionOfInterest)
+// warning, this can produce a lot of output! print-glob-enable param should be 0
+void FluidSolver::printAllGrids() {
+	debMsg("\n\n\nFluidSolver::printAllGrids"," "
+			 	<<" roi: "<< mpParams->mPrintRoi[0]<<"-"<< mpParams->mPrintRoi[1]<<", "<<
+				mpParams->mPrintRoi[2]<<"-"<< mpParams->mPrintRoi[3]<<", "<<
+				mpParams->mPrintRoi[4]<<"-"<< mpParams->mPrintRoi[5]<<" " );
+
+	for (std::map<string, Grid<Real>* >::iterator iter=mpParams->mGridsReal.begin(); 
+			iter!=mpParams->mGridsReal.end(); iter++) {
+		if ( (*iter).second ) {
+			Grid<Real>* grid = (*iter).second;
+			debMsg("printWithRoi",grid->getName()<<" size "<<grid->getSize() <<": \n"<<
+				grid->printWithRoi(mpParams->mPrintRoi) );
+		}
+	}
+	for(std::map<string, Grid<int>* >::iterator iter=mpParams->mGridsInt.begin(); 
+			iter!=mpParams->mGridsInt.end(); iter++) {
+		if ( (*iter).second ) {
+			Grid<int>* grid = (*iter).second;
+			//std::cout<< grid->printWithRoi(mpParams->mPrintRoi);
+			debMsg("printWithRoi",grid->getName()<<" size "<<grid->getSize() <<": \n"<<
+				grid->printWithRoi(mpParams->mPrintRoi) );
+		}
+	}
+	for(std::map<string, Grid<Vec3>* >::iterator iter=mpParams->mGridsVec3.begin(); 
+			iter!=mpParams->mGridsVec3.end(); iter++) {
+		if ( (*iter).second ) {
+			Grid<Vec3>* grid = (*iter).second;
+			//std::cout<< grid->printWithRoi(mpParams->mPrintRoi);
+			debMsg("printWithRoi",grid->getName()<<" size "<<grid->getSize() <<": \n"<<
+				grid->printWithRoi(mpParams->mPrintRoi) );
+		}
+	}
+}
+// set velocity, check flags
+// similar to force add (but slower!)
+void FluidSolver::setGlobVelNoobs(int i,int j, int k, Vec3 &set, Grid<Vec3>* velGrid) {
+	if ( fgIsObstacle(mpFlags->getGlobal(i,j,k)) ) return;
+
+	// new test, only set empty ones
+	if (!fgIsEmpty(mpFlags->getGlobal(i,j,k)) ) return;
+	Vec3& velE = velGrid->getGlobal(i,j,k);
+	if (fgIsEmpty(mpFlags->getGlobal(i-1,j,k)) ) {
+		velE[0] = set[0]; 
+	} 
+	if (fgIsEmpty(mpFlags->getGlobal(i,j-1,k)) ) {
+		velE[1] = set[1]; 
+	} 
+	if (fgIsEmpty(mpFlags->getGlobal(i,j,k-1)) ) {
+		velE[2] = set[2]; 
+	}
+	return;
+
+
+	//Vec3& vel = mpCurrVel->getGlobal(i,j,k);
+	Vec3& vel = velGrid->getGlobal(i,j,k);
+	if (!fgIsObstacle(mpFlags->getGlobal(i-1,j,k)) ) {
+		vel[0] = set[0]; 
+	}
+
+	if (!fgIsObstacle(mpFlags->getGlobal(i,j-1,k)) ) {
+		vel[1] = set[1]; 
+	}
+
+	if (!fgIsObstacle(mpFlags->getGlobal(i,j,k-1)) ) {
+		vel[2] = set[2]; 
+	}
+}
+
+
+
+// return timing statistics string
+std::string FluidSolver::getTimingStats(int sort) {
+	std::ostringstream ret;
+	ret << "FluidSolver::getTimingStats, #steps="<< (mStepCounter+1) <<"\n";
+	const double istep = 1  / (double)(mStepCounter+1.);
+
+	double total = 0.;
+	double max = -1.;
+	for(int i=0; i<(int)mPluginTimes.size(); i++) {
+		total += mPluginTimes[i]*istep;
+		if(mPluginTimes[i]*istep > max) max = mPluginTimes[i]*istep;
+	}
+
+	if(sort==0) {	
+		for(int i=0; i<(int)mPluginTimes.size(); i++) {
+			ret << i <<", "<< mPlugins[i]->getName() << " = "<< getTimeString( (myTime_t)(mPluginTimes[i]*istep) ) 
+				<<"; "  << (mPluginTimes[i]*istep / total *100.) <<"%"	 // per cent
+				<<"\n";
+		}
+	} else {
+		std::vector<bool> done;
+		int printed = 0;
+		done.resize( mPluginTimes.size() );
+		for(int i=0; i<(int)mPluginTimes.size(); i++) {
+			done[i] = false;
+		}
+		// sort the slow way...
+		while(printed< (int)mPluginTimes.size()) {
+			double nextMax = -1.;
+			for(int i=0; i<(int)mPluginTimes.size(); i++) {
+				if(mPluginTimes[i]*istep==max) {
+					// TODO move print to function
+					ret << i <<", "<< mPlugins[i]->getName() << " = "<< getTimeString( (myTime_t)(mPluginTimes[i]*istep) ) 
+						<<"; "  << (mPluginTimes[i]*istep / total *100.) <<"%"	 // per cent
+						<<"\n";
+					done[i] = true;
+				}
+				if(!done[i] && mPluginTimes[i]*istep > nextMax) nextMax = mPluginTimes[i]*istep;
+			}
+			max = nextMax;
+			printed++;
+		}
+	}
+	ret <<"Total time = "  << getTimeString( (myTime_t)total ) <<"\n";
+
+	return ret.str();
+}
+
+// lookup data vectir
+vector<Real>* FluidSolver::getDataVector(const std::string& name)
+{
+	for (int i=0;i< (int)mDataVectors.size();i++)
+		if (mDataVectors[i].name == name)
+			return &(mDataVectors[i].data);
+	return NULL;
+} 
+
+// load from gz file
+void FluidSolver::loadDataVector(const string& name, const string& file)
+{
+	int sz;
+	gzFile gzf=gzopen(file.c_str(),"rb");
+	if (gzf==NULL) { 
+		errFatal("FluidSolver::loadDataVector","Cannot open file "<<file, SIMWORLD_PLUGINERROR);
+		return; 
+	}
+	gzread(gzf,&sz,sizeof(int));
+	double *buffer = new double[sz];
+	gzread(gzf,buffer,sz*sizeof(double));
+	gzclose(gzf);
+
+	mDataVectors.push_back(DataVector());
+	mDataVectors.rbegin()->name = name;
+	vector<Real>& data = mDataVectors.rbegin()->data;	
+	data.resize(sz);
+	for (int n=0;n<sz;n++)
+		data[n] = (Real)buffer[n];
+	delete buffer;	
+}
+
+// meshsurface access helpers
+
+// get entry
+SurfaceMesh* FluidSolver::getMesh(std::string name) { 
+	if(haveMesh(name)) {
+		return mMapMeshSurfaces[name];
+	} 
+	errFatal("getMesh","getMesh '"<<name<<"' not found!", SIMWORLD_GENERICERROR);
+	return NULL; 
+}
+SurfaceMesh* FluidSolver::getSurfaceMesh(std::string name) { 
+	return getMesh(name);
+}
+// replace existing entry
+void FluidSolver::setSurfaceMesh(std::string name, SurfaceMesh* set) { 
+	if(haveMesh(name)) {
+		mMapMeshSurfaces[name] = set;
+	} 
+	errFatal("setSurfaceMesh","getMesh '"<<name<<"' not found!", SIMWORLD_GENERICERROR);
+}
+// create new mesh entry
+void FluidSolver::addSurfaceMesh(std::string name, SurfaceMesh* set) { 
+	if(haveMesh(name)) {
+		errFatal("addSurfaceMesh","addSurfaceMesh '"<<name<<"' already exists!", SIMWORLD_GENERICERROR);
+	} 
+	// add...
+	mMapMeshSurfaces[name] = set;
+}
+bool FluidSolver::haveMesh(std::string name) { 
+	if(mMapMeshSurfaces.find(name) != mMapMeshSurfaces.end() ) {
+		return true;
+	} 
+	return false;
+}
+
+#if DDF_MESHSURFACE==1
+#else
+void FluidSolver::ensureMeshAni() { } 
+bool FluidSolver::haveMeshAni() { return false; }
+#endif
+
+}// end namespace DDF 

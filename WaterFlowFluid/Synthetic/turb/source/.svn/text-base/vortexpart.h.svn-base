@@ -1,0 +1,123 @@
+/******************************************************************************
+ *
+ * DDF - vortexpart.h
+ *
+ * Vortex particle handling
+ *
+ *****************************************************************************/
+
+
+#ifndef DDFVORTEXPART_H
+
+#include <list>
+#include "globals.h"
+#include "fluidsolver.h"
+#include "randomstream.h"
+
+#define DEBUG_VORTEXPATH 1
+
+namespace DDF {
+
+#ifdef DEBUG_VORTEXPATH
+// for debugging only
+struct LineElement {
+	Vec3 p0, p1;
+	Real r,g,b,a,s;
+};
+extern std::list<LineElement> gVortexPath;
+#endif
+
+class VortexParticle{
+	public:
+		VortexParticle(const Vec3& p, const Vec3& s, Real irad, Real orad);
+		virtual ~VortexParticle() {};
+
+		static inline bool doDecay() { return msDecayTime != 0; }
+		inline Vec3& getPos() {return mPos; };
+		inline Vec3& getStrength() {return mStrength; };
+		inline const Vec3& getPos() const {return mPos; };
+		inline Real getMergeR2() { return mIRad * mIRad; }
+		inline Real getRadius() { return mIRad; }
+		inline Vec3& getForce() { return mForce; };
+		inline Real& getTime() { return mTime; };
+		int& getFlags() { return mFlags; };
+		bool isDeleted() { return (mFlags & FDelete) == 1; };
+		bool canMerge() { return (mFlags & (FDelete | FInertial)) == 0; }
+		void markDelete() { mFlags |= 1; };
+		inline void advance(const Vec3& v);
+		void setDecayTimer();
+		
+		virtual void scale(Real fac) = 0;
+		virtual bool merge(VortexParticle* v) = 0;
+		virtual VortexParticle* split() = 0;
+		virtual void buildReference(Grid<Vec3>* pTemp, FlagGrid* flags, Real mult, bool doForces) = 0;
+		virtual void vortexStretch(Grid<Vec3>* pVel, Real dt, Real mult);
+		virtual void applyForce(Grid<Vec3>* pVel,Grid<Vec3>* pVort,Grid<Vec3>* pTemp, FlagGrid* flags, 
+				Real mult, Real fadein, bool doForces, Grid<Vec3>* velHelper = NULL) = 0;
+		virtual std::string toString();
+
+		static const Real msRepulsion, msAttenuation;
+		static const bool msStretchingPreserve;
+		static Real msDecayTime, msInitialTime, msRadiusCascade, msDissipateRadius;
+		static Vec3 msU0;
+
+		enum Flag { FDelete = 1, FInertial = 2};
+
+ 	protected:
+		Vec3 mPos, mStrength, mForce;
+		int mFlags;
+		Real mIRad, mORad, mTime, mAttenuate;
+};
+
+class VortexParticleGaussian : public VortexParticle{
+	public:
+		VortexParticleGaussian(const Vec3& pos, const Vec3& strength, Real irad);
+		
+		void scale(Real fac);
+		bool merge(VortexParticle* v);
+		VortexParticle* split();
+		void buildReference(Grid<Vec3>* pTemp, FlagGrid* flags, Real mult, bool doForces);
+		void applyForce(Grid<Vec3>* pVel,Grid<Vec3>* pVort,Grid<Vec3>* pTemp, FlagGrid* flags, 
+				Real mult, Real fadein, bool doForces, Grid<Vec3>* velHelper = NULL);
+		//std::string toString();
+		static Real getAreaMultiplier() { return msAreaMult; }
+
+		static const Real msLogCutoff, msAreaMult;
+	protected:
+		Real mSigma;
+};
+
+class VorticitySystem
+{
+	public:
+		typedef std::list<VortexParticle*> VList;
+
+		VorticitySystem(FluidSolver *fs); // : mpFsolver(fs) {VortexParticle::msU0 = fs->getParams()->mU0;};
+		~VorticitySystem();
+
+		inline VList& getParticles() { return mParts; }
+		static inline Real rnd() { return randStream.getReal(); }
+		static inline Real rndg() { return randStream.getRandNorm(0.,1.); }
+
+		void applyForces(Grid<Vec3>* pVel, Grid<Vec3>* pVort,  Grid<Vec3>* pTemp, FlagGrid* flags, Real mult, bool doForces, Grid<Vec3>* velHelper = NULL);
+		void advectParticles(Grid<Vec3>* pVel, FlagGrid* flags, Real dt, Real multiplier);
+		void registerPrecomp(vector<Real>* dat) { mpPrecomp = dat; }
+		void merge (FlagGrid* flags, Grid<Real>* ndist,Grid<Vec3>* vel, Real dt, Real mergeDist);
+		vector<Real>* getPrecomp() { return mpPrecomp; }
+
+		Real getFadeIn() const { return msFadeIn; }
+		void setFadeIn(Real set) { msFadeIn = set; }
+
+	protected:
+		VList mParts;
+		DDF::FluidSolver * mpFsolver;
+		vector<Real> * mpPrecomp;
+		static RandomStream randStream;
+		Real msFadeIn;
+};
+
+
+}
+
+#define DDFVORTEXPART_H
+#endif

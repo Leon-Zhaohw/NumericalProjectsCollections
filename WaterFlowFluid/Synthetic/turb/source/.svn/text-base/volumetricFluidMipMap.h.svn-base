@@ -1,0 +1,103 @@
+/******************************************************************************
+*
+* DDF - volumetricFluidMipMap.h
+* This class contains functionality to load and store grid data into the format
+* Volumetric Fluid MipMap (.vfmm)
+*
+*****************************************************************************/
+
+#ifndef VOLUMETRICFLUIDMIPMAP_H
+#define VOLUMETRICFLUIDMIPMAP_H
+
+#include "fluidsolver.h"
+#include "clusterTracking.h"
+#include "convert.h"
+
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <zlib.h>
+#include <vector>
+
+namespace DDF
+{
+	
+
+	/////////////////////////////////////////////////////////////////////
+	// AABB class
+	/////////////////////////////////////////////////////////////////////
+	class VFMMLoader {
+
+
+	private:
+
+		// extensions
+		#define VFMM_Ext ".vfmm";
+		#define VEC_Ext ".vecmm";
+		#define REAL_Ext ".realmm";
+
+		#define DLM_Ext ".txt";
+
+
+
+	public:
+
+		// constructor
+		VFMMLoader();
+		
+		~VFMMLoader();
+
+		/////////////
+		// 3D ///////////////
+        ////////////////////////////////////
+
+		// Exporters
+		////////////
+		void exportFluidVolume(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, Vec3 winMin, Vec3 winMax);
+
+		void exportFluidVolume(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, AABB box);
+
+		void exportFluidVolume(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid);
+
+
+		void exportRealGrid(std::string fileName, Grid<Real>* realGrid);
+
+		void exportVec3Grid(std::string fileName, Grid<Vec3>* vecGrid);
+
+
+		// Importers
+		////////////
+		Vec3 importFluidVolume(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid);
+
+		AABB importFluidVolumeToBox(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid);
+
+		void importRealGrid(std::string fileName, Grid<Real>* realGrid);
+
+		void importVec3Grid(std::string fileName, Grid<Vec3>* vecGrid);
+
+
+		/////////////
+		// 2D ///////////////
+		////////////////////////////////////
+		
+		// Exporters
+		////////////
+
+
+		void exportFluidVolumeDLM(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, Vec3 winMin, Vec3 winMax);
+
+		void exportFluidVolumeDLM(std::string fileName, Grid<Real>* phiGrid, Grid<Vec3>* velGrid, AABB box);
+
+
+
+	private:
+
+	};
+
+	/////////////////////////////////////////////////////////////////////
+	
+
+
+};
+
+#endif // VOLUMETRICFLUIDMIPMAP_H

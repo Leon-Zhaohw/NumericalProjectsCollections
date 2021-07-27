@@ -1,0 +1,4 @@
+sphere
+center 0.2 0.46 0.51
+radius 0.05
+color 0.1 0.2 0.8

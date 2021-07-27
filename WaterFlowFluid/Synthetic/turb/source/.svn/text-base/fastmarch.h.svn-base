@@ -1,0 +1,803 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2003-2007 Nils Thuerey
+ *
+ * Header for templated FastMarchingMethod class
+ * 
+ *****************************************************************************/
+
+#ifndef FASTMARCH_H
+#include <algorithm>
+#include <fstream>
+#include <vector>
+
+// for value transport
+#include "fluidsolver.h"
+
+//! debug touching?
+#define TOUCHDEBUG 0
+
+//! debug fast marching?
+#define FASTMARCHDEBUG 1
+
+static const int INITED = 1;
+static const int ISONHEAP = 2;
+
+// HEAP test , reduced stdlib implementation ------------------------
+namespace std {
+
+template<typename _RandomAccessIterator, typename _Distance, typename _Tp, typename _Compare>
+inline void 
+_my_push_heap(_RandomAccessIterator __first, _Distance __holeIndex, _Distance __topIndex, _Tp __Tp_value, _Compare __comp)
+{
+	_Distance __parent = (__holeIndex - 1) / 2;
+	while (__holeIndex > __topIndex
+			&& __comp(*(__first + __parent), __Tp_value))
+	{
+		*(__first + __holeIndex) = *(__first + __parent);
+		__holeIndex = __parent;
+		__parent = (__holeIndex - 1) / 2;
+	}
+	*(__first + __holeIndex) = __Tp_value;
+}
+
+template<typename _RandomAccessIterator, typename _Distance, typename _Tp, typename _Compare>
+inline void 
+_my__adjust_heap(_RandomAccessIterator __first, _Distance __holeIndex, _Distance __len, _Tp __Tp_value, _Compare __comp)
+{
+	const _Distance __topIndex = __holeIndex;
+	_Distance __secondChild = 2 * __holeIndex + 2;
+	while (__secondChild < __len)
+	{
+		if (__comp(*(__first + __secondChild),
+					*(__first + (__secondChild - 1))))
+			__secondChild--;
+		*(__first + __holeIndex) = *(__first + __secondChild);
+		__holeIndex = __secondChild;
+		__secondChild = 2 * (__secondChild + 1);
+	}
+	if (__secondChild == __len)
+	{
+		*(__first + __holeIndex) = *(__first + (__secondChild - 1));
+		__holeIndex = __secondChild - 1;
+	}
+	_my_push_heap(__first, __holeIndex, __topIndex, __Tp_value, __comp);
+}
+
+template<typename _RandomAccessIterator, typename _Compare>
+inline void
+my_make_heap(_RandomAccessIterator __first, _RandomAccessIterator __last, _Compare __comp)
+{
+	typedef typename iterator_traits< _RandomAccessIterator >::value_type _ValueType;
+	typedef typename iterator_traits< _RandomAccessIterator >::difference_type _DistanceType;
+
+	// concept requirements
+	//__glibcxx_function_requires(_Mutable_RandomAccessIteratorConcept< _RandomAccessIterator >);
+	//__glibcxx_requires_valid_range(__first, __last);
+
+	if (__last - __first < 2) return;
+
+	const _DistanceType __len = __last - __first;
+	_DistanceType __parent = (__len - 2) / 2;
+	while (true) {
+		_my__adjust_heap(__first, __parent, __len,
+				_ValueType(*(__first + __parent)), __comp);
+		if (__parent == 0)
+			return;
+		__parent--;
+	}
+}
+
+}
+// HEAP test ------------------------
+
+namespace DDF {
+
+
+//! fast marching simple class
+//! no transportation - just init distance values...
+//template<class T>
+class FmNoTransport 
+{
+	public:
+		//! Constructor 
+		//FmNoTransport() : mDummy(0.) { };
+		FmNoTransport() { };
+		//! Destructor 
+		~FmNoTransport() { };
+		void initMarching() { };
+
+		//! cell is touched by marching from source cell
+		inline void transpTouch(int x,int y,int z, int sx,int sy,int sz, Real *weights, Real time) {
+			// nothing to do...
+#			if DDF_DEBUG==1
+			x=y=z= sx=sy=sz= 0; weights=NULL; time=0.; // get rid of warnings
+#			endif
+		}; 
+
+		//! parent solver object
+		void setFsolver(DDF::FluidSolver* set) { };
+}; 
+
+
+ 
+//! fast marching
+//! transport certain values
+template<class T>
+class FmValueTransport // : public ArrayCutoffBc<T>
+{
+	public:
+		//! Constructor 
+		FmValueTransport() :
+			mpFmFsolver(NULL), 
+			mpVelGrid(NULL)
+		{ };
+		//! Destructor 
+		~FmValueTransport() { };
+
+		// before starting...
+		void initMarching() {
+			mpVelGrid = NULL;
+			if(mpFmFsolver) {
+				mpVelGrid = mpFmFsolver->getGridCurrVel();
+			}
+		}
+
+		// helper, get velocity from solver grid
+		inline T& getTouchValue(int x,int y,int z) {
+			return mpVelGrid->getGlobal(x,y,z);
+		}
+
+		//! cell is touched by marching from source cell
+		inline void transpTouch(int x,int y,int z, int sx,int sy,int sz, Real *weights, Real time) {
+			if(!mpVelGrid || !mpFmFsolver) return;
+			if(gDim==2) { sz = z = mpFmFsolver->get2dKstart(); }
+
+			T val = T(0.); 
+			if(weights[0]>0.0) val += getTouchValue(x+1, y+0, z+0) * weights[0];
+			if(weights[1]>0.0) val += getTouchValue(x-1, y+0, z+0) * weights[1];
+			if(weights[2]>0.0) val += getTouchValue(x+0, y+1, z+0) * weights[2];
+			if(weights[3]>0.0) val += getTouchValue(x+0, y-1, z+0) * weights[3];
+			if(gDim==3) {
+				if(weights[4]>0.0) val += getTouchValue(x+0, y+0, z+1) * weights[4];
+				if(weights[5]>0.0) val += getTouchValue(x+0, y+0, z-1) * weights[5];
+			}
+
+			if(0) debMsg("transpTouch","at "<<PRINT_VEC(x,y,z)<<" from "<<PRINT_VEC(sx,sy,sz)<<" w's "<<
+					weights[0]<<", "<< weights[1]<<", "<< 
+					weights[2]<<", "<< weights[3]<<", "<< 
+					weights[4]<<", "<< weights[5]<<"  =  "<<val);
+
+			mpFmFsolver->setGlobVelNoobs(x,y,z, val, mpVelGrid); 
+			//todo - add function to safely update boundary velocity values ? ...
+		}; 
+
+		//! parent solver object
+		void setFsolver(DDF::FluidSolver* set) { 
+			mpFmFsolver = set; 
+		}
+	protected:
+		DDF::FluidSolver *mpFmFsolver;
+
+		Grid<Vec3>* mpVelGrid;
+};
+// */
+
+
+class FmHeapEntry {
+	public:
+		int x,y,z;
+		// quick time access for sorting
+		Real *time;
+};
+
+//! heap comparison object
+//template<class T>
+class FmHeapComparatorOut {
+	public:
+		static inline bool compare(const Real x, const Real y) {
+			return x > y;
+		}
+
+		inline bool operator() (const FmHeapEntry& x, const FmHeapEntry& y) const {
+			//return (*x < *y);
+			return (*x.time > *y.time);
+		};
+};
+
+//template<class T>
+class FmHeapComparatorIn {
+	public:
+		static inline bool compare(const Real x, const Real y) {
+			//return x > y;
+			return x < y;
+		}
+
+		inline bool operator() (const FmHeapEntry& x, const FmHeapEntry& y) const {
+			//return (*x > *y);
+			//return (*x.time > *y.time);
+			return (*x.time < *y.time);
+		};
+};
+
+//! fast marching algorithm wrapper class
+template<class COMP, int TDIR>
+class FastMarch
+{
+
+	public:
+		//! Constructor 
+		FastMarch(int sizex, int sizey, int sizez, int slice2d, FluidSolver* pFluidSolver);
+		//! Destructor 
+		~FastMarch();
+
+		//! Init sizes,arrays etc. 
+		void initializeFastMarching(Real setmmax, Grid<Real>* pPhi,	FlagGrid* pFmFlags, bool velTransport); 
+		void setMaxTime(Real maxTime) { mMaxTime = maxTime; }
+		
+		//! advect level set function with given velocity */
+		void performMarching(); // Grid<Real>* phiAr, FlagGrid* fmFlags);
+
+		//! invalid time value (constant)
+		//! invalid time offset for storing time (constant)
+#define INVALIDTIME (-1000.0)
+#define INVTOFFSET  (  500.0)
+
+		inline Real getInvalidTime() { return INVALIDTIME; }
+		static Real getMarchInvalidTime() { return INVALIDTIME; }
+
+		//! test value for invalidity
+		inline bool isInvalid(Real v) const { return (v <= INVALIDTIME); }
+
+		//! init initial list
+		int addToInitialList(int x, int y, int z, int srcx, int srcy, int srcz);
+
+		//! convert phi to time value
+		inline Real phi2time(Real phival) {
+			return (phival-INVALIDTIME+ INVTOFFSET) * -1.0;
+		}
+		//! ... and back
+		inline Real time2phi(Real tval) {
+			return (INVALIDTIME - INVTOFFSET  - tval);
+		}
+
+	protected:
+
+		inline Real& phi(int x, int y, int z) { 
+			return mpPhiAr->getGlobal(x,y,z);
+		}
+
+		Grid<Real>* mpPhiAr;
+		FlagGrid* mpFmFlags;
+		FluidSolver* mpFluidSolver;
+
+		FmValueTransport<Vec3> mVT;
+		bool mDoValTransport;
+
+		//! debugging count touches
+#if TOUCHDEBUG==1
+		ArrayCutoffBc<int> mTouchAr;
+		int mTouchCnt;
+#endif
+
+		//! maximal time to march for
+		Real mMaxTime;
+
+		//! value to transport to cells
+		typedef Real* FmListEntry;
+		//! fast marching list
+		std::vector<FmHeapEntry> mHeap;
+		COMP mHeapComp;
+		Real mReheapVal;
+
+		//! process counter
+		int mCntInitial, mCntAdded, mCntAddNew, mCntAddExist,mCntAddExist2, mCntTouched;
+
+		//! weights for touching points
+		Real mWeights[6];
+
+		int addToList(int x, int y, int z, int srcx, int srcy, int srcz);
+		Real calculateDistance(int x,int y,int z); // inline?
+
+		//! debug file counter
+		int mDumpFileCnt;
+
+		// still take care of storing sizes
+		int mSizex, mSizey, mSizez;
+		//  parameter determines 2d slice, if 2d is active
+		int m2dSlice;
+
+};
+
+
+
+/*****************************************************************************/
+//! Constructor 
+template<class COMP, int TDIR>
+FastMarch<COMP,TDIR>::FastMarch(int sizex, int sizey, int sizez, 
+								int slice2d, FluidSolver* pFluidSolver) :
+	mpPhiAr(NULL), mpFmFlags(NULL), mpFluidSolver(pFluidSolver),
+#if TOUCHDEBUG==1
+	mTouchAr(), mTouchCnt(0),
+#endif
+	mMaxTime( -1.0 )   // no limit
+	, mDumpFileCnt(0)
+	, mSizex(sizex), mSizey(sizey), mSizez(sizez), m2dSlice(slice2d)
+{
+}
+
+
+/*****************************************************************************/
+//! Destructor 
+template<class COMP, int TDIR>
+FastMarch<COMP,TDIR>::~FastMarch() 
+{
+	// dont delete phi, dealt with by e.g. level set class
+}
+
+/*! Init sizes,arrays etc. */
+template<class COMP, int TDIR>
+void FastMarch<COMP,TDIR>::initializeFastMarching(Real setmmax, Grid<Real>* pPhi,
+	FlagGrid* pFmFlags, bool velTransport)
+{
+	mpPhiAr = pPhi;
+	mpFmFlags = pFmFlags;
+	mMaxTime = fabs(setmmax) * TDIR;
+	if (velTransport) {
+		mVT.setFsolver(mpFluidSolver);
+		mVT.initMarching();
+	}
+	mDoValTransport = velTransport;
+
+#if TOUCHDEBUG==1
+	mTouchAr.initializeArray(setx,sety,setz);
+	mTouchAr.allocate();
+#endif
+
+	mCntInitial= mCntAdded= mCntAddNew= mCntAddExist=mCntAddExist2= mCntTouched= 0;
+	//debMsg("FastMarch::initializeFastMarching","Init "<<mSizex<<","<<mSizey<<","<<mSizez );
+};
+
+		
+/*****************************************************************************/
+
+// TODO update
+
+template<class COMP, int TDIR>
+Real FastMarch<COMP,TDIR>::calculateDistance(int x,int y,int z) {
+	bool printDeb = false;
+	int invflag = 0;
+	int invcnt = 0;
+	Real v[3];
+	int okcnt = 0;
+
+	Real aVal = 0.;
+	const bool aPlus = mpFmFlags->getGlobal(x+1,y,z)==INITED;
+	const bool aMin  = mpFmFlags->getGlobal(x-1,y,z)==INITED;
+	mWeights[0] = mWeights[1] = 0.;
+	if(aPlus) {
+		//if(aMin) { } else { }
+		// somewhat arbitrary - choose +1 value over -1 ...
+ 		aVal = mpPhiAr->getGlobal(x+1,y,z);
+		v[okcnt] = aVal; okcnt++;
+		mWeights[0] = 1.;
+	} else {
+		if(aMin) {
+			aVal = mpPhiAr->getGlobal(x-1,y,z);
+			v[okcnt] = aVal; okcnt++;
+			mWeights[1] = 1.;
+		} 
+		else {
+			invcnt++;
+		}
+	}
+
+	Real bVal = 0.;
+	const bool bPlus = mpFmFlags->getGlobal(x,y+1,z)==INITED;
+	const bool bMin  = mpFmFlags->getGlobal(x,y-1,z)==INITED;
+	mWeights[2] = mWeights[3] = 0.;
+	if(bPlus) {
+		bVal = mpPhiAr->getGlobal(x,y+1,z);
+		v[okcnt] = bVal; okcnt++;
+		mWeights[2] = 1.;
+	} else {
+		if(bMin) {
+			bVal = mpPhiAr->getGlobal(x,y-1,z);
+			v[okcnt] = bVal; okcnt++;
+			mWeights[3] = 1.;
+		}
+		else {
+			invcnt++;
+		}
+	}
+
+	Real cVal = 0.;
+	const bool cPlus = mpFmFlags->getGlobal(x,y,z+1)==INITED;
+	const bool cMin  = mpFmFlags->getGlobal(x,y,z-1)==INITED;
+	mWeights[4] = mWeights[5] = 0.;
+	if(cPlus) {
+		cVal = mpPhiAr->getGlobal(x,y,z+1);
+		v[okcnt] = cVal; okcnt++;
+		mWeights[4] = 1.;
+	} else {
+		if(cMin) {
+			cVal = mpPhiAr->getGlobal(x,y,z-1);
+			v[okcnt] = cVal; okcnt++;
+			mWeights[5] = 1.;
+		}
+		else {
+			invcnt++;
+		}
+	} 
+
+
+	Real ret = INVALIDTIME;
+	//a = b = INVALIDTIME; // DEBUG
+	switch(invcnt) {
+	case 0: {
+		// take all values
+		const Real ca=v[0], cb=v[1], cc=v[2];
+		const Real csqrt = MAX(0. , 
+				-2.*(ca*ca+cb*cb- cb*cc + cc*cc - ca*(cb+cc)) + 3 );
+		// clamp to make sure the sqrt is valid
+		ret = 0.333333*( ca+cb+cc+ TDIR*sqrt(csqrt) );
+
+		// weights needed for transport (transpTouch)
+		mWeights[0] *= fabs(ret-ca);
+		mWeights[1] *= fabs(ret-ca);
+		mWeights[2] *= fabs(ret-cb);
+		mWeights[3] *= fabs(ret-cb);
+		mWeights[4] *= fabs(ret-cc);
+		mWeights[5] *= fabs(ret-cc);
+
+		Real norm = 0.0; // try to force normalization
+		for(int i=0;i<6;i++) { 
+#			if FASTMARCHDEBUG==1
+			if(!(mWeights[i] >= 0.0)){ errMsg(" AAAAAAAA ",x<<","<<y<<","<<z<< " < "); printDeb = true; }
+#			endif
+			norm += mWeights[i]; 
+		}	
+#		if FASTMARCHDEBUG==1
+		if(!(norm>0.0)){ errMsg(" BBBBBBB ",x<<","<<y<<","<<z<< " < "<<norm) printDeb = true; };
+		if(printDeb) { errMsg(" INF ",v[0]<<" "<<v[1]<<" "<<v[2]<<" r"<<ret<<" n");
+			for(int i=0;i<6;i++) errMsg(" W "," "<<i<<" "<<mWeights[i]);
+		}
+#		endif
+		norm = 1.0/norm;
+		for(int i=0;i<6;i++) { mWeights[i] *= norm; } 
+
+		} break; 
+	case 1: {
+		// take just the 2 ok values
+		// t=0.5*( a+b+ (2*g*g-(b-a)*(b-a))^0.5) 
+		const Real csqrt = MAX(0. , 2.-(v[1]-v[0])*(v[1]-v[0]) );
+		// clamp to make sure the sqrt is valid
+		ret = 0.5*( v[0]+v[1]+ TDIR*sqrt(csqrt) );
+		//debMsg("RET","a="<<a<<" b="<<b<<" ret="<<ret );
+
+#		if FASTMARCHDEBUG==1
+		if((0) && (2.-(v[1]-v[0])*(v[1]-v[0])) ) {
+			debMsg("FastMarch::calculateDistance","warning -  neg sqrt at "<<PRINT_VEC(x,y,z)<<" = "<<ret<<" v0="<<v[0]<<" v1="<<v[1] <<" neg="<<(2.-(v[1]-v[0])*(v[1]-v[0])));
+		}
+#		ifndef WIN32
+		if(!finite(ret)) {
+			errMsg("FastMarch::calculateDistance"," ret invalid! at "<<PRINT_VEC(x,y,z)<<" = "<<ret<<" v0="<<v[0]<<" v1="<<v[1] );
+			exit(1);
+		}
+#		endif
+#		endif
+		// weights needed for transport (transpTouch)
+		mWeights[0] *= fabs(ret-aVal);
+		mWeights[1] *= fabs(ret-aVal);
+		mWeights[2] *= fabs(ret-bVal);
+		mWeights[3] *= fabs(ret-bVal);
+		mWeights[4] *= fabs(ret-cVal);
+		mWeights[5] *= fabs(ret-cVal);
+
+		Real norm = 0.0; // try to force normalization
+		for(int i=0;i<6;i++) { 
+#		if FASTMARCHDEBUG==1
+			if(!(mWeights[i] >= 0.0)){ errMsg(" AAAAAAA2 "," < "<<mWeights[i]); printDeb = true; }
+#		endif
+			norm += mWeights[i]; 
+		}	
+#		if FASTMARCHDEBUG==1
+		if(!(norm>0.0)){ errMsg(" BBBBBB2 "," < "<<norm) printDeb = true; };
+		if(printDeb) { errMsg(" INF2 ",v[0]<<" "<<v[1]<<" "<<v[2]<<" r"<<ret<<" n"<<norm);
+			for(int i=0;i<6;i++) errMsg(" W2 "," "<<i<<" "<<mWeights[i]);
+		}
+#		endif
+		norm = 1.0/norm;
+		for(int i=0;i<6;i++) { mWeights[i] *= norm; } 
+		// */
+
+		} break; 
+	case 2: {
+		// just use the one remaining value
+		ret = v[0]+ (Real)(TDIR) ; // direction = +- 1
+		} break; 
+	default:
+		errMsg("FastMarch","Invalid invcnt "<<invcnt );
+
+		//getPhiAr().dumpToFile("errinv",x,y);
+		/*errMsg("FastMarch::calculateDistance"," at "<<x<<","<<y<<","<<z<< " a,b and c invalid, case?! "<<a<<" "<<b<<" "<<c ); 
+		errMsg("FastMarch::calculateDistance","neighborhood: "<<
+			phi(x+0,y+0,z+0) <<" "<< phi(x+1,y+0,z+0) <<" "<< phi(x-1,y+0,z+0) <<" "<<
+			phi(x+0,y+1,z+0) <<" "<< phi(x+0,y-1,z+0) <<" "<< phi(x+0,y+0,z+1) <<" "<< phi(x+0,y+0,z-1) <<" "<< " ");
+		exit(1); // DEBUG */
+		break;
+	}
+	//ret = v[0]+ (Real)(TDIR) ; // direction = +- 1 // DEBUG TEST!
+
+	if(printDeb) errMsg(" INVT "," "<<invflag<<" invcnt="<<invcnt<<", a"<<aVal<<" b"<<bVal<<" c"<<cVal<<".   ret="<<ret );
+	return ret;
+}
+
+
+
+//! init initial list
+template<class COMP, int TDIR>
+int FastMarch<COMP,TDIR>::addToInitialList(int x, int y, int z, int srcx, int srcy, int srcz) {
+	int ret = addToList( x,y,z, srcx, srcy, srcz);
+
+	if(ret==0) mCntInitial++;
+	return ret;
+};
+
+
+
+
+template<class COMP, int TDIR>
+int FastMarch<COMP,TDIR>::addToList(int x, int y, int z, int srcx, int srcy, int srcz) {
+
+#undef _DEBUG
+
+	mCntAdded++;
+
+	// check validity before anything is accessed
+	if(x<1) return 1; // plain array test
+	if(y<1) return 2;
+	if(x>(mSizex-2)) return 3;
+	if(y>(mSizey-2)) return 4;
+	if(gDim==3) { // 3D
+		if(z<1) return 5;
+		if(z>(mSizez-2)) return 6;
+	} else {
+		// 2D	 
+		//if(z!=0) { mCntAdded--; return 7; }
+		z = srcz = m2dSlice;
+	}	
+
+	// already known value?
+	// value alreay set to valid value?
+	if(mpFmFlags->getGlobal(x,y,z) == INITED) return 10;
+
+	// discard by source time now , TODO do instead before calling all addtolists?
+	Real srct = mpPhiAr->getGlobal(srcx,srcy,srcz); 
+	if(mHeapComp.compare(srct,mMaxTime)) return 13;
+
+	Real ttime = calculateDistance( x,y,z );
+	//if(isInvalid(ttime)) errMsg("addToList","invalid!? "<<PRINT_VEC(x,y,z)<<" from "<<PRINT_VEC(srcx,srcy,srcz)<<" = "<<ttime);
+
+	// remove old entry if larger
+	bool found=false;
+
+	Real oldt = mpPhiAr->getGlobal(x,y,z);
+	if (mpFmFlags->getGlobal(x,y,z) == ISONHEAP) {
+		found = true;
+		// is old time better?
+		if(mHeapComp.compare(ttime,oldt)) return 14;
+	}
+
+	// update field
+	mpFmFlags->getGlobal(x,y,z) = ISONHEAP;
+	mpPhiAr->getGlobal(x,y,z) = ttime;
+
+	// set weights?
+	//V::transpTouch(x,y,z, srcx,srcy,srcz, mWeights, ttime); 
+	if (mDoValTransport)
+		mVT.transpTouch(x,y,z, srcx,srcy,srcz, mWeights, ttime); 
+#if TOUCHDEBUG==1
+	mTouchAr.getValue(x,y,z) = mTouchCnt; mTouchCnt++;
+#endif
+	if(!found) {
+		// add list entry with source value
+		//FmListEntry entry = &phi(x,y,z);
+		FmHeapEntry entry;
+		entry.x = x;
+		entry.y = y;
+		entry.z = z;
+	  	entry.time	= &mpPhiAr->getGlobal(x,y,z);
+
+		/*
+		// Real check for existing entries (shouldn happen!)
+		for(int n=0;n<mHeap.size(); n++) {
+			if(mHeap[n]==entry) {
+				errMsg("FastMarch::addToList", "ERR adding "<<x<<","<<y<<","<<z<<" from "<< srcx<<","<<srcy<<","<<srcz<<" t:"<<phi(x,y,z) );
+				exit(1); 
+			}
+		} // DEBUG !!! */
+		//std::make_heap(mHeap.begin(), mHeap.end(), mHeapComp ); 
+		//debMsg("NEWENTRY"," at "<<PRINT_VEC(x,y,z) );
+		mHeap.push_back( entry );
+
+		// TODO - MSVC debug STL assertions fail here, it seems to run ok though...
+		// fix needed...
+		std::push_heap(mHeap.begin(), mHeap.end(), mHeapComp );
+		//std::make_heap(mHeap.begin(), mHeap.end(), mHeapComp ); 
+
+		mCntAddNew++;
+	}	else {
+		mCntAddExist++; 
+		return 20; // TEST why does this work????
+		// UPDATE!?
+
+		//std::make_heap(mHeap.begin(), mHeap.end(), mHeapComp ); 
+		//if(mReheapVal==0.0 || mReheapVal<phi(x,y,z) ) {
+		//if((mReheapVal==0.0) || (!mHeapComp(&mReheapVal,&phi(x,y,z))) ) {
+		//errMsg(" addet ", " phi "<< phi2time(phi(x,y,z))<<" reh "<< phi2time(mReheapVal)<<" comp:"<<(!mHeapComp(&mReheapVal,&phi(x,y,z))) );
+
+		//if((mReheapVal==0.0) || (mHeapComp(&mReheapVal,&currtime)) ) {
+			//... use comp obj, template with it...
+			//mReheapVal = currtime;
+		//}
+	}
+#define _DEBUG
+
+	if(0 && gDim==2) errMsg("FastMarch::addToList", " added "<<x<<","<<y<<","<<z<<" from "<< srcx<<","<<srcy<<","<<srcz<<" t:"<<
+			phi(x,y,z)<<","<<
+			mpPhiAr->getGlobal(x,y,z)<<" , oldt"<<oldt<<" nt"<<ttime<<" headsize="<<mHeap.size() );
+	return 0;
+}
+
+/*****************************************************************************/
+//! Walk...
+template<class COMP, int TDIR>
+void FastMarch<COMP,TDIR>::performMarching() { //Grid<Real>* phiAr, FlagGrid* fmFlags) {
+	//debMsg("FastMarch","marching "<<TDIR);
+
+#if TOUCHDEBUG==1
+	for(int i=0;i<mSizex;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { mTouchAr.getValue(i,j,k) = 0; }
+	mTouchCnt = 0;
+#endif
+
+	if(0 && gDim==2) { std::cout << mpPhiAr->toString(true);
+		std::cout << mpFmFlags->toString(true); }
+
+	//DEBUG print whole list TTTTTTTTTTT
+	/*std::cout << "fm list: "<< std::endl;
+	for(std::list<FmListEntry>::iterator i=mList.begin(); i!=mList.end(); i++) {
+		errMsg(" listt ", " org "<<(*i)<<" "<< *(*i) );
+	}
+	std::cout << std::endl; 
+
+	std::vector<FmListEntry> cvec = mHeap;
+	sort_heap( cvec.begin(), cvec.end(), mHeapComp );
+	for(std::vector<FmListEntry>::iterator i=cvec.begin(); i!=cvec.end(); i++) {
+		errMsg(" vectt ", " new "<<(*i)<<" "<< *(*i) );
+	}
+	std::cout << std::endl; // */
+
+	std::my_make_heap(mHeap.begin(), mHeap.end(), mHeapComp ); 
+	
+	mReheapVal = 0.0;
+	while(mHeap.size() > 0) {
+		//errMsg(" heapt ", " org1 "<< phi2time(*mHeap[0])<<" "<< phi2time(*mHeap[mHeap.size()-1])<<" reh "<<phi2time(mReheapVal)<<" comp:"<<mHeapComp(mHeap[0] , &mReheapVal) );
+		if(mReheapVal<0.0) {
+			// 1 = normal (should work)
+			// 2 = inverse (should be the same as 3)
+			// 3 = always reheap (no if)
+#			define REHEAP_METHOD 3
+#			if REHEAP_METHOD==1
+			if(mHeapComp(mHeap[0] , &mReheapVal))  //test?
+#			endif
+#			if REHEAP_METHOD==2
+			if(!mHeapComp(mHeap[0] , &mReheapVal))  //test?
+#			endif
+			{
+				//mCntAddExist2++;
+
+				std::my_make_heap(mHeap.begin(), mHeap.end(), mHeapComp ); 
+				mReheapVal = 0.0;
+			}
+		}
+
+		std::pop_heap( mHeap.begin(), mHeap.end() , mHeapComp );
+		//errMsg(" heapt ", " org2 "<<mHeap[mHeap.size()-1]<<"\n" );
+
+		FmHeapEntry& ce = mHeap[mHeap.size()-1]; 
+		int x = ce.x;
+		int y = ce.y;
+		int z = ce.z; 
+
+		if(0 && gDim==2) if(1) { // DEBUG print heap
+			std::cout<<"Heap contents: ";
+			for(int i=0; i<(int)mHeap.size(); i++) {
+				std::cout<< *mHeap[i].time <<", ";
+			}
+			std::cout<<"\n"; }
+
+		//errMsg(" heapt ", " org "<<(*ce)<<" "<<(*ce)<<" "<<phi(x,y,z)<<" ct"<<ctime<<" at "<<x<<","<<y<<","<<z<<" s"<<mHeap.size() );
+#if FASTMARCHDEBUG==1
+		Real ctime = mpPhiAr->getGlobal(x,y,z);
+		//if(!isInvalid(*ce)) { // DEBUG
+		if(mpFmFlags->getGlobal(x,y,z) == INITED) { // DEBUG
+			//errMsg("FastMarch::march", "Invalid CE - org "<<(*ce)<<" "<<(*ce)<<" "<<phi(x,y,z)<<" ct"<<ctime<<" at "<<x<<","<<y<<","<<z<<" s"<<mHeap.size() );
+			errMsg("FastMarch::march", "Invalid CE - org "<<" "<<phi(x,y,z)<<" ct"<<ctime<<" at "<<x<<","<<y<<","<<z<<" s"<<mHeap.size() );
+			exit(1); 
+		}
+#endif
+
+		//phi(x,y,z) = ctime;
+		// leave: phiAr->getGlobal(x,y,z) = ctime;
+		mpFmFlags->getGlobal(x,y,z) = INITED;
+		mHeap.pop_back();
+		mCntTouched++;
+		//errMsg("FastMarch::addToList", " touched "<<x<<","<<y<<","<<z<<" with "<<phi(x,y,z) ); // DEBUG
+
+		addToList(x-1,y,z, x,y,z);
+		addToList(x+1,y,z, x,y,z);
+		addToList(x,y-1,z, x,y,z);
+		addToList(x,y+1,z, x,y,z);
+		addToList(x,y,z-1, x,y,z);
+		addToList(x,y,z+1, x,y,z);
+
+	if(0 && gDim==2) { std::cout << mpPhiAr->toString(true);
+		std::cout << mpFmFlags->toString(true); }
+
+	}
+
+	// statistics output
+	if (0) {
+		debMsg("FastMarch::march","Stats - initial:"<<mCntInitial<<
+				" added:"<<mCntAdded<<" addnew:"<<mCntAddNew<<" addex:"<<mCntAddExist<<
+				" reh:"<<mCntAddExist2<<" t:"<<mCntTouched<<" " );
+	}
+	mCntInitial= mCntAdded= mCntAddNew= mCntAddExist=mCntAddExist2= mCntTouched= 0;
+
+	// set boundary for plain array
+	// TEST ??
+	for(int i=0;i<        1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { 
+				mpPhiAr->getGlobal(i,j,k) = mpPhiAr->getGlobal(i+1,j,k); 
+			}
+	for(int i=mSizex-2;i<mSizex-1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { 
+				mpPhiAr->getGlobal(i+1,j,k) = mpPhiAr->getGlobal(i,j,k); 
+			}
+	for(int i=0;i<mSizex;i++) 
+		for(int j=0;j<        1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhiAr->getGlobal(i,j,k) = mpPhiAr->getGlobal(i,j+1,k); }
+	for(int i=0;i<mSizex;i++) 
+		for(int j=mSizey-2;j<mSizey-1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhiAr->getGlobal(i,j+1,k) = mpPhiAr->getGlobal(i,j,k); }
+	if(gDim==3) {
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=0;k<        1;k++) { mpPhiAr->getGlobal(i,j,k) = mpPhiAr->getGlobal(i,j,k+1); }
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=mSizez-2;k<mSizez-1;k++) { mpPhiAr->getGlobal(i,j,k+1) = mpPhiAr->getGlobal(i,j,k); }
+	}
+
+	// testing, gnuplot dump
+	/*for(int i=0;i<V::mSizex;i++) for(int j=0;j<V::mSizey;j++) for(int k=0;k<V::mSizez;k++) { if(mPhiAr.getValue(i,j,k)==INVALIDTIME) mPhiAr.getValue(i,j,k) = 0.0; }
+	mPhiAr.dumpToFile( "fm", REHEAP_METHOD, mDumpFileCnt );
+	mDumpFileCnt++;
+	// testing, gnuplot dump end */
+
+#if TOUCHDEBUG==1
+	//mTouchAr.dumpToGridFile( "transpTouch", 0, 0 );
+#endif
+
+}
+
+} // namespace DDF
+#define FASTMARCH_H
+#endif
+

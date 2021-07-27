@@ -1,0 +1,1613 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2003-2007 Nils Thuerey
+ *
+ * Implementation of LevelSet class
+ * 
+ *****************************************************************************/
+
+// TODO:
+// check interface into boundary movement
+// 40^2 fall drop problem - fluid layer near boundary too fast?
+// - check particle ls reinit
+// - enhance particle tracking
+// - check particle resizing
+
+#include <list>
+#include "quicklist.h"
+#include "levelset.h"
+#include "fastmarch.h"
+#include "fastiterativeeikonal.h"
+#include "fastsweepingeikonal.h"
+#include "randomlib.h"
+
+namespace DDF {
+
+// offset for correcting float particle position (in grid cells)
+// to integer grid index by casting to int: i= (int)(pPos[0]+gIntPosOffset[0]);
+// also used for interpolation of values from real grids, eg phi value
+#if DDF_DIMENSION==2
+const Vec3 gIntPosOffset = -Vec3(0.5,0.5,0.0);
+#else
+const Vec3 gIntPosOffset = -Vec3(0.5,0.5,0.5);
+#endif
+
+unsigned int EscapedParticle::mIdCounter = 1;
+
+/*****************************************************************************/
+//! Constructor 
+LevelSet::LevelSet() :
+	mpFsolver(NULL), mPrMin(0.1), mPrMax(0.5),
+	mParticleMaxPhi(2.1), mSinkDivLevel(-1.0)
+{
+	mFirstInit = false;
+	mFoamLifetime = -1.;
+}
+
+
+/*****************************************************************************/
+//! Destructor 
+LevelSet::~LevelSet() {
+}
+
+
+/*****************************************************************************/
+/*! Init ararys etc. */
+void LevelSet::initializeLevelSet(int setx, int sety, int setz) { 
+	mSizex = setx;
+	mSizey = sety;
+	mSizez = setz;
+}
+
+/******************************************************************************
+ * Geom init
+ *****************************************************************************/
+
+void LevelSet::initFromGridFlags(Grid<Real>* pPhi) { 
+	//const int N = m;
+	const int sx = mSizex;
+	const int sy = mSizey;
+	const int sz = mSizez;
+
+	// first init from geomfile values
+	int ks = 0;
+	int ke = sz-0; 
+	if(gDim==2) {
+		ks = mpFsolver->get2dKstart(); 
+		ke = ks+1;
+	} 
+
+	// reset phi
+	for (int k=ks; k<ke; k++) 
+		for (int j=0; j<sy-0; j++) 
+			for (int i=0; i<sx-0; i++) {
+				pPhi->getGlobal(i,j,k) = 0.;
+				//fmFlags->getGlobal(i,j,k) = 0;
+			}
+
+	// set from flags
+	ks = 1;
+	ke = sz-1; 
+	if(gDim==2) {
+		ks = mpFsolver->get2dKstart(); 
+		ke = ks+1;
+	}
+
+	for (int k=ks; k<ke; k++) 
+		for (int j=1; j<sy-1; j++) 
+			for (int i=1; i<sx-1; i++) {
+				// check flags and set boundary
+				if( fgIsFluid(mpFsolver->getGridFlags()->getGlobal(i,j,k)) ) {
+					pPhi->getGlobal(i,j,k) = -0.5;
+				} else {
+					pPhi->getGlobal(i,j,k) = 0.5;
+				}
+			}
+} 
+
+
+void LevelSet::reinitMarching(Real maxTime, Grid<Real>* pPhi, FlagGrid* fmFlags, 
+		FlagGrid* fluidFlags, bool doVelTransport, bool correctOuterLayer) { 
+	const bool doDebPrint = false; //(g Dim==2);
+
+	myTime_t tInit = 0, tMarching = 0, tA, tB;
+	debMsg("FastMarch::reinitMarching","maxTime="<<maxTime<<" phi:"<<pPhi->getName() <<" vels="<<doVelTransport);
+
+	//return; // DEBUG
+	const int sx = mSizex;
+	const int sy = mSizey;
+	const int sz = mSizez;
+#if DDF_DIMENSION==2
+	const int ks = mpFsolver->get2dKstart();
+	const int ke = ks+1;
+#else 
+	const int ks = 1;
+	const int ke = sz-1;
+#endif 
+	
+	FastMarch<FmHeapComparatorOut, +1> marchOut(mSizex, mSizey, mSizez, m2dSlice,mpFsolver);
+	FastMarch<FmHeapComparatorIn, -1> marchIn(mSizex, mSizey, mSizez, m2dSlice,mpFsolver);
+	marchOut.initializeFastMarching(maxTime, pPhi, fmFlags, doVelTransport);
+	marchIn.initializeFastMarching(maxTime, pPhi, fmFlags, false);
+
+	//max Time = -1.0; // no limit , does make a difference!
+	const Real invalidt = marchOut.getInvalidTime();
+	const int INITED = 1;
+	//const Real invtIn = marchIn.getInvalidTime();
+
+	if(doDebPrint) { std::cout<<"after ls advect:\n"; // debug-print
+		FOR_IJK(mSizez/2,mSizez/2+1, 0,mSizey, 0,mSizex) {
+			printf("%05.3f ",pPhi->getGlobal(i,j,k));
+			if(i==mSizex-1) std::cout<<"\n"; } 
+		std::cout<<"after ls advect end\n\n"; }
+		
+
+	// fast march: first inwards, then out
+
+	tA = getTime();
+	// march inside
+	FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) { 
+		const Real v = pPhi->getGlobal(i,j,k);
+		if(v>=0.) {
+			fmFlags->getGlobal(i,j,k) = INITED;
+		}
+		else fmFlags->getGlobal(i,j,k) = 0;
+	}
+
+	FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) {
+		//if(pPhi->getGlobal(i,j,k) > invalidt) continue;
+		if(fmFlags->getGlobal(i,j,k) == INITED) continue;
+		if( fgIsObstacle(fluidFlags->getGlobal(i,j,k)) ) continue;
+
+		// only add neighbors of interface cells
+		bool isAtInterface = false;
+		// interface velocity
+		for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+			const int nbi = i+nbX[nbCnt];
+			const int nbj = j+nbY[nbCnt];
+			const int nbk = k+nbZ[nbCnt];
+			if(!fmFlags->checkIndexValid(nbi,nbj,nbk)) continue;
+			const Real nbphi = pPhi->getGlobal(nbi,nbj,nbk);
+
+			if(fmFlags->getGlobal(nbi,nbj,nbk)!=INITED) continue;
+			if(nbphi>=0.) {
+				isAtInterface=true; 
+				nbCnt=6;  // abort loop...
+			}
+		}
+
+		if(isAtInterface) {
+			// set value
+			fmFlags->getGlobal(i,j,k) = INITED;
+			// leave: pPhi->getGlobal(i,j,k) = pPhi;
+
+			// add neighbors that are not at the interface
+			for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+				const int nbi = i+nbX[nbCnt];
+				const int nbj = j+nbY[nbCnt];
+				const int nbk = k+nbZ[nbCnt];
+				if(!fmFlags->checkIndexValid(nbi,nbj,nbk)) continue;
+				if( fgIsObstacle(fluidFlags->getGlobal(nbi,nbj,nbk)) ) continue;
+				const Real nbPhi = pPhi->getGlobal(nbi,nbj,nbk);
+				// check nbPhi>phi_ijk ?
+				if(nbPhi<0.) {
+					bool nbIsAtInterface = false;
+					// check neighbors of neighbor
+					for (int nbCnt2=0; nbCnt2<2*gDim; nbCnt2++) {
+						const int nbi2 = nbi+nbX[nbCnt2];
+						const int nbj2 = nbj+nbY[nbCnt2];
+						const int nbk2 = nbk+nbZ[nbCnt2];
+						if(!fmFlags->checkIndexValid(nbi2,nbj2,nbk2)) continue;
+						if(fmFlags->getGlobal(nbi2,nbj2,nbk2)!=INITED) continue;
+
+						const Real nbPhi2 = pPhi->getGlobal(nbi2,nbj2,nbk2);
+						//if(nbPhi2<=invalidt) continue;
+						if (nbPhi2>=0.) { 
+							nbIsAtInterface=true;
+						}
+					}
+
+					if(!nbIsAtInterface) {
+						// add neighbor from ijk (old was other way round)
+						//marchIn.setTransportValue(ifVel);
+						int ret = marchIn.addToInitialList( nbi,nbj,nbk, i,j,k );
+						if(0) debMsg(
+							"add1","ret="<<ret<<" at "<<PRINT_VEC(i,j,k) <<" from "<<PRINT_VEC(nbi,nbj,nbk) <<
+							" val nb="<< pPhi->getGlobal(nbi,nbj,nbk) <<",  val own="<< pPhi->getGlobal(i,j,k) );
+					}
+				}
+
+			}
+		} // isAtInterface
+	}
+	// performance measurements
+	tB = getTime();
+	tInit +=  tB - tA;
+	tA = tB;
+	marchIn.performMarching(); // pPhi, fmFlags);
+	tB = getTime();
+	tMarching +=  tB - tA;
+	
+	// set un initialized regions
+	FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) { 
+		if(fmFlags->getGlobal(i,j,k)!=INITED) {
+			pPhi->getGlobal(i,j,k) = -maxTime;
+		}
+	}
+
+	if(doDebPrint) {std::cout<<"after marchIn:\n"; // debug-print
+		FOR_IJK(mSizez/2,mSizez/2+1, 0,mSizey, 0,mSizex) {
+			printf("%05.3f ",pPhi->getGlobal(i,j,k));
+			if(i==mSizex-1) std::cout<<"\n"; } 
+		std::cout<<"after marchIn end\n\n"; }
+
+	// done with inwards marching, now march out...
+	
+	tA = getTime();
+	FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) { 
+		const Real v = pPhi->getGlobal(i,j,k);
+		if(v< 0.) {
+			fmFlags->getGlobal(i,j,k) = INITED;
+		}
+		else fmFlags->getGlobal(i,j,k) = 0;
+	}
+
+	
+	Grid<Vec3>* velGrid = mpFsolver->getGridCurrVel();
+	if (correctOuterLayer) {
+		// by default, correctOuterLayer is on!
+
+		// normal version, inwards march is done, now add all outside values (0..2] to list
+		// note, this might move the interface a bit! but keeps a nice signed distance field...
+		FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) {
+
+			if( fgIsObstacle(fluidFlags->getGlobal(i,j,k)) ) continue;
+
+			// check nbs
+			for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+				const int nbi = i+nbX[nbCnt];
+				const int nbj = j+nbY[nbCnt];
+				const int nbk = k+nbZ[nbCnt];
+
+				if(!fmFlags->checkIndexValid(nbi,nbj,nbk)) continue;
+				if(fmFlags->getGlobal(nbi,nbj,nbk)!=INITED) continue;
+				if( fgIsObstacle(fluidFlags->getGlobal(nbi,nbj,nbk)) ) continue;
+
+				const Real nbPhi = pPhi->getGlobal(nbi,nbj,nbk);
+				//if(nbPhi<=invalidt) continue;
+				// only add nodes near interface, not e.g. outer boundary vs. invalid region
+				if( nbPhi <  0. && nbPhi>=-2.) { 
+					marchOut.addToInitialList( i,j,k, nbi,nbj,nbk);
+
+					// get velocity - note, lsGetVelocity not needed here, only
+					// pure per cell value
+					// Joe: The velocity for this cell should already have been calculated
+					//      in addToInitialList (using velocity extrapolation).
+					//  Vec3 ifVel = velGrid->getGlobal(nbi, nbj, nbk);
+					//  mpFsolver->setGlobVelNoobs(i,j,k, ifVel, velGrid);
+				}
+			}
+		}
+	} else {
+
+		// alternative version, keep interface, do not distort outer cells
+		// add all ouside values, but not those at the IF layer
+		FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) {
+
+			if( fgIsObstacle(fluidFlags->getGlobal(i,j,k)) ) continue;
+			// only look at ouside values
+			if( pPhi->get(i,j,k) < 0. ) continue;
+
+			// only add neighbors of interface cells
+			bool isAtInterface = false;
+			for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+				const int nbi = i+nbX[nbCnt], nbj = j+nbY[nbCnt], nbk = k+nbZ[nbCnt];
+				if(!fmFlags->checkIndexValid(nbi,nbj,nbk)) continue;
+				const Real nbphi = pPhi->getGlobal(nbi,nbj,nbk);
+
+				if(fmFlags->getGlobal(nbi,nbj,nbk) != INITED) continue;
+				if(nbphi<0.) {
+					isAtInterface=true; 
+					nbCnt=6;  // abort loop...
+				}
+			}
+			if(isAtInterface) {
+				// now add all non, interface neighbors
+				fmFlags->getGlobal(i,j,k) = INITED;
+
+				// add neighbors that are not at the interface
+				for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+					const int nbi = i+nbX[nbCnt], nbj = j+nbY[nbCnt], nbk = k+nbZ[nbCnt];
+					if(!fmFlags->checkIndexValid(nbi,nbj,nbk)) continue;
+					if( fgIsObstacle(fluidFlags->getGlobal(nbi,nbj,nbk)) ) continue;
+					const Real nbPhi = pPhi->getGlobal(nbi,nbj,nbk);
+
+					if(nbPhi>0.) {
+						bool nbIsAtInterface = false;
+						// check neighbors of this neighbor
+						for (int nbCnt2=0; nbCnt2<2*gDim; nbCnt2++) {
+							const int nbi2 = nbi+nbX[nbCnt2], nbj2 = nbj+nbY[nbCnt2], nbk2 = nbk+nbZ[nbCnt2];
+							if(!fmFlags->checkIndexValid(nbi2,nbj2,nbk2)) continue;
+							if(fmFlags->getGlobal(nbi2,nbj2,nbk2)!=INITED) continue;
+
+							const Real nbPhi2 = pPhi->getGlobal(nbi2,nbj2,nbk2);
+							if (nbPhi2<=0.) {
+								nbIsAtInterface=true;
+							}
+						}
+						if(!nbIsAtInterface) {
+							// add neighbor from ijk (old was other way round)
+							int ret = marchOut.addToInitialList( nbi,nbj,nbk, i,j,k );
+						}
+					}
+
+				}
+			}
+
+		}
+	} // end version 2 - dont distort interface
+
+	mpLsVelGrid = NULL; // invalidate
+
+	// performance measurements
+	tB = getTime();
+	tInit +=  tB - tA;
+	tA = tB;
+	marchOut.performMarching(); //pPhi, fmFlags);
+	tB = getTime();
+	tMarching +=  tB - tA;
+	
+    // set un initialized regions
+	FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) { 
+		if(fmFlags->getGlobal(i,j,k)!=INITED) {
+			pPhi->getGlobal(i,j,k) = maxTime;
+		}
+	}
+	// */ 
+	
+	// also copy mirrored boundary values
+	/* ? 
+	FOR_IJK(0,sz-0,  0,sy-0,   0,sx-0) {
+		// OLD const Real vi = marchIn.get(i,j,k); pPhi->getGlobal(i,j,k) = vi;
+		const Real vo = marchOut.get(i,j,k); pPhi->getGlobal(i,j,k) = vo; // DEBUG
+	} // */
+	// marching done
+
+	// output timing info
+	if (0) {
+		debMsg("LevelSet::reinitMarching","tInit: "<<  
+				getTimeString(tInit).c_str() <<", tMarching: "<< getTimeString(tMarching).c_str()  <<", ratio: "<< (tInit/double(tMarching))  <<" " );
+	}
+
+	if(doDebPrint) { std::cout<<"after marchout:\n"; // debug-print
+		FOR_IJK(mSizez/2,mSizez/2+1, 0,mSizey, 0,mSizex) {
+			printf("%05.3f ", pPhi->getGlobal(i,j,k));
+			if(i==mSizex-1) std::cout<<"\n"; } 
+		std::cout<<"after marchout end\n\n"; }
+}
+
+void LevelSet::reinitFI(Real maxTime, Grid<Real>* pPhi, FlagGrid* fiFlags, bool doVelTransport) { 
+	const int sx = mSizex;
+	const int sy = mSizey;
+	const int sz = mSizez;
+#if DDF_DIMENSION==2
+	const int ks = mpFsolver->get2dKstart();
+	const int ke = ks+1;
+#else 
+	const int ks = 1;
+	const int ke = sz-1;
+#endif 
+
+	FlagGrid* flagGrid = mpFsolver->getGridFlags();
+	Real epsilon = mpFsolver->getParams()->mFIMEpsilon;
+
+	FastIterativeEikonal outFIM(mSizex,mSizey,mSizez,mpFsolver);
+	FastIterativeEikonal inFIM(mSizex,mSizey,mSizez,mpFsolver);
+	outFIM.setGrids(fiFlags, pPhi);
+	inFIM.setGrids(fiFlags, pPhi);
+
+	std::list<GridCellCoord> innerBound;
+	std::list<GridCellCoord> outerBound;
+
+	FOR_IJK(ks, ke, 0, sy, 0, sx) {
+		Real& phi = pPhi->getGlobal(i,j,k);
+		const Real sign = (phi<0) ? -1.0 : 1.0;
+		//const Real infinity = sign*std::numeric_limits<Real>::max();
+		int& flag = fiFlags->getGlobal(i,j,k);
+		
+		if (fgIsObstacle(flagGrid->getGlobal(i,j,k))) {
+			flag = FIBOUNDARY;
+			//phi = infinity;
+			phi = 0;
+		} else {
+			bool isAtInterface = false;
+			for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+				const int nbi = i+nbX[nbCnt];
+				const int nbj = j+nbY[nbCnt];
+				const int nbk = k+nbZ[nbCnt];
+				if (!fgIsObstacle(flagGrid->getGlobal(nbi,nbj,nbk))) {
+					const Real nbphi = pPhi->getGlobal(nbi,nbj,nbk);
+					if (sign*nbphi < 0) {
+						isAtInterface=true;
+						nbCnt=6; 
+					}
+				}
+			}
+
+			if (isAtInterface) {
+				if (sign < 0) {
+					//inFIM.addToInitialList(i,j,k);
+					innerBound.push_back(GridCellCoord(i,j,k));
+					flag = FIINTERFACE;
+				} else {
+					//outFIM.addToInitialList(i,j,k);
+					outerBound.push_back(GridCellCoord(i,j,k));
+					flag = FIALIVE;
+				}
+			} else {
+				flag = FIFAR;
+				phi = sign*maxTime;
+			}
+		}
+	}
+
+	outFIM.setInitialList(outerBound);
+	inFIM.setInitialList(innerBound);
+
+	outFIM.activateInitialList();
+	outFIM.solveEikonal(+1, (int)maxTime, epsilon, doVelTransport);
+	inFIM.solveEikonal( -1, (int)maxTime, epsilon, false);
+
+
+	/*FOR_IJK(ks,ke,  1,sy-1,   1,sx-1) { 
+		if(fiFlags->getGlobal(i,j,k)!=FIALIVE) {
+			pPhi->getGlobal(i,j,k) = maxTime;
+		}
+	}*/
+}
+
+void LevelSet::reinitFS(Grid<Real>* pPhi, FlagGrid* fsFlags, bool doVelTransport)
+{
+	const int sx = mSizex;
+	const int sy = mSizey;
+	const int sz = mSizez;
+#if DDF_DIMENSION==2
+	const int ks = mpFsolver->get2dKstart();
+	const int ke = ks+1;
+#else 
+	const int ks = 1;
+	const int ke = sz-1;
+#endif 
+
+	FlagGrid* flagGrid = mpFsolver->getGridFlags();
+	Real epsilon = mpFsolver->getParams()->mFSMEpsilon;
+
+	FastSweepingEikonal fsm(mSizex,mSizey,mSizez,m2dSlice,mpFsolver);
+	fsm.setMaxIter( mpFsolver->getParams()->mFMMaxIterations );
+	
+	// Test case: start from center, march outside
+	/*FOR_IJK(ks, ke, 0, sy, 0, sx) {
+		Real& phi = pPhi->getGlobal(i,j,k);
+		const Real sign = (phi<0) ? -1.0 : 1.0;
+		int& flag = fsFlags->getGlobal(i,j,k);
+		
+		if (fgIsObstacle(flagGrid->getGlobal(i,j,k))) {
+			flag = FSBOUNDARY;
+			phi = 0;
+		} else {
+			if ((i==sx/2)&&(j==sy/2)&&(k==sz/2)) {
+				phi = 0;
+				flag = FSINTERFACE;
+			} else {
+				phi = fsm.mFarValue;
+				flag = FSOUTSIDE;
+			}
+		}
+	}*/
+	
+
+	FOR_IJK(ks, ke, 0, sy, 0, sx) {
+		Real& phi = pPhi->getGlobal(i,j,k);
+		const Real sign = (phi<0) ? -1.0 : 1.0;
+		int& flag = fsFlags->getGlobal(i,j,k);
+		
+		if (fgIsObstacle(flagGrid->getGlobal(i,j,k))) {
+			flag = FSBOUNDARY;
+			phi = 0;
+		} else {
+			bool isAtInterface = false;
+			for (int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+				const int nbi = i+nbX[nbCnt];
+				const int nbj = j+nbY[nbCnt];
+				const int nbk = k+nbZ[nbCnt];
+				if (!fgIsObstacle(flagGrid->getGlobal(nbi,nbj,nbk))) {
+					const Real nbphi = pPhi->getGlobal(nbi,nbj,nbk);
+					if (sign*nbphi < 0) {
+						isAtInterface=true;
+						nbCnt=6; 
+					}
+				}
+			}
+			
+			if (isAtInterface) {
+				if (sign < 0) {
+					flag = FSINTERFACE;
+				} else {
+					flag = FSOUTSIDE;
+					phi = fsm.mFarValue;
+				}
+			} else {
+				if (sign < 0) {
+					flag = FSINSIDE;
+				} else {
+					flag = FSOUTSIDE;
+				}
+				phi = sign*fsm.mFarValue;
+			}
+		}
+	}
+
+	fsm.solveEikonal(fsFlags, pPhi, epsilon, doVelTransport);
+}
+
+/******************************************************************************
+ * Particle level set implementation
+ *****************************************************************************/
+
+//#define PLS_INSIDE_ONLY 1
+
+class plsSeedParticles : public GridOpBase {
+	public:
+		plsSeedParticles(FlagGrid* flags, Grid<Real> *gPhi, Real ppc, Real minR, Real maxR, Real maxPhi)
+			: GridOpBase(), mpPhi(gPhi),
+			  mPpc(ppc), mMinR(minR), mMaxR(maxR), mMaxPhi(maxPhi),
+			  mNumParticlesSeeded(0)
+		{ 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+			debMsg("plsSeedParticles","Ppc: "<<ppc<<", total " << mNumParticlesSeeded);
+		}
+
+		~plsSeedParticles() { }
+
+		void resetVariables()
+		{
+			mParticles.clear();
+		}
+
+		void buildCallList() {
+			setFlags(mpFlags);
+			gaPhi.gridAccInit(mpPhi, DDF::AM_READ, gaCalls); 
+			mRand.initialise(mpPhi->getSizeX() % mRand.IJ_MAX, mpPhi->getSizeX() % mRand.KL_MAX);
+		}
+
+		inline void operator() (int i, int j, int k) { 
+			const Real phi = gaPhi(i,j,k);
+			const Real absphi = fabs(phi);
+			const Real maxR = (phi>0)?mMaxR:-mMaxR;
+			Real r;
+			
+			if ((absphi > mMaxPhi) || !(fgIsFluid(gaFlags(i,j,k))||fgIsEmpty(gaFlags(i,j,k))))
+				return;
+
+#ifdef PLS_INSIDE_ONLY
+			if (phi > 1.0) // only keep outside particles in interface cell to get the sampling right
+				return;
+#endif
+ 
+			// don't seed in cells next to obstacle
+			if ((i>0) && fgIsObstacle(gaFlags(i-1,j,k))) return;
+			if ((i<mpFlags->getSizeX()-1) && fgIsObstacle(gaFlags(i+1,j,k))) return;
+			if ((j>0) && fgIsObstacle(gaFlags(i,j-1,k))) return;
+			if ((j<mpFlags->getSizeY()-1) && fgIsObstacle(gaFlags(i,j+1,k))) return;
+#if DDF_DIMENSION==3
+			if ((k>0) && fgIsObstacle(gaFlags(i,j,k-1))) return;
+			if ((k<mpFlags->getSizeZ()-1) && fgIsObstacle(gaFlags(i,j,k+1))) return;
+#endif
+
+
+			for (int pi=0; pi<mPpc; pi++) {
+				Real x,y,z;
+					
+				// get random position within cell
+				x = i + mRand.getUniform();
+				y = j + mRand.getUniform();
+				if (gDim==3)
+					z = k + mRand.getUniform();
+				else
+					z = k;
+
+				// compute radius
+				if (absphi < 1.) {
+#if DDF_DIMENSION==2
+					Real phip = gaPhi.getInterpolated(x-0.5,y-0.5,z);
+#else
+					Real phip = gaPhi.getInterpolated(x-0.5,y-0.5,z-0.5);
+#endif
+					Real sign = (phip>0.)?1:-1;
+					if (sign*phip > mMaxR)
+						r = sign*mMaxR;
+					else if (sign*phip < mMinR)
+						r = sign*mMinR;
+					else
+						r = phip;
+				} else
+					r = maxR;
+
+				Vec3 p(x,y,z);
+					
+				// create new particle
+				mParticles.push_back(LevelSetParticle(p, r));
+			}
+			mNumParticlesSeeded += (int)mPpc;
+		}
+
+		void reduce(plsSeedParticles &op) {
+			mParticles.splice(mParticles.end(), op.mParticles);
+			mNumParticlesSeeded += op.mNumParticlesSeeded;
+		}
+
+		void transferParticles(std::list<LevelSetParticle>& dest)
+		{
+			dest.splice(dest.end(), mParticles);
+		}
+
+	protected:
+		Grid<Real>* mpPhi;
+		GridAccessor<Real,1> gaPhi;
+
+		Real mPpc;			// particles per cell
+		Real mMinR, mMaxR;	// min and max particle radius
+		Real mMaxPhi;		// seed in cells up to mMaxPhi
+
+		int mNumParticlesSeeded;
+
+		std::list<LevelSetParticle> mParticles;
+
+		RandomNumbers mRand;
+}; // plsSeedParticles */
+
+class plsMergeCorrected : public GridOpBase {
+	public:
+		plsMergeCorrected(FlagGrid* flags, Grid<Real> *gPhiDest, Grid<Real> *gPhiPlus, Grid<Real> *gPhiMinus)
+			: GridOpBase(), mpPhiDest(gPhiDest), mpPhiPlus(gPhiPlus), mpPhiMinus(gPhiMinus)
+		{ 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		}
+
+		~plsMergeCorrected() { }
+
+		void buildCallList() {
+			gaPhiDest.gridAccInit(mpPhiDest, DDF::AM_WRITE, gaCalls); 
+			gaPhiPlus.gridAccInit(mpPhiPlus, DDF::AM_READ, gaCalls); 
+			gaPhiMinus.gridAccInit(mpPhiMinus, DDF::AM_READ, gaCalls); 
+			setFlags(mpFlags);
+		}
+
+		inline void operator() (int i, int j, int k) { 
+			const Real v1 = gaPhiPlus(i,j,k);
+			const Real v2 = gaPhiMinus(i,j,k);
+			gaPhiDest.write(i,j,k) = (fabs(v1) <= fabs(v2)) ? v1 : v2;
+		}
+
+		void reduce(plsMergeCorrected& op) { }
+
+	protected:
+		Grid<Real>* mpPhiDest;
+		Grid<Real>* mpPhiPlus;
+		Grid<Real>* mpPhiMinus;
+		GridAccessor<Real,0> gaPhiDest;
+		GridAccessor<Real,0> gaPhiPlus;
+		GridAccessor<Real,0> gaPhiMinus;
+}; // plsMergeCorrected */
+
+
+
+// we dont want level set values near obstacles
+// these cause inner PLS particles, and unnecessary work...
+// so here's a brute force fix, loop over grid, and reset all values
+// without any empty NB's in a 2-cell vicinity
+// this is called before re-seeding/sampling the PLS particles
+void LevelSet::clearPhiValuesNearWalls(Grid<Real>* pPhi, FlagGrid* flags)
+{
+	const int maxOffset = 2;
+	int maxOffsetK = maxOffset;
+	if(gDim==2) maxOffsetK=0;
+
+	// correct obstacle LS
+	FOR_IJK_GRID(flags) {
+		if(!fgIsFluid( flags->getGlobal(i,j,k)) ) continue;
+
+		bool hasFluid = false;
+		for (int offk=-maxOffsetK; offk<=maxOffsetK; offk++) 
+			for (int offj=-maxOffset; offj<=maxOffset; offj++) 
+				for (int offi=-maxOffset; offi<=maxOffset; offi++) {
+					const int nbi = i+offi;
+					const int nbj = j+offj;
+					const int nbk = k+offk;
+					if(!flags->checkIndexValid(nbi,nbj,nbk)) continue;
+					if(fgIsEmpty( flags->getGlobal(nbi,nbj,nbk)) )
+						hasFluid = true;
+				}
+		if(!hasFluid) {
+			// set arbitrary "deep inside" value
+			pPhi->getGlobal(i,j,k) = -5.;
+		}
+	} 
+}
+
+void LevelSet::plsReseed(Grid<Real>* pPhi, FlagGrid* flags)
+{
+	mParticles.clear();
+	clearPhiValuesNearWalls(pPhi,flags);
+
+	int ppc;
+	if (gDim==2)
+		ppc = mpFsolver->getParams()->mNumLsParticles2d;
+	else
+		ppc = mpFsolver->getParams()->mNumLsParticles3d;
+
+	plsSeedParticles seedOp(flags, pPhi, ppc, mPrMin, mPrMax, mParticleMaxPhi);
+	seedOp.transferParticles(mParticles);
+}
+
+inline void LevelSet::plsSeedOneParticle(int i, int j, int k, Real phi, Grid<Real>* pPhi, RandomNumbers* pRand)
+{
+	Real x,y,z;
+		
+	// get random position within cell
+	x = i + pRand->getUniform();//+ getRand();
+	y = j + pRand->getUniform();//+ getRand();
+#if DDF_DIMENSION==2
+	z = k;
+#else
+	z = k + pRand->getUniform();//+ getRand();
+#endif
+	
+	// compute radius
+	Real r;
+	if (fabs(phi) < 1.) {
+#if DDF_DIMENSION==2
+		Real phip = pPhi->getInterpolated(x-0.5,y-0.5,z);
+#else
+		Real phip = pPhi->getInterpolated(x-0.5,y-0.5,z-0.5);
+#endif
+		Real sign = (phip>0.)?1:-1;
+		if (sign*phip > mPrMax)
+			r = sign*mPrMax;
+		else if (sign*phip < mPrMin)
+			r = sign*mPrMin;
+		else
+			r = phip;
+	} else
+		r = (phi>0) ? mPrMax : -mPrMax;
+
+	// create new particle
+	mParticles.push_back(LevelSetParticle(Vec3(x,y,z), r));
+}
+
+void LevelSet::plsResample(Grid<Real>* pPhi, Grid<Real>* pDiv, FlagGrid* flags)
+{
+	typedef std::list<LevelSetParticle>::iterator pit_t;
+
+	//myTime_t tA, tB, tC;
+	//clearPhiValuesNearWalls(pPhi,flags);
+
+	int deleted=0, inserted=0;
+
+	//std::vector< std::list<pit_t> > partInCell;
+	const int sx = flags->getSizeX();
+	const int sy = flags->getSizeY();
+#if DDF_DIMENSION==2
+	//partInCell.resize(sx*sy);
+	Quicklist<pit_t>* pic = new Quicklist<pit_t>[sx*sy];
+#define INDEX(x,y,z) (y*sx + x)
+#else
+	const int sz = flags->getSizeZ();
+	//partInCell.resize(sx*sy*sz);
+	Quicklist<pit_t>* pic = new Quicklist<pit_t>[sx*sy*sz];
+#define INDEX(x,y,z) (((z*sy)+y)*sx + x)
+#endif
+	
+
+	
+	QuicklistElementManager<pit_t> picM(mParticles.size());
+	pit_t it, it_next, it_end;
+	it = mParticles.begin();
+	it_end = mParticles.end();
+	//tA = getTime();
+	while (it != it_end) {
+		const LevelSetParticle& p = *it;
+		const Vec3& pos = p.getPos();
+		int i = (int)pos.x;
+		int j = (int)pos.y;
+		int k = (int)pos.z;
+		//partInCell[INDEX(i,j,k)].push_back(it);
+		pic[INDEX(i,j,k)].insert(picM.dispense(it));
+		++it;
+	}
+	//tB = getTime();
+
+	int ppc;
+	if (gDim==2)
+		ppc = mpFsolver->getParams()->mNumLsParticles2d;
+	else
+		ppc = mpFsolver->getParams()->mNumLsParticles3d;
+
+	
+
+	RandomNumbers ran;
+	// pseudo random init, each run should be the same
+	ran.initialise(pPhi->getSizeX() % ran.IJ_MAX, pPhi->getSizeY() % ran.KL_MAX);
+
+#if DDF_DIMENSION==2
+	const int k = m2dSlice;
+#else
+	for (int k=0; k<sz; k++)
+#endif
+		for (int j=0; j<sy; j++)
+			for (int i=0; i<sx; i++) {
+				if (fgIsObstacle(flags->getGlobal(i,j,k)))
+					continue;
+				const Real phi = pPhi->getGlobal(i,j,k);
+				const Real absphi = fabs(phi);
+				//std::list<pit_t>& parts = partInCell[INDEX(i,j,k)];
+				Quicklist<pit_t>& parts = pic[INDEX(i,j,k)];
+				
+				// check if cell is next to boundary
+				bool isAtBoundary=false;
+				if ((i>0) && fgIsObstacle(flags->getGlobal(i-1,j,k))) isAtBoundary=true;
+				if ((i<flags->getSizeX()-1) && fgIsObstacle(flags->getGlobal(i+1,j,k))) isAtBoundary=true;
+				if ((j>0) && fgIsObstacle(flags->getGlobal(i,j-1,k))) isAtBoundary=true;
+				if ((j<flags->getSizeY()-1) && fgIsObstacle(flags->getGlobal(i,j+1,k))) isAtBoundary=true;
+#if DDF_DIMENSION==3
+				if ((k>0) && fgIsObstacle(flags->getGlobal(i,j,k-1))) isAtBoundary=true;
+				if ((k<flags->getSizeZ()-1) && fgIsObstacle(flags->getGlobal(i,j,k+1))) isAtBoundary=true;
+#endif
+				if (isAtBoundary)
+					continue;
+
+				//Real div = 0.;
+				//if(pDiv) div = pDiv->getGlobal(i,j,k);
+
+				if ( isAtBoundary 
+					|| (absphi > mParticleMaxPhi + 1.0)
+#ifdef PLS_INSIDE_ONLY
+					|| (phi > 1.0) // only keep outside particles in interface cell to get the sampling right
+#endif
+					//|| (div < mSinkDivLevel)*/
+					)
+
+				{
+					// delete particles in cells next to boundary or farther
+					// away from the interface than mParticleMaxPhi
+					/*std::list<pit_t>::iterator it2, it2_end;
+					it2_end = parts.end();
+					for (it2=parts.begin(); it2!=it2_end; ++it2) {
+						mParticles.erase(*it2);
+						deleted++;
+					}*/
+					QuicklistElement<pit_t>* e;
+					for (e = parts.begin(); e != NULL; e = e->next) {
+						mParticles.erase(e->data);
+						deleted++;
+					}
+				} else {
+					int pcount = parts.size();
+					if (pcount > ppc*1.25) {
+						// too many particles in cell -> randomly remove some
+						while (parts.size() > ppc) {
+							int l = ran.getInt(0, parts.size()-1);
+							/*std::list<pit_t>::iterator it2 = parts.begin();
+							while (l>0) { ++it2; l--; }
+							mParticles.erase(*it2);
+							parts.erase(it2);*/
+
+							QuicklistElement<pit_t> *ep = NULL, *e = parts.begin();
+							while (l>0) { ep=e; e=e->next; l--; }
+							mParticles.erase(e->data);
+							parts.erase(ep, e);
+							deleted++;
+						}
+
+					} else if ((pcount < ppc*0.75) && (absphi < mParticleMaxPhi)) {
+						// too few particles in cell -> insert new ones
+						for (int n=0; n<ppc-pcount; n++) {
+							plsSeedOneParticle(i,j,k, phi, pPhi, &ran);
+							inserted++;
+						}
+					}
+				}
+			}
+
+	//tC = getTime();
+	//printf("plsReseed Timings: tA-tB %s, tB-tC %s\n", getTimeString(tB-tA).c_str(), getTimeString(tC-tB).c_str());
+
+	delete[] pic;
+
+	debMsg("spResampleLSParticles","particles deleted:"<<deleted<<", inserted:"<<inserted<<", new total:"<<mParticles.size());
+	
+}
+#undef INDEX
+
+int LevelSet::plsRemoveAtSinks(Grid<Real>* pDiv)
+{
+	// unused for now...
+	std::list<LevelSetParticle>::iterator it, it_next, it_end;
+
+	int cnt = 0;
+
+	it=mParticles.begin();
+	it_end=mParticles.end();
+	while (it != it_end) {
+		it_next = it;
+		++it_next;
+		const LevelSetParticle& p = *it;
+		const Vec3& pos = p.getPos();
+		if (pDiv->getGlobal((int)pos.x,(int)pos.y,(int)pos.z) < mSinkDivLevel) {
+			it_next = mParticles.erase(it);
+			cnt++;
+		}
+		it=it_next;
+	}
+	return cnt;
+}
+
+void LevelSet::plsRemoveAtObstacle(FlagGrid* flags) {
+	std::list<LevelSetParticle>::iterator it, it_next, it_end;
+
+	int deleted = 0;
+
+	it = mParticles.begin();
+	it_end = mParticles.end();
+	while (it != it_end) {
+		const LevelSetParticle& p = *it;
+		if (p.getRadius() < 0.) {
+			++it;
+			continue;	// only delete outside particles
+		}
+
+		const Vec3& pos = p.getPos();
+		int i = (int)pos.x;
+		int j = (int)pos.y;
+		int k = (int)pos.z;
+		bool del = false;
+		if (!flags->checkIndexValid(i,j,k)) {
+			del = true;
+		} else {
+			// outside parts
+			if (p.getRadius() > 0.) {
+				if ((i>0) && fgIsObstacle(flags->getGlobal(i-1,j,k))) del=true;
+				if ((i<flags->getSizeX()-1) && fgIsObstacle(flags->getGlobal(i+1,j,k))) del=true;
+				if ((j>0) && fgIsObstacle(flags->getGlobal(i,j-1,k))) del=true;
+				if ((j<flags->getSizeY()-1) && fgIsObstacle(flags->getGlobal(i,j+1,k))) del=true;
+#				if DDF_DIMENSION==3
+				if ((k>0) && fgIsObstacle(flags->getGlobal(i,j,k-1))) del=true;
+				if ((k<flags->getSizeZ()-1) && fgIsObstacle(flags->getGlobal(i,j,k+1))) del=true;
+#				endif
+			} else {
+				// inside parts are taken care of by "clearPhiValuesNearWalls"
+			}
+		}
+
+		it_next = it;
+		++it_next;
+		if (del) {
+			it_next = mParticles.erase(it);
+			deleted++;
+		}
+		it = it_next;
+	}
+
+	debMsg("plsRemoveAtObstacle","deleted "<<deleted<<" particles");
+}
+
+
+// switch this to 0 to get 1st order euler, to 1 to get RK2 advection
+#define USE_RK2 1
+
+void LevelSet::plsAdvect(Grid<Vec3>* pVel, FlagGrid* flags, Real dt)
+{
+	const std::list<LevelSetParticle>::iterator it_end = mParticles.end();
+	const int numParticles = mParticles.size();
+	const Real dx = mpFsolver->getParams()->getDeltaX();
+
+#if DDF_OPENMP==1
+#pragma omp parallel default(shared) 
+	{ // omp region
+		const int id = omp_get_thread_num();
+		const int Nthrds = omp_get_num_threads(); 
+
+		const int begin = numParticles/Nthrds * id;
+		const int end = (id == Nthrds-1) ? numParticles	: numParticles/Nthrds * (id+1) - 1;
+		//printf("thread %d begin=%d end=%d\n", id, begin, end);
+#else
+	{ // non omp
+		const int id=0; // , Nthrds=1;
+		const int begin = 0;
+		const int end = numParticles;
+#endif
+		std::list<LevelSetParticle>::iterator it;
+		int i=0;
+		for (it=mParticles.begin(); it != it_end; ++it) {
+			if ((i>=begin)&&(i<=end)) {
+				LevelSetParticle& p = *it;
+#if USE_RK2==1	
+				// Second-order Heun/RK2 step
+				Vec3 pos1 = p.getPos();
+				Vec3 v1 = mpFsolver->interpolateVelocity(pos1*dx, pVel, dx);
+
+				Vec3 pos2 = pos1 + v1*dt;
+				Vec3 v2 = mpFsolver->interpolateVelocity(pos2*dx, pVel, dx);
+				p.advance((v1+v2)*0.5*dt);
+#else
+				// First-order euler step
+				Vec3 v = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx);
+				p.advance(v*dt);
+#endif
+			}
+			i++;
+		}
+
+	} // omp parallel
+	
+	plsRemoveAtObstacle(flags);
+	//printf("plsAdvect Timings: tA-tB %s, tB-tC %s\n", getTimeString(tB-tA).c_str(), getTimeString(tC-tB).c_str());
+}
+
+void LevelSet::plsCorrect(Grid<Real>* pPhi, Grid<Real>* pPhiPlus, Grid<Real>* pPhiMinus, FlagGrid* flags)
+{
+	std::list<LevelSetParticle>::const_iterator it, it_end;
+
+	// initialize phi- and phi+
+#ifndef PLS_INSIDE_ONLY
+	goCopyGrid<Real>(pPhiPlus, pPhi);
+	goCopyGrid<Real>(pPhiMinus, pPhi);
+#endif
+
+	int numEscaped = 0;
+
+	for (it=mParticles.begin(), it_end=mParticles.end(); it!=it_end; ++it)
+	{
+		const LevelSetParticle& p = *it;
+		const Vec3& pos = p.getPos();
+		const Real r = p.getRadius();
+#if DDF_DIMENSION==2
+		const Vec3 intpos = pos - Vec3(0.5,0.5,0.0);
+#else
+		const Vec3 intpos = pos - Vec3(0.5,0.5,0.5);
+#endif
+		const Real phip = pPhi->getInterpolated(intpos.x,intpos.y,intpos.z);
+		const Real sign = (r > 0.) ? 1. : -1.;
+
+		if (sign*(phip + r) < 0) {
+			// treat escaped particles
+			/*if() {
+				if(1 && r<0.) 
+				{
+					Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+					Real er = -0.1; //r;
+
+					// keep inside particles
+					EscapedParticle esc = EscapedParticle( p.getPos(), er, vel );
+					mEscapedParticles.push_back( esc ); 
+				}
+				mParticles.erase(it);
+			} // */
+
+			int xi = (int)pos[0];
+ 			int	yi = (int)pos[1];
+ 			int	zi = (int)pos[2];
+			// assuming that the phi values are stored in the center
+			// of the grid, find the neighbouring cells of the quadrant
+			// which contains the particle
+			int nx = (pos[0] - xi > 0.5) ? +1 : -1;
+			int ny = (pos[1] - yi > 0.5) ? +1 : -1;
+#if DDF_DIMENSION==3			
+			int nz = (pos[2] - zi > 0.5) ? +1 : -1;
+#endif
+
+#ifdef PLS_INSIDE_ONLY
+			Grid<Real>* pPhiCorr = pPhi;
+#else
+			Grid<Real>* pPhiCorr = (sign>0) ? pPhiPlus : pPhiMinus;
+#endif
+			plsCorrectAt(xi   , yi   , zi   , p, sign, pPhiCorr);
+			plsCorrectAt(xi+nx, yi   , zi   , p, sign, pPhiCorr);
+			plsCorrectAt(xi+nx, yi+ny, zi   , p, sign, pPhiCorr);
+			plsCorrectAt(xi   , yi+ny, zi   , p, sign, pPhiCorr);
+#if DDF_DIMENSION==3
+			plsCorrectAt(xi   , yi   , zi+nz, p, sign, pPhiCorr);
+			plsCorrectAt(xi+nx, yi   , zi+nz, p, sign, pPhiCorr);
+			plsCorrectAt(xi+nx, yi+ny, zi+nz, p, sign, pPhiCorr);
+			plsCorrectAt(xi   , yi+ny, zi+nz, p, sign, pPhiCorr);
+#endif
+
+			numEscaped++;
+		}
+	}
+
+	debMsg("LevelSet::plsCorrect", "# escaped particles: "<<numEscaped);
+
+#ifndef PLS_INSIDE_ONLY
+	plsMergeCorrected(flags, pPhi, pPhiPlus, pPhiMinus);
+#endif
+
+	// NT brute force correct top layer of level set to avoid constant "inflow"
+	/*FOR_IJK( (pPhi)->getMinZLoopValue(), (pPhi)->getMaxZLoopValue(),   
+			(pPhi)->getSizeY()-1, (pPhi)->getSizeY(),   0, (pPhi)->getSizeX() ) 
+	{
+		if(pPhi->getGlobal(i,j,k) < 0.) {
+			pPhi->getGlobal(i,j,k) = 0.1;
+		}
+	}*/
+
+	clearPhiValuesNearWalls(pPhi,flags); // test, do here every frame to avoid flickering
+}
+
+void LevelSet::plsCorrectAt(int x, int y, int z, const LevelSetParticle& p, Real sign, Grid<Real>* pPhiCorr) {
+#if DDF_DIMENSION==2
+		static const Vec3 phiOffset(0.5,0.5,0.0);
+#else
+		static const Vec3 phiOffset(0.5,0.5,0.5);
+#endif
+	Real& phi  = pPhiCorr->getGlobal(x,y,z);
+	Real phip = p.phi(Vec3(x,y,z)+phiOffset);
+	if (sign > 0)
+#ifdef PLS_INSIDE_ONLY
+		phi = phi;
+#else
+		phi = std::max(phi, phip);
+#endif
+	else
+		phi = std::min(phi, phip);
+}
+
+void LevelSet::plsAdjustRadii(
+		Grid<Real>* pPhi, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav, 
+		Real generateEscpaed)
+{
+#	if DDF_DIMENSION==2
+	static const Vec3 phiOffset(0.5,0.5,0.0);
+#	else
+	static const Vec3 phiOffset(0.5,0.5,0.5);
+#	endif
+
+	std::list<LevelSetParticle>::iterator it, it_end;
+	it_end = mParticles.end();
+	for (it=mParticles.begin(); it!=it_end;)
+	{
+		LevelSetParticle& p = *it; 
+		const Vec3 pos(p.getPos());
+		const Vec3 intpos(p.getPos() - phiOffset);
+		Real phi = pPhi->getInterpolated(intpos.x, intpos.y, intpos.z);
+		//const Real off =  -0.5;
+		//const Real phi = pPhi->getInterpolated(pos.x+off, pos.y+off, pos.z+off);
+
+		const Real r = p.getRadius();
+#ifdef PLS_INSIDE_ONLY
+		if (phi < 0) {
+			// freely convert outside particles to inside particles
+#else
+		if (phi * r > 0) {
+#endif
+			// non-escaped particle			
+			Real sphi = (phi>0.)?1:-1;
+			if (sphi*phi > mPrMax)
+				p.setRadius(sphi*mPrMax);
+			else if (sphi*phi < mPrMin)
+				p.setRadius(sphi*mPrMin);
+			else
+				p.setRadius(phi);
+			++it;
+		} else {
+			// better use spRemoveEscaped-generate-escaped
+			// check whether particle escaped too far...
+			if(generateEscpaed>0. && (phi / r < -generateEscpaed) ) {
+				if(1 && r<0.) 
+				{
+					Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+					// keep inside particles
+					EscapedParticle esc = EscapedParticle( p.getPos(), r, vel );
+					//mEscapedParticles.push_back( esc ); 
+				}
+				it = mParticles.erase(it);
+			} else { 
+				// ok, particle on the wrong side of the level set
+				// readjust radius
+				Real sr = (r>0.)?1:-1;
+				p.setRadius(sr*mPrMin);
+				++it;
+			}			
+		}
+	}
+}
+
+
+/******************************************************************************
+ * "fixing" functions
+ *****************************************************************************/
+
+
+// add a spherical kernel function to the level set around the particle
+static void addParticleKernel(Grid<Real>* pPhi, FlagGrid* flags, Vec3 pos, Real size) {
+	//Real bsize = (-25.*size);
+	Real bsize = (-11.*size);
+	const Real amplitudeScale = 0.5;
+
+	if(bsize<= 0.) return;
+	if(bsize>3.5) bsize = 3.5;
+
+	int BORD = (int)(bsize);
+	const double bdist = sqrt( (Real)(gDim) *bsize*bsize );
+	const bool debPrint = false;
+
+	const int i = (int)(pos[0] + 0.5);
+	const int j = (int)(pos[1] + 0.5);
+	const int k = (int)(pos[2] + 0.5);
+
+	if(debPrint) debMsg("add ParticleKernel","pos="<<pos<<" "<<bsize<<"\n\n");
+
+	for(int z=-BORD-1; z<=BORD+1; z++) {
+	for(int y=-BORD-1; y<=BORD+1; y++) {
+	for(int x=-BORD-1; x<=BORD+1; x++) {
+			if(gDim==2 && z!=0) continue;
+			// TODO , check flags for obstacles?
+			if(!pPhi->checkIndexValid(i+x, j+y, k+z)) continue;
+			if(fgIsObstacle(flags->getGlobal(i+x, j+y, k+z))) continue;
+
+			double wCur = 0.;
+
+			Vec3 gridPos = Vec3(
+					( (Real)i + (Real)x),
+					( (Real)j + (Real)y),
+					( (Real)k + (Real)z) );
+			Vec3 d = pos - gridPos;
+			wCur = ( bdist - norm(d) ) / bdist;
+			if(wCur<0.) wCur = 0.;
+
+			wCur *= amplitudeScale;
+			//pPhi->getGlobal(i+x,j+y,k+z) -= wCur;
+			Real& phi = pPhi->getGlobal(i+x,j+y,k+z); if(phi>-wCur) phi = -wCur;
+
+			if(debPrint) debMsg("add ParticleKernel","pos="<<pos<<" gridPos="<<gridPos<<" wCur="<<wCur );
+	} } }
+}
+
+// advect escaped particles
+void LevelSet::plsAdvectEscaped(Grid<Real>* pPhi, FlagGrid* flags, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav)
+{
+	std::list<EscapedParticle>::iterator et, et_end;
+	for (et=mEscapedParticles.begin(), et_end=mEscapedParticles.end(); et!=et_end;)
+	{
+		EscapedParticle& p = *et;
+		// NT FIX called 2 times, advance half!
+		//p.advance(dt * 0.5, grav);
+
+		const Vec3 intpos(p.getPos()); 
+		const int type = p.getType();
+
+		const int xi = (int)intpos[0];
+		const int yi = (int)intpos[1];
+		const int zi = (int)intpos[2];
+		//int flag = flags->getGlobal(xi,yi,zi);
+		if(!pPhi->checkIndexValid(xi,yi,zi)) {
+			et=mEscapedParticles.erase(et);
+			continue;
+		}
+		int flag = flags->getGlobal(xi,yi,zi);
+
+		if(type==1) { 
+			// normal escaped particle
+
+			if(pPhi->getGlobal(xi,yi,zi) < -0.1) {
+					if(fgIsFluid(flag)) { // ok
+						p.setType(2);
+					} else {
+						et=mEscapedParticles.erase(et); 
+						continue;						
+					}
+			}
+
+			if(fgIsEmpty(flag) ) { // ok
+			} else {
+				if(fgIsFluid(flag)) { // ok
+					p.setType(2);
+				} else {
+					// obstacle or so...
+					et=mEscapedParticles.erase(et);
+					continue;
+				}
+			}
+		}
+		if(type==2) {
+			// foam, make it float when under water, otherwise use gravity...			
+			Real phi = pPhi->getGlobal(xi,yi,zi);
+			if(phi < 0.5) {
+				/*if(phi > 0.0) {
+					// slower
+					p.setPos( p.getPos() + dt* -grav * (0.5-phi) );
+				} else {
+					p.setPos( p.getPos() + dt* -grav * 2. ); // fast
+				} // */
+				p.setPos( p.getPos() + dt* -grav * 0.8 ); // slow rise
+			}
+
+			//int flag = flags->getGlobal(xi,yi,zi);
+			if(fgIsObstacle(flag) ) 
+			{ // delete
+				et=mEscapedParticles.erase(et);
+				continue;
+			}
+		}
+
+		// advance particle position
+		if(type==1) {
+			p.advance(dt, grav );
+		} else {
+			// type==2 , foam
+			if(fgIsFluid(flag)) {
+				Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+				p.setVel(vel);
+				p.advance(dt, Vec3(0.) );
+			} else {
+				p.advance(dt, grav );
+			}
+
+			// remove after some time
+			if ( (mFoamLifetime>0.) && ((Real)p.getAge() * dt > mFoamLifetime)) {
+				et=mEscapedParticles.erase(et);
+				continue;
+			}
+		}		
+		++et;
+	}
+
+}
+
+// ... currently unused ... 
+// misc testing functions
+// brute force correction of level set values (and optionally the flags grid)
+void LevelSet::plsReinitFlagsBruteForce(Grid<Real>* pPhi, FlagGrid* flags, Grid<Vec3>* pVel, Real dx, Real dt, Vec3 grav)
+{
+	// advance
+	if(0) {
+
+		// convert
+		std::list<LevelSetParticle>::iterator it, it_end;
+		it_end = mParticles.end();
+		if(0)
+		for (it=mParticles.begin(); it!=it_end;)
+		{
+			LevelSetParticle& p = *it;
+			const Vec3 pos(p.getPos());
+			//const Vec3 intpos(p.getPos() - phiOffset);
+			const Vec3 intpos(p.getPos());
+			//Real phi = pPhi->getInterpolated(intpos.x, intpos.y, intpos.z);
+			Real phi = pPhi->getInterpolated(pos.x, pos.y, pos.z);
+
+			const Real r = p.getRadius();
+			// check whether particle escaped too far...
+			//if( (phi / r < -0.5) && (phi>-0.2) ){ 
+			//if(1 && r<0.) 
+			if(1 && r<0. && phi>0.5) {
+				Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+				Real er = r;
+
+				// keep inside particles
+				EscapedParticle esc = EscapedParticle( p.getPos(), er, vel );
+				//EscapedParticle esc = EscapedParticle( intpos, r, vel );
+				mEscapedParticles.push_back( esc ); 
+
+				it=mParticles.erase(it);
+			} 
+			else
+				++it;
+		}
+
+
+	std::list<EscapedParticle>::iterator et, et_end;
+		// display
+		//std::list<EscapedParticle>::iterator et, et_end; 
+		// NT test
+		if(0)
+		for (et=mEscapedParticles.begin(), et_end=mEscapedParticles.end(); et!=et_end; ++et)
+		{
+			const EscapedParticle& p = *et;
+			const Vec3& pos = p.getPos();
+			const Real r = p.getRadius();
+			if(p.getAge()<3) continue;
+			//std::cout <<" a "<<p.getAge()<<"\n";
+
+			addParticleKernel(pPhi, flags, pos, r);
+		}
+
+	}  // escaped parts on/off
+
+	// NT test
+	if(0) {
+	std::list<LevelSetParticle>::iterator it, it_end, it_next;
+	//for (it=mParticles.begin(); it!=mParticles.end(); ++it)
+	//{
+	it = mParticles.begin();
+	it_end = mParticles.end();
+	while (it != it_end) {
+		it_next = it;
+		++it_next;
+		const LevelSetParticle& p = *it;
+		const Vec3& pos = p.getPos();
+		const Real r = p.getRadius();
+
+		// ignore outside parts...
+		if(r>0.) {
+			//++it;
+			it = it_next;
+			continue;
+		}
+
+		// no need to subtract 1/2 here!
+		int xi = (int)pos[0];
+ 		int yi = (int)pos[1];
+ 		int zi = (int)pos[2];
+		//if(!flags->checkIndexValid(xi,yi,zi)) continue; 
+		int flag = flags->getGlobal(xi,yi,zi);
+
+		if( (! fgIsFluid(flag) ) && 
+		    (! fgIsObstacle(flag) ) 
+			) {
+			//std::cerr<<" corr "<<PRINT_VEC(xi,yi,zi) <<"\n";
+
+			// brute force correction of levelset,
+			// if the particle is not near any interface
+			if( 1 &&
+					( pPhi->getGlobal(xi,yi,zi) > 0. ) && 
+					( pPhi->getGlobal(xi+1,yi,zi) > 0. ) && 
+					( pPhi->getGlobal(xi-1,yi,zi) > 0. ) && 
+					( pPhi->getGlobal(xi,yi+1,zi) > 0. ) && 
+					( pPhi->getGlobal(xi,yi-1,zi) > 0. ) 
+#					if DDF_DIMENSION==3
+					&& ( pPhi->getGlobal(xi,yi,zi+1) > 0. ) && 
+					( pPhi->getGlobal(xi,yi,zi-1) > 0. ) 
+#					endif
+					) {
+				//pPhi->getGlobal(xi,yi,zi) = -1e-3; // small impact
+				//pPhi->getGlobal(xi,yi,zi) = -1.; // larger
+				//if(! fgIsObstacle(flag) ) { addParticleKernel(pPhi, flags, pos, r); } 
+
+				Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+
+				// keep inside particles
+			/* TODO debug
+				Real er = -0.1; //r;
+				EscapedParticle esc = EscapedParticle( p.getPos() + phiOffset*0., er, vel );
+				mEscapedParticles.push_back( esc ); 
+				// */
+
+				it_next = mParticles.erase(it);
+			} else {
+
+				// enforce fluid sim there
+				// note this is not enough: density extrapolation has to 
+				// be guaranteed here
+				// CORRECTION: not necessary?
+				flags->getGlobal(xi,yi,zi) = FFLUID;
+			}
+		}
+
+		//++it;
+		it = it_next;
+	}
+
+	} // on off
+}
+
+// remove escaped particles
+int LevelSet::plsRemoveEscaped(Grid<Real>* pPhi, Grid<Vec3>* pVel, Grid<Real>* pTemp, 
+		Real dx, Real genEsc, bool genBubbles, int genSkipBorder)
+{
+
+	const Real genFac = -genEsc; // amount of parts to generate, -2 is good
+	int numEscaped = 0, numKept = 0;
+
+	// escaped part generation enabled at all?
+	const int maxPartsPerCell = 40;
+	if(genEsc>0.) {
+		FOR_IJK_GRID(pTemp) pTemp->getGlobal(i,j,k) = 0.;
+
+		// count how many particles there are per grid cell
+		std::list<EscapedParticle>::iterator eit, eit_next, eit_end;
+		eit = mEscapedParticles.begin();
+		eit_end = mEscapedParticles.end();
+		while (eit != eit_end) {
+			eit_next = eit;
+			++eit_next;
+			const EscapedParticle& p = *eit;
+			const Vec3 intpos = p.getPos() + gIntPosOffset; 
+			if(pTemp->checkIndexValid(intpos.x,intpos.y,intpos.z)) {
+				Real& epNum = pTemp->getGlobal(intpos.x,intpos.y,intpos.z);
+				if(maxPartsPerCell>0 && epNum>=maxPartsPerCell) {
+					// too many already...
+					eit_next = mEscapedParticles.erase(eit);
+				} else {
+					// ok
+					epNum += 1.;
+				}
+			}
+
+			eit = eit_next;
+		}
+
+		// print some statistics
+		if(0) {
+			goFindMinMax<Real> mm = goFindMinMax<Real>(NULL, pTemp);
+			debMsg("plsRemoveEscaped","EscapedPerCell: min="<<mm.mMinLen<<" max="<<mm.mMaxLen<<", at "<<mm.mMaxPos );
+		}
+	}
+
+	std::list<LevelSetParticle>::iterator it, it_next, it_end;
+	it = mParticles.begin();
+	it_end = mParticles.end();
+	while (it != it_end) {
+		it_next = it;
+		++it_next;
+		const LevelSetParticle& p = *it;
+		const Vec3& pos = p.getPos();
+		const Real r = p.getRadius();
+		const Vec3 intpos = pos + gIntPosOffset; // - Vec3(0.5,0.5,0.0);
+		const Real phip = pPhi->getInterpolated(intpos.x,intpos.y,intpos.z);
+		const Real sign = (r > 0.) ? 1. : -1.;
+
+		// don't delete espaced inside particles
+		// delete on other side, + far away particles
+		if ( (   // (sign>0.) &&  
+					(sign*(phip + r) < 0) ) 
+				|| (sign*phip>mParticleMaxPhi) ) {
+
+			// check amount of particles already created locally
+			// dont generate in outer border set by genSkipBorder
+			if(pTemp->checkIndexValidWithBounds(intpos.x,intpos.y,intpos.z, genSkipBorder)) {
+				Real& epNum = pTemp->getGlobal(intpos.x,intpos.y,intpos.z);
+
+				// only add for inside parts (or outside, if enabled)
+				if(maxPartsPerCell<=0 || epNum<maxPartsPerCell) {
+				if(    (sign<0. && phip > genFac*r)  // outer drops
+					 || (sign>0. && phip < genFac*r && genBubbles)  // inner "bubbles"
+					 ) {
+					Vec3 vel = mpFsolver->interpolateVelocity(p.getPos()*dx, pVel, dx) * 1.;
+					EscapedParticle esc = EscapedParticle( p.getPos(), p.getRadius(), vel );
+					mEscapedParticles.push_back( esc ); 
+					numKept++;
+					epNum += 1.;
+				} }
+			}
+
+			it_next = mParticles.erase(it);
+			numEscaped++;
+		}
+
+		it = it_next;
+	}
+
+	debMsg("LevelSet::plsRemoveEscaped", "removing still escaped particles: "<<numEscaped<<", kept:"<<numKept<<" (gen="<<genFac<<") ");
+	return numEscaped;
+}
+
+// helper
+inline Vec3 LevelSet::lsGetVelocity(int x, int y, int z) { 
+	//return Vec3(0., 0., 0.); 
+	//if( fgIsObstacle(mpFsolver->getGridFlags()->getGlobal(x,y-1,z)) ) return Vec3(0., 0., 0.); // DEBUG!!!!! // DEBUG4
+
+	Vec3 v = mpLsVelGrid->getGlobal(x,y,z);
+	v[0] +=  mpLsVelGrid->getGlobal(x+1,y  ,z  )[0];
+	v[1] +=  mpLsVelGrid->getGlobal(x  ,y+1,z  )[1];
+	v[2] +=  mpLsVelGrid->getGlobal(x  ,y  ,z+1)[2];
+
+	v *= 0.5;
+	return v;
+}
+
+
+} // DDF
+

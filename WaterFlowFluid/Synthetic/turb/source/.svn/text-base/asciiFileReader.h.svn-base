@@ -1,0 +1,61 @@
+/******************************************************************************
+*
+* DDF - asciiFileReader.h
+* This class contains functionality for simple ascii based file parsing.
+*
+*****************************************************************************/
+
+#ifndef ASCIIFILEREADER_H
+#define ASCIIFILEREADER_H
+
+
+#include <iostream>
+#include <stdio.h>      // standard input/output
+#include <vector>
+#include <fstream>
+
+namespace DDF
+{
+	
+
+	class asciiFileReader {
+
+	private:
+
+		// globals
+		std::ifstream mFile;
+
+		int mMaxCharPerLine;
+		int mNumOfHeaderLines;
+
+
+	public:
+
+		// constructor
+		asciiFileReader();
+
+		// destructor
+		~asciiFileReader();
+
+		// open file
+		void openNewFile(std::string filePath, int maxCharPerLine, int numOfHeaderLines);
+
+		// close file
+		void closeFile();
+
+		// reads a line and returns the string (without /n)
+		std::string* readLine();
+
+
+		// functions with additional functionality
+		///////////////////////////////////////////
+
+		// string splitter
+		void splitString(std::string* s, char separator, std::vector<std::string>* out_data);
+	
+
+	};
+	
+};
+
+#endif // ASCIIFILEREADER_H

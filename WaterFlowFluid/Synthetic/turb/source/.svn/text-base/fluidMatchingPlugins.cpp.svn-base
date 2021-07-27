@@ -1,0 +1,2153 @@
+/******************************************************************************
+*
+* DDF 
+*
+* Plugins for loading and storing of 2D grids to matlab readable dlm formatted
+* matrix files.
+*
+*****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "paramset.h"
+
+#include <sstream>
+#include <zlib.h>
+
+#include "asciiFileReader.h"
+#include "convert.h"
+#include "clusterTracking.h"
+#include "volumetricFluidMipMap.h"
+
+using namespace std;
+
+namespace DDF { 
+
+
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+//
+//  DLM IMPORTERS AND EXPORTERS
+//
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+
+
+class matlabDLMReaderFlags : public SolverPlugin {
+public:
+	matlabDLMReaderFlags()
+		: SolverPlugin(), mFlagGridName("flags"), mDLMFilePrefix("-nada-"), mDLMFilePostfix(".txt"), 
+		mIncrementalLoading(true), mCounterStart(0), mZPlane(2)
+	{ };
+	~matlabDLMReaderFlags() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mFlagGridName = params.FindOneString("flagGrid", mFlagGridName );
+		mDLMFilePrefix = params.FindOneString("filePrefix", mDLMFilePrefix );
+		mDLMFilePostfix = params.FindOneString("filePostfix", mDLMFilePostfix );
+		mIncrementalLoading = params.FindOneInt("incrementalLoading", mIncrementalLoading);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mZPlane = params.FindOneInt("counterStart", mZPlane);
+
+		mFileCounter = mCounterStart;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+	// perform step with given dt, return failure
+	virtual bool performStep(Real dt) {
+
+		// get flag grid
+		mFlagGrid = mpPlParams->getGridInt(mFlagGridName);
+
+		convert cvt;
+
+		// load from file
+		/////////////////
+		std::string fileName;
+		if (mIncrementalLoading) {
+			fileName = mDLMFilePrefix + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+		} else {
+			fileName = mDLMFilePrefix + mDLMFilePostfix;			
+		}
+
+		asciiFileReader* afr = new DDF::asciiFileReader();
+		afr->openNewFile(fileName, 10000, 0); // open file
+		std::vector<std::string>* words = new std::vector<std::string>;  // words buffer
+		std::string* line = afr->readLine();   // read a line
+
+		int x_pos = 0;
+		int z_pos = 2;
+		while (line != NULL) {
+			// while lines left
+
+			// split line in words
+			afr->splitString(line, ',', words);
+
+			// set line to y-column in x_pos-row
+			for (int y_pos = 0; y_pos < words->size(); y_pos++) {
+
+				// get value
+				int val= cvt.str2int(words->at(y_pos));
+
+				if ((x_pos >= mFlagGrid->getSizeX()) || (y_pos >= mFlagGrid->getSizeY())) {
+					// outside -> do nothin'
+				} else {
+					if (val > 0) mFlagGrid->setGlobal(FFLUID, x_pos, y_pos, z_pos);	// 1 = fluid
+					else         mFlagGrid->setGlobal(FEMPTY, x_pos, y_pos, z_pos);	// 0 = fluid
+				}
+			}
+
+
+			// inc x
+			x_pos += 1;
+
+			// delete read line (FU no crap-collector!!)
+			delete line;
+			// read new line
+			line = afr->readLine();   // read a line
+
+		}
+		delete afr;
+
+
+		// inc file counter
+		mFileCounter += 1;
+		return true;
+	};
+
+protected:
+	std::string mFlagGridName;
+	std::string mDLMFilePrefix;
+	std::string mDLMFilePostfix;
+
+	bool mIncrementalLoading;
+
+	int mFileCounter;
+	int mCounterStart;
+
+	int mZPlane;
+
+	Grid<int>* mFlagGrid;
+};
+
+
+//***************************************************************************************
+
+
+
+class matlabDLMReaderReal : public SolverPlugin {
+  public:
+	  matlabDLMReaderReal()
+		  : SolverPlugin(), mRealGridName("flags"), mDLMFilePrefix("-nada-"), mDLMFilePostfix(".txt"), 
+		                    mIncrementalLoading(true), mCounterStart(0), mZPlane(2)
+	  { };
+	  ~matlabDLMReaderReal() { };
+
+	  virtual bool parseParams(const ParamSet& params) {
+
+		  // load params
+		  mRealGridName = params.FindOneString("realGrid", mRealGridName );
+		  mDLMFilePrefix = params.FindOneString("filePrefix", mDLMFilePrefix );
+		  mDLMFilePostfix = params.FindOneString("filePostfix", mDLMFilePostfix );
+		  mIncrementalLoading = params.FindOneInt("incrementalLoading", mIncrementalLoading);
+		  mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		  mZPlane = params.FindOneInt("counterStart", mZPlane);
+
+		  mFileCounter = mCounterStart;
+
+		  return true;
+	  };
+	  virtual bool initPlugin() { return true; };
+
+	  // perform step with given dt, return failure
+	  virtual bool performStep(Real dt) {
+
+		  // get flag grid
+		  mRealGrid = mpPlParams->getGridReal(mRealGridName);
+
+		  convert cvt;
+
+		  // load from file
+		  /////////////////
+		  std::string fileName;
+		  if (mIncrementalLoading) {
+			fileName = mDLMFilePrefix + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+		  } else {
+			fileName = mDLMFilePrefix + mDLMFilePostfix;			
+		  }
+
+		  asciiFileReader* afr = new DDF::asciiFileReader();
+		  afr->openNewFile(fileName, 10000, 0); // open file
+		  std::vector<std::string>* words = new std::vector<std::string>;  // words buffer
+		  std::string* line = afr->readLine();   // read a line
+
+		  int x_pos = 0;
+		  int z_pos = 2;
+		  while (line != NULL) {
+			  // while lines left
+
+			  // split line in words
+			  afr->splitString(line, ',', words);
+
+			  // set line to y-column in x_pos-row
+			  for (int y_pos = 0; y_pos < words->size(); y_pos++) {
+
+				  // get value
+				  float val= cvt.str2float(words->at(y_pos));
+
+				  if ((x_pos >= mRealGrid->getSizeX()) || (y_pos >= mRealGrid->getSizeY())) {
+					  // outside -> do nothin'
+				  } else {
+					 mRealGrid->setGlobal(val, x_pos, y_pos, z_pos);					  
+				  }
+			  }
+
+
+			  // inc x
+			  x_pos += 1;
+
+			  // delete read line (FU no crap-collector!!)
+			  delete line;
+			  // read new line
+			  line = afr->readLine();   // read a line
+
+		  }
+		  delete afr;
+
+
+		  // inc file counter
+		  mFileCounter += 1;
+		  return true;
+	  };
+
+  protected:
+	  std::string mRealGridName;
+	  std::string mDLMFilePrefix;
+	  std::string mDLMFilePostfix;
+
+	  bool mIncrementalLoading;
+
+	  int mFileCounter;
+	  int mCounterStart;
+
+	  int mZPlane;
+
+	  Grid<Real>* mRealGrid;
+  };
+
+
+//***************************************************************************************
+
+
+
+
+ class matlabDLMReaderVec2 : public SolverPlugin {
+ public:
+	 matlabDLMReaderVec2()
+		 : SolverPlugin(), mVec3GridName("-mui-mui-"), mDLMFilePrefix("-nada-"), mDLMFilePostfix(".txt"), mIncrementalLoading(true), mCounterStart(0), mZPlane(2)
+	 { };
+	 ~matlabDLMReaderVec2() { };
+
+	 virtual bool parseParams(const ParamSet& params) {
+
+		 // load params
+		 mVec3GridName = params.FindOneString("vec3Grid", mVec3GridName );
+		 mDLMFilePrefix = params.FindOneString("filePrefix", mDLMFilePrefix );
+		 mDLMFilePostfix = params.FindOneString("filePostfix", mDLMFilePostfix );
+		 mIncrementalLoading = params.FindOneInt("incrementalLoading", mIncrementalLoading);
+		 mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		 mZPlane = params.FindOneInt("zPlane", mZPlane);
+
+		 mFileCounter = mCounterStart;
+
+		 return true;
+	 };
+	 virtual bool initPlugin() { return true; };
+
+	 // perform step with given dt, return failure
+	 virtual bool performStep(Real dt) {
+
+		 // get flag grid
+		 mVec3Grid = mpPlParams->getGridVec3(mVec3GridName);
+
+		 convert cvt;
+
+		 // load from file
+		 /////////////////
+		 std::string fileName_X;
+		 std::string fileName_Y;
+		 if (mIncrementalLoading) {
+			 fileName_X = mDLMFilePrefix + "X" + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+			 fileName_Y = mDLMFilePrefix + "Y" + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+		 } else {
+			 fileName_X = mDLMFilePrefix + "X" + mDLMFilePostfix;			
+			 fileName_Y = mDLMFilePrefix + "Y" + mDLMFilePostfix;			
+		 }
+
+		 debMsg("DLMReaderVec2","reading frame "<<fileName_X);
+
+		 asciiFileReader* afr_X = new DDF::asciiFileReader();
+		 asciiFileReader* afr_Y = new DDF::asciiFileReader();
+		 afr_X->openNewFile(fileName_X, 10000, 0); // open file
+		 afr_Y->openNewFile(fileName_Y, 10000, 0); // open file
+		 std::vector<std::string>* words_X = new std::vector<std::string>;  // words buffer
+		 std::vector<std::string>* words_Y = new std::vector<std::string>;  // words buffer
+		 std::string* line_X = afr_X->readLine();   // read a line
+		 std::string* line_Y = afr_Y->readLine();   // read a line
+
+		 int x_pos = 0;
+		 int z_pos = mZPlane;
+		 while (line_X != NULL) {
+			 // while lines left
+
+			 // split line in words
+			 afr_X->splitString(line_X, ',', words_X);
+			 afr_Y->splitString(line_Y, ',', words_Y);
+
+			 // set line to y-column in x_pos-row
+			 for (int y_pos = 0; y_pos < words_X->size(); y_pos++) {
+
+				 // get value
+				 float val_X= cvt.str2float(words_X->at(y_pos));
+				 float val_Y= cvt.str2float(words_Y->at(y_pos));
+				 Vec3 vec = Vec3(val_X, val_Y, 0);
+				 
+				 if ((x_pos >= mVec3Grid->getSizeX()) || (y_pos >= mVec3Grid->getSizeY())) {
+					 // outside -> do nothin'
+				 } else {
+					 mVec3Grid->setGlobal(vec, x_pos, y_pos, z_pos);					  					  
+				 }
+			 }
+
+
+			 // inc x
+			 x_pos += 1;
+
+			 // delete read line (FU no crap-collector!!)
+			 delete line_X;
+			 delete line_Y;
+			 // read new line
+			 line_X = afr_X->readLine();   // read a line
+			 line_Y = afr_Y->readLine();   // read a line
+
+		 }
+		 delete afr_X;
+		 delete afr_Y;
+
+
+		 // inc file counter
+		 mFileCounter += 1;
+		 return true;
+	 };
+
+ protected:
+	 std::string mVec3GridName;
+	 std::string mDLMFilePrefix;
+	 std::string mDLMFilePostfix;
+
+	 bool mIncrementalLoading;
+
+	 int mFileCounter;
+	 int mCounterStart;
+
+	 int mZPlane;
+
+	 Grid<Vec3>* mVec3Grid;
+ };
+
+
+
+
+//****************************************************************************************
+
+
+
+class matlabDLMWriterReal : public SolverPlugin {
+public:
+	matlabDLMWriterReal()
+		: SolverPlugin(), mRealGridName("-mui-mui-"), mDLMFilePrefix("-nada-"), mDLMFilePostfix(".txt"), 
+		mIncrementalWriting(true), mCounterStart(0), mZPlane(2), mMaxFrames(50), mImmersedGridName(""), mSkipFrames(0)
+	{ };
+	~matlabDLMWriterReal() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mRealGridName = params.FindOneString("realGrid", mRealGridName );
+		mDLMFilePrefix = params.FindOneString("filePrefix", mDLMFilePrefix );
+		mDLMFilePostfix = params.FindOneString("filePostfix", mDLMFilePostfix );
+		mIncrementalWriting = params.FindOneInt("incrementalStoring", mIncrementalWriting);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mZPlane = params.FindOneInt("zPlane", mZPlane);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mImmersedGridName = params.FindOneString("immersedGrid", mImmersedGridName );
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mWriteFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (!mWriteFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mWriteFrame = true;
+			}
+
+		}
+
+		
+		if (mWriteFrame) {
+
+			// get flag grid
+			mRealGrid = mpPlParams->getGridReal(mRealGridName);
+
+
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mRealGrid->getSize();
+
+				/////////////////////////////////////////////////////////////////////////
+				// return if not immersed yet
+				if (mImmersedGridName.size() > 0) {
+					Grid<int>* pObjImmersed = mpPlParams->getGridInt(mImmersedGridName);
+					if (pObjImmersed->getGlobal(0,0,0) <= 0) return true; // if not immersed yet -> skip this one
+				}
+				/////////////////////////////////////////////////////////////////////////
+
+				convert cvt;
+
+				// build file name strings
+				std::string fileName;
+
+				if (mIncrementalWriting) {
+					fileName = mDLMFilePrefix + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+				} else {
+					fileName = mDLMFilePrefix + mDLMFilePostfix;			
+				}
+
+				// write file
+				std::fstream file;
+				file.open (fileName.c_str(), std::ios::out);
+
+				// write data
+				int z = mZPlane; // z = constant: mZAxisPlane
+				for (int x = 0; x < gridSize.x; x++) {
+
+					// write y values as line
+					for (int y = 0; y < gridSize.y - 1; y++) {
+						float val = mRealGrid->getGlobal(x,y,z);
+						file << val << ",";
+					}
+					// last value in line (\n ending)
+					Vec3 val = mRealGrid->getGlobal(x,gridSize.y - 1,z);
+					file << val.x << std::endl;
+				}
+
+				// flush and close files
+				file.close();
+
+
+				// inc file counter
+				if (mIncrementalWriting) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mWriteFrame = false;
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mRealGridName;
+	std::string mDLMFilePrefix;
+	std::string mDLMFilePostfix;
+	std::string mImmersedGridName;
+
+
+	bool mIncrementalWriting;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+	
+
+	int mZPlane;
+
+	Grid<Real>* mRealGrid;
+
+	int mSkipFrames;
+	bool mWriteFrame;
+	int mFramesSkipped;
+};
+
+
+
+//***************************************************************************************
+
+
+
+
+class matlabDLMWriterVec2 : public SolverPlugin {
+public:
+	matlabDLMWriterVec2()
+		: SolverPlugin(), mVec3GridName("-mui-mui-"), mDLMFilePrefix("-nada-"), mDLMFilePostfix(".txt"), 
+		                  mIncrementalWriting(true), mCounterStart(0), mZPlane(2), mMaxFrames(50), mImmersedGridName(""), mSkipFrames(0)
+	{ };
+	~matlabDLMWriterVec2() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mVec3GridName = params.FindOneString("vec3Grid", mVec3GridName );
+		mDLMFilePrefix = params.FindOneString("filePrefix", mDLMFilePrefix );
+		mDLMFilePostfix = params.FindOneString("filePostfix", mDLMFilePostfix );
+		mIncrementalWriting = params.FindOneInt("incrementalStoring", mIncrementalWriting);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mZPlane = params.FindOneInt("zPlane", mZPlane);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mImmersedGridName = params.FindOneString("immersedGrid", mImmersedGridName );
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mWriteFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+	
+	virtual bool performStep(Real dt) {
+
+		if (!mWriteFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mWriteFrame = true;
+			}
+		}
+
+
+		if (mWriteFrame) {
+
+			// get flag grid
+			mVec3Grid = mpPlParams->getGridVec3(mVec3GridName);
+
+
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mVec3Grid->getSize();
+
+				/////////////////////////////////////////////////////////////////////////
+				// return if not immersed yet
+				if (mImmersedGridName.size() > 0) {
+					Grid<int>* pObjImmersed = mpPlParams->getGridInt(mImmersedGridName);
+					if (pObjImmersed->getGlobal(0,0,0) <= 0) return true; // if not immersed yet -> skip this one
+				}
+				/////////////////////////////////////////////////////////////////////////
+
+				convert cvt;
+
+				// build file name strings
+				std::string fileName_X;
+				std::string fileName_Y;
+
+				if (mIncrementalWriting) {
+					fileName_X = mDLMFilePrefix + "X" + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+					fileName_Y = mDLMFilePrefix + "Y" + cvt.int2str(mFileCounter) + mDLMFilePostfix;
+				} else {
+					fileName_X = mDLMFilePrefix + "X" + mDLMFilePostfix;
+					fileName_Y = mDLMFilePrefix + "Y" + mDLMFilePostfix;				
+				}
+
+				// write file
+				std::fstream file_X;
+				std::fstream file_Y;
+				file_X.open (fileName_X.c_str(), std::ios::out);
+				file_Y.open (fileName_Y.c_str(), std::ios::out);
+
+				// write data
+				int z = mZPlane; // z = constant: mZAxisPlane
+				for (int x = 0; x < gridSize.x; x++) {
+
+					// write y values as line
+					for (int y = 0; y < gridSize.y - 1; y++) {
+						Vec3 val = mVec3Grid->getGlobal(x,y,z);
+						file_X << val.x << ",";
+						file_Y << val.y << ",";
+					}
+					// last value in line (\n ending)
+					Vec3 val = mVec3Grid->getGlobal(x,gridSize.y - 1,z);
+					file_X << val.x << std::endl;
+					file_Y << val.y << std::endl;
+				}
+
+				// flush and close files
+				file_X.close();
+				file_Y.close();
+
+
+				// inc file counter
+				if (mIncrementalWriting) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mWriteFrame = false;
+		}
+
+		return true;
+	};
+
+protected:
+	std::string mVec3GridName;
+	std::string mDLMFilePrefix;
+	std::string mDLMFilePostfix;
+	std::string mImmersedGridName;
+
+
+	bool mIncrementalWriting;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+
+	int mZPlane;
+
+	Grid<Vec3>* mVec3Grid;
+
+	int mSkipFrames;
+	bool mWriteFrame;
+	int mFramesSkipped;
+};
+
+
+
+
+
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+//
+//  GZ IMPORTERS AND EXPORTERS
+//
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+
+
+
+class GZReaderReal : public SolverPlugin {
+public:
+	GZReaderReal()
+		: SolverPlugin(), mRealGridName("-mui-mui-"), mGZFilePrefix("-nada-"),
+		mIncrementalWriting(true), mCounterStart(0), mMaxFrames(50), mSkipFrames(0)
+	{ };
+	~GZReaderReal() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mRealGridName = params.FindOneString("realGrid", mRealGridName );
+		mGZFilePrefix = params.FindOneString("filePrefix", mGZFilePrefix );
+		mIncrementalWriting = params.FindOneInt("incrementalLoading", mIncrementalWriting);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mImmersedGridName = params.FindOneString("immersedGrid", mImmersedGridName );
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mReadFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (!mReadFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mReadFrame = true;
+			}
+
+		}
+
+
+		if (mReadFrame) {
+
+			// get real grid
+			mRealGrid = mpPlParams->getGridReal(mRealGridName);
+
+			// if max frames not exceeded
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mRealGrid->getSize();
+
+				/////////////////////////////////////////////////////////////////////////
+				// return if not immersed yet (if immersed grid exists)
+				if (mImmersedGridName.size() > 0) {
+					Grid<int>* pObjImmersed = mpPlParams->getGridInt(mImmersedGridName);
+					if (pObjImmersed->getGlobal(0,0,0) <= 0) return true; // if not immersed yet -> skip this one
+				}
+				/////////////////////////////////////////////////////////////////////////
+
+				convert cvt;
+
+				std::string fileName;
+
+				if (mIncrementalWriting) {
+					fileName = mGZFilePrefix + cvt.int2str(mFileCounter);
+				} else {
+					fileName = mGZFilePrefix ;			
+				}
+
+				VFMMLoader importer = VFMMLoader();
+				importer.importRealGrid(fileName, mRealGrid);
+
+				// inc file counter
+				if (mIncrementalWriting) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mReadFrame = false;
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mRealGridName;
+	std::string mGZFilePrefix;
+	std::string mImmersedGridName;
+
+
+	bool mIncrementalWriting;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+
+	Grid<Real>* mRealGrid;
+
+	int mSkipFrames;
+	bool mReadFrame;
+	int mFramesSkipped;
+};
+
+
+//***************************************************************************************
+
+
+class GZWriterReal : public SolverPlugin {
+public:
+	GZWriterReal()
+		: SolverPlugin(), mRealGridName("-mui-mui-"), mGZFilePrefix("-nada-"), 
+		mIncrementalStoring(true), mCounterStart(0), mMaxFrames(50), mImmersedGridName(""), mSkipFrames(0)
+	{ };
+	~GZWriterReal() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mRealGridName = params.FindOneString("realGrid", mRealGridName );
+		mGZFilePrefix = params.FindOneString("filePrefix", mGZFilePrefix );
+		mIncrementalStoring = params.FindOneInt("incrementalStoring", mIncrementalStoring);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mImmersedGridName = params.FindOneString("immersedGrid", mImmersedGridName );
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mWriteFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (!mWriteFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mWriteFrame = true;
+			}
+
+		}
+
+
+		if (mWriteFrame) {
+
+			// get real grid
+			mRealGrid = mpPlParams->getGridReal(mRealGridName);
+
+			// if max frames not exceeded
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mRealGrid->getSize();
+
+				/////////////////////////////////////////////////////////////////////////
+				// return if not immersed yet (if immersed grid exists)
+				if (mImmersedGridName.size() > 0) {
+					Grid<int>* pObjImmersed = mpPlParams->getGridInt(mImmersedGridName);
+					if (pObjImmersed->getGlobal(0,0,0) <= 0) return true; // if not immersed yet -> skip this one
+				}
+				/////////////////////////////////////////////////////////////////////////
+
+				convert cvt;
+
+				// build file name strings
+				std::string fileName;
+
+				if (mIncrementalStoring != 0) {
+					fileName = mGZFilePrefix + cvt.int2str(mFileCounter);
+				} else {
+					fileName = mGZFilePrefix;		
+				}
+
+				VFMMLoader exporter = VFMMLoader();
+				exporter.exportRealGrid(fileName, mRealGrid);
+
+
+				// inc file counter
+				if (mIncrementalStoring) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mWriteFrame = false;
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mRealGridName;
+	std::string mGZFilePrefix;
+	std::string mImmersedGridName;
+
+
+	bool mIncrementalStoring;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+
+	Grid<Real>* mRealGrid;
+
+	int mSkipFrames;
+	bool mWriteFrame;
+	int mFramesSkipped;
+};
+
+
+//***************************************************************************************
+
+
+
+class GZReaderVec3 : public SolverPlugin {
+public:
+	GZReaderVec3()
+		: SolverPlugin(), mVec3GridName("-mui-mui-"), mGZFilePrefix("-nada-"),
+		mIncrementalLoading(true), mCounterStart(0), mMaxFrames(50), mSkipFrames(0)
+	{ };
+	~GZReaderVec3() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mVec3GridName = params.FindOneString("vec3Grid", mVec3GridName );
+		mGZFilePrefix = params.FindOneString("filePrefix", mGZFilePrefix );
+		mIncrementalLoading = params.FindOneInt("incrementalLoading", mIncrementalLoading);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mWriteFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (!mWriteFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mWriteFrame = true;
+			}
+
+		}
+
+
+		if (mWriteFrame) {
+
+			// get real grid
+			mVec3Grid = mpPlParams->getGridVec3(mVec3GridName);
+
+			// if max frames not exceeded
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mVec3Grid->getSize();
+
+				std::string fileName;
+
+				convert cvt;
+
+				if (mIncrementalLoading) {
+					fileName = mGZFilePrefix + cvt.int2str(mFileCounter);
+				} else {
+					fileName = mGZFilePrefix;			
+				}
+
+				VFMMLoader importer = VFMMLoader();
+				importer.importVec3Grid(fileName, mVec3Grid);
+
+				// inc file counter
+				if (mIncrementalLoading) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mWriteFrame = false;
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mVec3GridName;
+	std::string mGZFilePrefix;
+
+	bool mIncrementalLoading;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+
+	Grid<Vec3>* mVec3Grid;
+
+	int mSkipFrames;
+	bool mWriteFrame;
+	int mFramesSkipped;
+};
+
+
+//***************************************************************************************
+
+
+
+class GZWriterVec3 : public SolverPlugin {
+public:
+	GZWriterVec3()
+		: SolverPlugin(), mVec3GridName("-mui-mui-"), mGZFilePrefix("-nada-"), 
+		mIncrementalWriting(true), mCounterStart(0), mMaxFrames(50), mImmersedGridName(""), mSkipFrames(0)
+	{ };
+	~GZWriterVec3() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mVec3GridName = params.FindOneString("vec3Grid", mVec3GridName );
+		mGZFilePrefix = params.FindOneString("filePrefix", mGZFilePrefix );;
+		mIncrementalWriting = params.FindOneInt("incrementalStoring", mIncrementalWriting);
+		mCounterStart = params.FindOneInt("counterStart", mCounterStart);
+		mMaxFrames = params.FindOneInt("maxFrames", mMaxFrames);
+		mImmersedGridName = params.FindOneString("immersedGrid", mImmersedGridName );
+		mSkipFrames = params.FindOneInt("skipFrames", mSkipFrames );
+
+		// init other parameters
+		mFileCounter = mCounterStart;
+		mWriteFrame = true;
+		mFramesSkipped = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (!mWriteFrame) {
+			// skip the frame
+			mFramesSkipped += 1;
+			if (mFramesSkipped > mSkipFrames) {
+				mFramesSkipped = 0;
+				mWriteFrame = true;
+			}
+
+		}
+
+
+		if (mWriteFrame) {
+
+			// get real grid
+			mVec3Grid = mpPlParams->getGridVec3(mVec3GridName);
+
+			// if max frames not exceeded
+			if ( mFileCounter - mCounterStart < mMaxFrames ) {
+
+				// get grid size
+				nVec3i gridSize = mVec3Grid->getSize();
+
+				/////////////////////////////////////////////////////////////////////////
+				// return if not immersed yet (if immersed grid exists)
+				if (mImmersedGridName.size() > 0) {
+					Grid<int>* pObjImmersed = mpPlParams->getGridInt(mImmersedGridName);
+					if (pObjImmersed->getGlobal(0,0,0) <= 0) return true; // if not immersed yet -> skip this one
+				}
+				/////////////////////////////////////////////////////////////////////////
+
+				std::string fileName;
+
+				convert cvt;
+				
+				if (mIncrementalWriting) {
+					fileName = mGZFilePrefix + cvt.int2str(mFileCounter);
+				} else {
+					fileName = mGZFilePrefix;			
+				}
+
+				VFMMLoader exporter = VFMMLoader();
+				exporter.exportVec3Grid(fileName, mVec3Grid);
+
+
+				// inc file counter
+				if (mIncrementalWriting) {
+					// signal end
+					mFileCounter++;
+				}
+			}
+
+
+			// set write frame false -> skip test sets it true again
+			mWriteFrame = false;
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mVec3GridName;
+	std::string mGZFilePrefix;
+	std::string mImmersedGridName;
+
+
+	bool mIncrementalWriting;
+
+	int mFileCounter;
+	int mCounterStart;
+	int mMaxFrames;
+
+	Grid<Vec3>* mVec3Grid;
+
+	int mSkipFrames;
+	bool mWriteFrame;
+	int mFramesSkipped;
+};
+
+
+//***************************************************************************************
+
+
+
+
+
+
+
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+// 
+// BOOLEAN OPERATIONS ON SIGNED DISTANCE FIELD
+//
+//***************************************************************************************
+//***************************************************************************************
+//***************************************************************************************
+
+class findOutstickingFluidRegions : public SolverPlugin {
+public:
+	findOutstickingFluidRegions()
+		: SolverPlugin(), mBasePhiGridName("-mui-mui-"), mNewPhiGridName("-nada-"), mLogicalOuterGridName("-niente-"), 
+		                  mLogicalInnerGridName("-ney-"), mFlagsGridName("flags")
+	{ };
+	~findOutstickingFluidRegions() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mBasePhiGridName = params.FindOneString("base-phi-grid", mBasePhiGridName );
+		mNewPhiGridName = params.FindOneString("new-phi-grid", mNewPhiGridName );
+		mLogicalOuterGridName = params.FindOneString("logical-out-grid", mLogicalOuterGridName );
+		mLogicalInnerGridName = params.FindOneString("logical-in-grid", mLogicalInnerGridName );
+		mFlagsGridName = params.FindOneString("flag-grid", mFlagsGridName);
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<Real>* basePhiGrid = mpPlParams->getGridReal(mBasePhiGridName);
+		Grid<Real>* newPhiGrid = mpPlParams->getGridReal(mNewPhiGridName);
+		Grid<int>* logicalOuterGrid = mpPlParams->getGridInt(mLogicalOuterGridName);
+		Grid<int>* logicalInnerGrid = mpPlParams->getGridInt(mLogicalInnerGridName);
+		Grid<int>* flagGrid = mpPlParams->getGridInt(mFlagsGridName);
+
+		// parse through all cells
+		for (int x = 0; x < basePhiGrid->getSizeX(); x++) {
+			for (int y = 0; y < basePhiGrid->getSizeY(); y++) {
+				for (int z = 0; z < basePhiGrid->getSizeZ(); z++) {
+
+					// find regions where the new phi has fluid, the old not
+					if ((basePhiGrid->getGlobal(x,y,z) > 0) && (newPhiGrid->getGlobal(x,y,z) <= 0.0) && (flagGrid->getGlobal(x,y,z) != FOBSTACLE))
+					{
+						logicalOuterGrid->setGlobal(1, x, y, z);
+					} else {
+						logicalOuterGrid->setGlobal(0, x, y, z);
+					}
+
+					// find regions where the new phi has NO fluid, but the old has
+					if ((basePhiGrid->getGlobal(x,y,z) <= 0.0) && (newPhiGrid->getGlobal(x,y,z) > 0) && (flagGrid->getGlobal(x,y,z) != FOBSTACLE))
+					{
+						logicalInnerGrid->setGlobal(1, x, y, z);
+					} else {
+						logicalInnerGrid->setGlobal(0, x, y, z);
+					}
+				}
+			}
+		}
+
+		
+
+		return true;
+	};
+
+protected:
+	std::string mBasePhiGridName;
+	std::string mNewPhiGridName;
+	std::string mLogicalOuterGridName;
+	std::string mLogicalInnerGridName;
+	std::string mFlagsGridName;
+};
+
+
+
+
+// **************************************************************************************
+
+
+
+class errodeField : public SolverPlugin {
+public:
+	errodeField()
+		: SolverPlugin(), mLogicalFieldGridName("-mui-mui-"), mLogicalTMPGridName("-mui-mui-")
+	{ };
+	~errodeField() {
+		delete mVNeumannNeighborhoodXY;
+	};
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mLogicalFieldGridName = params.FindOneString("logical-field", mLogicalFieldGridName );
+		mLogicalTMPGridName = params.FindOneString("logical-tmp", mLogicalTMPGridName );
+
+
+		// build neighborhood offset lists
+		mVNeumannNeighborhoodXY = new std::vector<Vec3>();
+		mVNeumannNeighborhoodXY->push_back(Vec3(1,0,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(-1,0,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(0,1,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(0,-1,0));
+
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<int>* logicalFieldGrid = mpPlParams->getGridInt(mLogicalFieldGridName);
+		Grid<int>* logicalTMP = mpPlParams->getGridInt(mLogicalTMPGridName);
+
+		Grid<int>* flagGrid = mpPlParams->getGridInt("flags");
+
+		if (DDF_DIMENSION != 2) errFatal("trackDifferences","not implemented for 3D yet! ", SIMWORLD_PLUGINERROR);
+
+		////////////////// FILTER DIFF GRID //////////////////////////////////////
+		std::vector<int>* neighborVals = new std::vector<int>();
+
+		// parse through all cells
+		for (int x = 0; x < flagGrid->getSizeX(); x++) {
+			for (int y = 0; y < flagGrid->getSizeY(); y++) {
+				for (int z = 0; z < flagGrid->getSizeZ(); z++) {
+				
+					if (logicalFieldGrid->getGlobal(x,y,z) > 0) {
+						// get neighbor values
+						neighborVals->clear();
+						getNeighborValues(logicalFieldGrid, flagGrid, x, y, z, mVNeumannNeighborhoodXY, neighborVals);
+						//
+						// count neighbor valuesp
+						int count = 0;
+						for (int n = 0; n < neighborVals->size(); n++) {
+							if ((neighborVals->at(n) < 0) || (neighborVals->at(n) > 0)) count ++;
+						}
+
+						// if count < size set to zero else one;
+						int s = neighborVals->size();
+						if (count < s) {
+							//printf("<<<<<<<<<<<<<<<<<<<<< c: %i, s: %i >>>>>>>>>>>>>>>>>>>>\n", count, s);
+							logicalTMP->setGlobal(0,x,y,z);
+						} else {
+							logicalTMP->setGlobal(1,x,y,z);
+						}
+					} else {
+						logicalTMP->setGlobal(0,x,y,z);
+					}
+				}
+			}
+		}
+
+		delete neighborVals;
+
+		//// switch grids
+		//for (int x = 0; x < flagGrid->getSizeX(); x++) {
+		//	for (int y = 0; y < flagGrid->getSizeY(); y++) {
+		//		for (int z = 0; z < flagGrid->getSizeZ(); z++) {
+		//			logicalDiffGrid->setGlobal(logicalTMP->getGlobal(x,y,z), x,y,z);
+		//			//printf("<<<<<<<<<<<<<<<<<<<<< set  >>>>>>>>>>>>>>>>>>>>\n");
+		//		}
+		//	}
+		//}
+
+		
+		goCopyGrid<int>(logicalFieldGrid, logicalTMP);
+
+		return true;
+	};
+
+private:
+	
+	void getNeighborValues(Grid<int>* grid, Grid<int>* flags, int x_pos, int y_pos, int z_pos, std::vector<Vec3>* neighborhood, std::vector<int>* out_neighborVals) {
+		// for all in neighborhood
+		for (int i = 0; i < neighborhood->size(); i++) {
+
+			int x = x_pos + (int)neighborhood->at(i).x;
+			int y = y_pos + (int)neighborhood->at(i).y;
+			int z = z_pos + (int)neighborhood->at(i).z;
+			
+			// if offsetted position not border cell
+			if ((flags->checkIndexValid(x,y,z)) && (flags->getGlobal(x,y,z) != FOBSTACLE)) {
+				// add value of grid to list
+				out_neighborVals->push_back(grid->getGlobal(x,y,z));
+			}
+		}
+	} 
+
+protected:
+	std::string mLogicalFieldGridName;
+	std::string mLogicalTMPGridName;
+
+    std::vector<Vec3>* mVNeumannNeighborhoodXY;
+};
+
+
+
+
+// **************************************************************************************
+
+
+
+class growField : public SolverPlugin {
+public:
+	growField()
+		: SolverPlugin(), mLogicalFieldGridName("-mui-mui-"), mLogicalTMPGridName("-mui-mui-")
+	{ };
+	~growField() {
+		delete mVNeumannNeighborhoodXY;
+	};
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mLogicalFieldGridName = params.FindOneString("logical-field", mLogicalFieldGridName );
+		mLogicalTMPGridName = params.FindOneString("logical-tmp", mLogicalTMPGridName );
+
+
+		// build neighborhood offset lists
+		if (DDF_DIMENSION != 2) errFatal("trackDifferences","not implemented for 3D yet! ", SIMWORLD_PLUGINERROR);
+		mVNeumannNeighborhoodXY = new std::vector<Vec3>();
+		mVNeumannNeighborhoodXY->push_back(Vec3(1,0,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(-1,0,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(0,1,0));
+		mVNeumannNeighborhoodXY->push_back(Vec3(0,-1,0));
+
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<int>* logicalFieldGrid = mpPlParams->getGridInt(mLogicalFieldGridName);
+		Grid<int>* logicalTMP = mpPlParams->getGridInt(mLogicalTMPGridName);
+
+		Grid<int>* flagGrid = mpPlParams->getGridInt("flags");
+
+
+		////////////////// FILTER DIFF GRID //////////////////////////////////////
+		std::vector<int>* neighborVals = new std::vector<int>();
+
+		// parse through all cells
+		for (int x = 0; x < flagGrid->getSizeX(); x++) {
+			for (int y = 0; y < flagGrid->getSizeY(); y++) {
+				for (int z = 0; z < flagGrid->getSizeZ(); z++) {
+
+					if (logicalFieldGrid->getGlobal(x,y,z) == 0) {
+						// get neighbor values
+						neighborVals->clear();
+						getNeighborValues(logicalFieldGrid, flagGrid, x, y, z, mVNeumannNeighborhoodXY, neighborVals);
+						//
+						// count neighbor values
+						int count = 0;
+						for (int n = 0; n < neighborVals->size(); n++) {
+							if ((neighborVals->at(n) < 0) || (neighborVals->at(n) > 0)) count ++;
+						}
+
+						// if count > 0 set to 1 else zero;
+						int s = neighborVals->size();
+						if (count > 0) {
+							logicalTMP->setGlobal(1,x,y,z);
+						} else {
+							logicalTMP->setGlobal(0,x,y,z);
+						}
+					} else {
+						logicalTMP->setGlobal(1,x,y,z);
+					}
+				}
+			}
+		}
+
+		delete neighborVals;
+
+		goCopyGrid<int>(logicalFieldGrid, logicalTMP);
+
+		return true;
+	};
+
+private:
+
+	void getNeighborValues(Grid<int>* grid, Grid<int>* flags, int x_pos, int y_pos, int z_pos, std::vector<Vec3>* neighborhood, std::vector<int>* out_neighborVals) {
+		// for all in neighborhood
+		for (int i = 0; i < neighborhood->size(); i++) {
+
+			int x = x_pos + (int)neighborhood->at(i).x;
+			int y = y_pos + (int)neighborhood->at(i).y;
+			int z = z_pos + (int)neighborhood->at(i).z;
+
+			// if offsetted position not border cell
+			if ((flags->checkIndexValid(x,y,z)) && (flags->getGlobal(x,y,z) != FOBSTACLE)) {
+				// add value of grid to list
+				out_neighborVals->push_back(grid->getGlobal(x,y,z));
+			}
+		}
+	} 
+
+protected:
+	std::string mLogicalFieldGridName;
+	std::string mLogicalTMPGridName;
+
+	std::vector<Vec3>* mVNeumannNeighborhoodXY;
+};
+
+
+
+
+// **************************************************************************************
+
+
+
+
+class trackFieldClusters : public SolverPlugin {
+public:
+	trackFieldClusters()
+		: SolverPlugin(), mLogicalFieldGridName("-"), mVisGridName("-"), mVisitedGridName("-"), mClusterRadius(10),
+		                  mMaxFrames(300), mExportPrefix("ffx_"), mExportIndexOffset(0), mLowPhiPrefix("-"), mExportPrepolationNum(2),
+						  mHiPhiPrefix("-"), mLowVelPrefix("-"), mHIVelPrefix("-"), mExportFXMinLength(25), mExportWinExpansion(15),
+						  mLowResolution(Vec3(32, 32, 32)), mVecGrid1Name("-"), mVecGrid2Name("-"), mRealGrid1Name("-"), mRealGrid2Name("-")
+	{ };
+	~trackFieldClusters() {
+
+	};
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mLogicalFieldGridName = params.FindOneString("logical-field", mLogicalFieldGridName );
+		mVisGridName = params.FindOneString("vis-grid", mVisGridName);
+		mVisitedGridName = params.FindOneString("logical-tmp", mVisitedGridName );
+		mClusterRadius = params.FindOneInt("cluster-radius", mClusterRadius);
+
+		// export parameters
+		mExportPrefix = params.FindOneString("export-prefix", mExportPrefix);
+		mMaxFrames = params.FindOneInt("max-frames", mMaxFrames);
+		mExportIndexOffset = params.FindOneInt("export-index-offset", mExportIndexOffset);
+
+		mExportFXMinLength = params.FindOneInt("export-fx-min-length", mExportFXMinLength);
+		mExportWinExpansion = params.FindOneInt("export-win-expansion", mExportWinExpansion);
+		mExportPrepolationNum = params.FindOneInt("export-prepolation-number", mExportPrepolationNum);
+
+
+		mRealGrid1Name = params.FindOneString("real-grid1", mRealGrid1Name);
+		mRealGrid2Name = params.FindOneString("real-grid2", mRealGrid2Name);
+		mVecGrid1Name = params.FindOneString("vec-grid1", mVecGrid1Name);
+		mVecGrid2Name = params.FindOneString("vec-grid2", mVecGrid2Name);
+
+		// file load parameters
+		mLowPhiPrefix = params.FindOneString("load-low-phi-prefix", mLowPhiPrefix);
+		mHiPhiPrefix = params.FindOneString("load-hi-phi-prefix", mHiPhiPrefix);
+
+		mLowVelPrefix = params.FindOneString("load-low-vel-prefix", mLowVelPrefix);
+		mHIVelPrefix = params.FindOneString("load-hi-vel-prefix", mHIVelPrefix);
+
+		mLowResolution = params.FindOneVector("low-resolution", mLowResolution);
+
+
+
+
+		if (DDF_DIMENSION != 2) errFatal("trackFieldClusters","not implemented for 3D yet! ", SIMWORLD_PLUGINERROR);
+		mLowResolution.z = 1;
+
+
+
+
+		// build neighborhood offset list
+		if (DDF_DIMENSION != 2) errFatal("trackFieldClusters","not implemented for 3D yet! ", SIMWORLD_PLUGINERROR);
+		mClusterNeighborhood = std::vector<Vec3>();
+		for (int i = -mClusterRadius; i <= mClusterRadius; i++) {
+			for (int j = -mClusterRadius; j <= mClusterRadius; j++) {
+				// exclude center position
+				if ((i == 0) && (j == 0)) continue;
+				
+				// test length
+				if (sqrt((float)i*(float)i + (float)j*(float)j) <= mClusterRadius) {
+					// take it
+					mClusterNeighborhood.push_back(Vec3(i,j,0));
+				}
+
+			}
+		}
+
+
+		// init clusters
+		mClusters = std::vector<PointCluster>();
+		mClusterTracker = ClusterTracker();
+		mSimTick = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		if (mSimTick <= mMaxFrames) {
+
+			// get grids
+			Grid<int>* logicalFieldGrid = mpPlParams->getGridInt(mLogicalFieldGridName);
+			Grid<int>* visited = mpPlParams->getGridInt(mVisitedGridName);
+			visited->clearGrid();
+			Grid<int>* flagGrid = mpPlParams->getGridInt("flags");
+
+
+			// init visited count
+			int visitedCount = 0;
+
+
+			// alloc entry point
+			Vec3 entry;
+
+			// find first entry voxel with value 1 (while setting all visited)
+			for (int x = 0; x < logicalFieldGrid->getSizeX(); x++) {
+				for (int y = 0; y < logicalFieldGrid->getSizeY(); y++) {
+					for (int z = 0; z < logicalFieldGrid->getSizeZ(); z++) {
+
+						// if already visited -> jump
+						if (visited->getGlobal(x,y,z) != 0) continue;
+
+						// set visited
+						visited->setGlobal(1, x,y,z);
+						visitedCount++;
+
+						if (logicalFieldGrid->getGlobal(x,y,z) != 0) {
+							entry = Vec3(x,y,z);
+
+							// quit loop
+							goto endOfLoop;
+						}
+
+					}
+				}
+			}
+			// label
+			endOfLoop: 
+
+
+			// init todo list
+			std::vector<Vec3>* todo = new std::vector<Vec3>();
+
+			// while not all cells looked at
+			while (visitedCount < (logicalFieldGrid->getSizeX()*logicalFieldGrid->getSizeY()*logicalFieldGrid->getSizeZ())) {
+				// clear todo list
+
+				// open a new cluster with entry
+				PointCluster cluster = PointCluster();
+				cluster.addPoint(entry);
+
+				// add entry to todo list
+				todo->push_back(entry);
+
+				// work-off todo list
+				while (todo->size() > 0) {
+					
+					// get element from list
+					Vec3 center = todo->back();
+					todo->pop_back();
+			
+					// find all voxels in centers radius, mark visited and add to cluster
+					for (int i = 0; i < mClusterNeighborhood.size(); i++) {
+
+						// compute point
+						int off_x = center.x + mClusterNeighborhood[i].x;
+						int off_y = center.y + mClusterNeighborhood[i].y;
+						int off_z = center.z + mClusterNeighborhood[i].z;
+
+						// check if valid 
+						if (!logicalFieldGrid->checkIndexValid(off_x, off_y, off_z)) continue;
+
+						// test if visited yet
+						if (visited->getGlobal(off_x, off_y, off_z) != 0) continue;
+							
+
+						// mark visited
+						visited->setGlobal(1, off_x,off_y,off_z);
+						visitedCount++;
+							
+						// test if field if one
+						if (getValue(logicalFieldGrid, flagGrid, off_x, off_y, off_z)) {
+							// bingo, got one:
+							cluster.addPoint(off_x, off_y, off_z);
+							// add to todo list
+							todo->push_back(Vec3(off_x, off_y, off_z));
+						}
+					}
+				} // while todo
+				
+				// we got ourselves a cluster
+				mClusters.push_back(cluster);
+
+
+
+				// find a new entry
+				for (int x = 0; x < flagGrid->getSizeX(); x++) {
+					for (int y = 0; y < flagGrid->getSizeY(); y++) {
+						for (int z = 0; z < flagGrid->getSizeZ(); z++) {
+
+							if (visited->getGlobal(x,y,z) != 0) continue;
+
+							visited->setGlobal(1, x,y,z);
+							visitedCount++;
+
+							//printf("value at (%i, %i, %i): %i\n", x, y, z, logicalFieldGrid->getGlobal(x,y,z));
+
+							if (logicalFieldGrid->getGlobal(x,y,z) != 0) {
+								entry = Vec3(x,y,z);
+
+								// quit loop
+								goto endOfLoop2;
+							}
+						}
+					}
+				}
+				// label
+				endOfLoop2: ;
+			
+			} // while some not visited yet
+			
+
+
+			// mClusters contains all clusters ==> give to cluster tracker
+			mClusterTracker.assignClusters(mClusters, mSimTick);
+
+
+
+			/////////////////////////
+			///// VISUALIZATION /////
+			/////////////////////////
+			Grid<Real>* visGrid = mpPlParams->getGridReal(mVisGridName);
+			visGrid->clearGrid();
+
+			// draw boxes
+			std::vector<AABB> boxes = mClusterTracker.getActiveBoxes();
+			printf(">>>>>>>>>>>>> box list size%i\n", boxes.size());
+			for (int c = 0; c < boxes.size(); c++) {
+				AABB box = boxes[c];
+
+				float color = -((float)box.index / 3.0f);
+
+				// draw lines
+				for (int Lx = box.min().x; Lx <= box.max().x; Lx++) {
+					visGrid->setGlobal(color, Lx, box.min().y, 2);
+					visGrid->setGlobal(color, Lx, box.max().y, 2);
+				}
+				for (int Ly = box.min().y; Ly <= box.max().y; Ly++) {
+					visGrid->setGlobal(color, box.min().x, Ly, 2);
+					visGrid->setGlobal(color, box.max().x, Ly, 2);
+				}
+			}
+
+			// draw clusters
+			float color = 4;
+			for (int c = 0; c < mClusters.size(); c++) {
+				
+				// get cluster
+				PointCluster cluster = mClusters.at(c);
+				for (int p = 0; p < cluster.size(); p++) {
+					Vec3 point = cluster.point(p);
+					visGrid->setGlobal(color, point.x, point.y, point.z);
+				}
+			}
+
+			/////////////////////////////
+			///// END VISUALIZATION /////
+			/////////////////////////////
+
+
+
+			mClusterTracker.printAllTracks();
+
+
+
+			// delete clusters
+			mClusters.clear();	
+			
+		} else if (mSimTick == mMaxFrames+1) {
+			// CUT UP STORED STUFF ACCORDING TO CLUSTER-TRACKER //
+
+
+			// get resolutionMax
+			nVec3i s = mpPlParams->getGridInt("flags")->getSize();
+			Vec3 resolutionMax = Vec3(s.x - 1, s.y - 1, s.z - 1);
+
+
+			printf(">>>>>>>>>>>>>>>>>>> BASE PRINT <<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+			mClusterTracker.printAllTracks();
+
+
+			// remove tracks that are too small
+			printf(">>>>>>>>>>>>>>>>>>> REMOVE SMALL (5) <<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+			mClusterTracker.removeSmallTracks(mExportFXMinLength);
+
+
+			mClusterTracker.printAllTracks();
+
+
+			// prepolate da tracks
+			printf(">>>>>>>>>>>>>>>>>>> PREPOLATE (2) <<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+			mClusterTracker.prepolateTracks(mExportPrepolationNum, 2, resolutionMax);
+
+
+			mClusterTracker.printAllTracks();
+
+
+			// increase boxes
+			printf(">>>>>>>>>>>>>>>>>>> GROW BOXES (10) <<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+			mClusterTracker.growTrackBoxes(mExportWinExpansion, resolutionMax);
+
+
+			mClusterTracker.printAllTracks();
+
+
+			printf(">>>>>>>>>>>>>>>>>>> EXPORTING <<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+
+
+			// EXPORT FRAMES
+			for (int t = 0; t <= mMaxFrames; t++) {
+				
+				// see if we have boxes at t
+				std::vector<AABB> boxesOfSimTick = mClusterTracker.getBoxesOfSimTick(t);
+
+				if (boxesOfSimTick.size() > 0) {
+
+					// read grids
+					VFMMLoader loader = VFMMLoader();
+					convert cvt;
+
+					Grid<Real>* hiPhi = mpPlParams->getGridReal(mRealGrid1Name);
+					loader.importRealGrid(mHiPhiPrefix + cvt.int2str(t), hiPhi);
+
+					Grid<Real>* lowPhi = mpPlParams->getGridReal(mRealGrid2Name);
+					loader.importRealGrid(mLowPhiPrefix + cvt.int2str(t), lowPhi);
+
+
+					Grid<Vec3>* hiVec = mpPlParams->getGridVec3(mVecGrid1Name);
+					loader.importVec3Grid(mHIVelPrefix + cvt.int2str(t), hiVec);
+
+
+					Grid<Vec3>* lowVec = mpPlParams->getGridVec3(mVecGrid2Name);
+					loader.importVec3Grid(mLowVelPrefix + cvt.int2str(t), lowVec);
+
+
+					
+
+
+					// export each box
+					for (int b = 0; b < boxesOfSimTick.size(); b++) {
+						exportBoxValue(boxesOfSimTick[b], hiPhi, lowPhi, hiVec, lowVec, t);
+					}
+
+
+				}
+
+
+			}
+		}
+
+
+		// inc simulation tick
+		mSimTick++;
+
+		return true;
+	};
+
+private:
+
+
+	bool getValue(Grid<int>* grid, Grid<int>* flags, int x, int y, int z) {
+		// if position inside grid and not obstacle
+		if ((flags->getGlobal(x,y,z) != FOBSTACLE)) {
+			// if grid value 1
+			if (grid->getGlobal(x,y,z) != 0) return true;
+		}
+		return false;
+	} 
+
+
+	void exportBoxValue(AABB box, Grid<Real>* hiPhi, Grid<Real>* lowPhi, Grid<Vec3>* hiVel, Grid<Vec3>* lowVel, int time) {
+		
+		// get grid sizes
+		/////////////////
+		nVec3i hiGridSize_i = hiPhi->getSize();
+		Vec3 hiGridSize = Vec3(hiGridSize_i.x, hiGridSize_i.y, hiGridSize_i.z);
+		Vec3 lowGridSize = Vec3(mLowResolution.x, mLowResolution.y, mLowResolution.z);
+
+		Vec3 resoFactor = lowGridSize / hiGridSize;
+
+
+		// get filenames
+		convert cvt;
+		std::string hiFileName = mExportPrefix + "hi_" + cvt.int2str(box.index + mExportIndexOffset) + "_" + cvt.int2str(time - box.startTimeStamp);
+		std::string lowFileName = mExportPrefix + "low_" + cvt.int2str(box.index + mExportIndexOffset) + "_" + cvt.int2str(time - box.startTimeStamp);
+
+
+		Vec3 hiMin = box.min();
+		Vec3 hiMax = box.max();
+
+		Vec3 lowMin = box.min() * resoFactor;
+		Vec3 lowMax = box.max() * resoFactor;
+
+		if (DDF_DIMENSION == 2) {
+			// fix windows for 3D
+			hiMin.z = 2;
+			hiMax.z = 2;
+
+			lowMin.z = 2;
+			lowMax.z = 2;
+		}
+
+		AABB lowBox = AABB(lowMin, lowMax);
+		lowBox.roundBox();
+
+
+		// write files
+		//////////////
+		VFMMLoader exporter = VFMMLoader();
+		exporter.exportFluidVolume(hiFileName, hiPhi, hiVel, hiMin, hiMax);
+		exporter.exportFluidVolume(lowFileName, lowPhi, lowVel, lowBox.min(), lowBox.max());
+
+		if (DDF_DIMENSION == 2) {
+			exporter.exportFluidVolumeDLM(hiFileName, hiPhi, hiVel, hiMin, hiMax);
+			exporter.exportFluidVolumeDLM(lowFileName, lowPhi, lowVel, lowBox.min(), lowBox.max());
+		}
+	}
+
+
+
+protected:
+	std::string mLogicalFieldGridName;
+	std::string mVisitedGridName;
+	std::string mVisGridName;
+
+	int mClusterRadius;
+
+	int mSimTick;
+
+	std::vector<Vec3> mClusterNeighborhood;
+	std::vector<PointCluster> mClusters;
+
+	ClusterTracker mClusterTracker;
+
+	// export info
+	int mMaxFrames;
+	std::string mExportPrefix;
+	int mExportIndexOffset;
+
+	int mExportFXMinLength;
+	int mExportWinExpansion;
+	int mExportPrepolationNum;
+
+	std::string mVecGrid1Name;
+	std::string mVecGrid2Name;
+	std::string mRealGrid1Name;
+	std::string mRealGrid2Name;
+
+
+	// file load info
+	std::string mLowPhiPrefix;
+	std::string mHiPhiPrefix;
+
+	std::string mLowVelPrefix;
+	std::string mHIVelPrefix;
+
+	Vec3 mLowResolution;
+};
+
+
+
+
+// **************************************************************************************
+
+
+class testDaDB : public SolverPlugin {
+public:
+	testDaDB()
+		: SolverPlugin(), mPhiGridName("-mui-mui-"), mVelocityGridName("-mui-mui-"), mEffectsPrefix("ffx_hi_"), mFxStart(0), mFxEnd(0)
+	{ };
+	~testDaDB() {
+
+	};
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mPhiGridName = params.FindOneString("phi-grid", mPhiGridName );
+		mVelocityGridName = params.FindOneString("vel-grid", mVelocityGridName );
+
+		mEffectsPrefix = params.FindOneString("fx-prefix", mEffectsPrefix );
+
+		mFxStart = params.FindOneInt("fx-start", mFxStart);
+		mFxEnd = params.FindOneInt("fx-end", mFxEnd);
+
+		mSimTick = 0;
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<Real>* phiGrid = mpPlParams->getGridReal(mPhiGridName);
+		phiGrid->clearGrid();
+		Grid<Vec3>* velGrid = mpPlParams->getGridVec3(mVelocityGridName);
+		velGrid->clearGrid();
+		
+		convert cvt;
+		VFMMLoader loader;
+
+		// over fx range
+		for (int i_fx = mFxStart; i_fx <= mFxEnd; i_fx++) {
+			// build path
+			std::string filePath = mEffectsPrefix + cvt.int2str(i_fx) + "_" + cvt.int2str(mSimTick);
+
+			// load data
+			loader.importFluidVolumeToBox(filePath, phiGrid, velGrid);
+
+		}
+
+
+		// inc sim tick counter
+		mSimTick++;
+
+
+		return true;
+	};
+
+private:
+
+	
+
+protected:
+	std::string mPhiGridName;
+	std::string mVelocityGridName;
+
+	std::string mEffectsPrefix;
+
+	int mFxStart;
+	int mFxEnd;
+
+	int mSimTick;
+};
+
+
+
+
+// **************************************************************************************
+
+
+
+class getPhiGradient : public SolverPlugin {
+public:
+	getPhiGradient()
+		: SolverPlugin(), mPhiGridName("-mui-mui-"), mOutVec3GridName("-nada-")
+	{ };
+	~getPhiGradient() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mPhiGridName = params.FindOneString("phi-grid", mPhiGridName );
+		mOutVec3GridName = params.FindOneString("out-vec3-grid", mOutVec3GridName );
+
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<Real>* phiGrid = mpPlParams->getGridReal(mPhiGridName);
+		Grid<Vec3>* outVec3Grid = mpPlParams->getGridVec3(mOutVec3GridName);
+
+		// parse through all cells 1 away from border
+		for (int x = 1; x < phiGrid->getSizeX()-1; x++) {
+			for (int y = 1; y < phiGrid->getSizeY()-1; y++) {
+				for (int z = 1; z < phiGrid->getSizeZ()-1; z++) {
+					
+					// compute gradients
+					float dx = phiGrid->getGlobal(x+1, y, z) - phiGrid->getGlobal(x-1, y, z);
+					float dy = phiGrid->getGlobal(x, y+1, z) - phiGrid->getGlobal(x, y-1, z);
+					float dz = phiGrid->getGlobal(x, y, z+1) - phiGrid->getGlobal(x, y, z-1);
+
+
+					Vec3 val;
+					float l = (sqrt(dx*dx + dy*dy + dz*dz));
+					if (l < 0.001) val = Vec3(0,0,0); // zero vec
+					else val = Vec3(dx/l, dy/l, dz/l);   // normalize vec
+
+					// multiply with lenght of distance
+					val = val * phiGrid->getGlobal(x,y,z);
+					
+					if (phiGrid->getGlobal(x,y,z) >= 0) 
+					{	
+						// if outside fluid body -> change orientation of vector
+						val = -val;
+						outVec3Grid->setGlobal(val, x,y,z);
+					} else {
+						// inside fluid body -> use gradient
+						outVec3Grid->setGlobal(val, x,y,z);
+					}
+
+				}
+			}
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mPhiGridName;
+	std::string mOutVec3GridName;
+};
+
+
+
+
+
+
+//***************************************************************************************
+
+
+class intGrid2floatGrid : public SolverPlugin {
+public:
+	intGrid2floatGrid()
+		: SolverPlugin(), mIntGridName("-mui-mui-"), mFloatGridName("-nada-")
+	{ };
+	~intGrid2floatGrid() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+
+		// load params
+		mIntGridName = params.FindOneString("int-grid", mIntGridName );
+		mFloatGridName = params.FindOneString("float-grid", mFloatGridName );
+
+		return true;
+	};
+	virtual bool initPlugin() { return true; };
+
+
+	virtual bool performStep(Real dt) {
+
+		// get grids
+		Grid<int>* intGrid = mpPlParams->getGridInt(mIntGridName);
+		Grid<Real>* floatGrid = mpPlParams->getGridReal(mFloatGridName);
+
+		// parse through all cells
+		for (int x = 0; x < intGrid->getSizeX(); x++) {
+			for (int y = 0; y < intGrid->getSizeY(); y++) {
+				for (int z = 0; z < intGrid->getSizeZ(); z++) {
+					floatGrid->setGlobal((float)intGrid->getGlobal(x,y,z), x, y, z);
+				}
+			}
+		}
+
+
+
+		return true;
+	};
+
+protected:
+	std::string mIntGridName;
+	std::string mFloatGridName;
+};
+
+
+
+
+//***************************************************************************************
+
+
+
+
+	SolverPlugin* MakeFluidMatchingPlugin(std::string name) {
+		if (name.compare( string("matlab-dlm-read-real") )==0) {
+			return new matlabDLMReaderReal;
+		} else if (name.compare( string("matlab-dlm-read-vec2") )==0) {
+			return new matlabDLMReaderVec2;
+		} else if (name.compare( string("matlab-dlm-write-real") )==0) {
+			return new matlabDLMWriterReal;
+		} else if (name.compare( string("matlab-dlm-write-vec2") )==0) {
+			return new matlabDLMWriterVec2;
+		} else if (name.compare( string("matlab-dlm-read-flags") )==0) {
+			return new matlabDLMReaderFlags;
+		} else if (name.compare( string("gz-read-real") )==0) {
+			return new GZReaderReal;
+		} else if (name.compare( string("gz-write-real") )==0) {
+			return new GZWriterReal;
+		} else if (name.compare( string("gz-read-vec3") )==0) {
+			return new GZReaderVec3;
+		} else if (name.compare( string("gz-write-vec3") )==0) {
+			return new GZWriterVec3;
+		} else if (name.compare( string("matching-find-outsticking-fluid-regions") )==0) {
+			return new findOutstickingFluidRegions;
+		} else if (name.compare( string("matching-errode-field") )==0) {
+			return new errodeField;
+		} else if (name.compare( string("matching-grow-field") )==0) {
+			return new growField;
+		} else if (name.compare( string("matching-track-field-cluster") )==0) {
+			return new trackFieldClusters;
+		} else if (name.compare( string("db-test") )==0) {
+			return new testDaDB;
+		} else if (name.compare( string("int-grid-2-float-grid") )==0) {
+			return new intGrid2floatGrid;
+		} else if (name.compare( string("get-phi-gradient") )==0) {
+			return new getPhiGradient;
+		}
+		return NULL;
+	}
+
+
+}; // DDF
+
+

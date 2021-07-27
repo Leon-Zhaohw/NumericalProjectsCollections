@@ -1,0 +1,541 @@
+/*
+ * pbrt source code Copyright(c) 1998-2007 Matt Pharr and Greg Humphreys
+ *
+ * All Rights Reserved.
+ * For educational use only; commercial use expressly forbidden.
+ * NO WARRANTY, express or implied, for this software.
+ * (See file License.txt for complete license)
+ */
+
+// parser.cpp*
+#include "parser.h"
+#include "paramset.h"
+#include "solverplugin.h"
+using std::string;
+
+#include "grid.h"
+#include "geomfile.h"
+#include "solverparams.h"
+#include "fluidsolver.h"
+#include "waveletnoise.h"
+using namespace DDF;
+
+
+// from main, init first solver from param file
+extern FluidSolver *gpDefaultSolver;
+map<string, SolverParams*> gSolverParams;
+map<string, ParamSet*> gSolverParamSets;
+extern map<string, FluidSolver*> gFluidSolvers;
+std::vector<DDF::FluidSolver*> gFluidSolversOrdered;
+extern map<string, WAVELETNOISE::WaveletNoiseField*> gNoiseFields;
+// stack of plugins for each solver
+static std::vector<SolverPlugin*> lSolverPlugins;
+static std::vector<SolverPlugin*> lInitPlugins;
+static FluidSolver *gpCurrentSolver;
+static std::string gCurrentSolverName = std::string("-unnamed-");
+
+// other globals to init
+namespace DDF {
+extern ParamSet gGlutGuiParams;
+}; 
+extern FluidSolver *gpFsolver;
+
+// output debug info?
+#define DEBUG_PARSE true
+
+// API Static Data
+#define STATE_UNINITIALIZED  0
+#define STATE_OPTIONS_BLOCK  1
+#define STATE_WORLD_BLOCK    2
+static int currentApiState = STATE_UNINITIALIZED;
+
+// *****************************************************************************
+COREDLL void pbrtInit() {
+	// API Initialization
+	if (currentApiState != STATE_UNINITIALIZED) {
+		errMsg("PARSE-WARNING","pbrtInit() has already been called.");
+		return;
+	}
+
+	// System-wide initialization
+	// Make sure floating point unit's rounding stuff is set
+	// as is expected by the fast FP-conversion routines.  In particular,
+	// we want double precision on Linux, not extended precision!
+	#ifdef FAST_INT
+	#if defined(__linux__) && defined(__i386__)
+	int cword = _FPU_MASK_DM | _FPU_MASK_ZM | _FPU_MASK_OM | _FPU_MASK_PM |
+		_FPU_MASK_UM | _FPU_MASK_IM | _FPU_DOUBLE | _FPU_RC_NEAREST;
+	_FPU_SETCW(cword);
+	#endif
+	#if defined(WIN32)
+	_control87(_PC_53, MCW_PC);
+	#endif
+	#endif // FAST_INT
+
+	currentApiState = STATE_OPTIONS_BLOCK;
+	//renderOptions = new RenderOptions;
+	//graphicsState = GraphicsState();
+}
+
+// API Macros
+#define VERIFY_INITIALIZED(func) \
+	if (currentApiState == STATE_UNINITIALIZED) { \
+		errMsg("PARSER-ERR","pbrtInit() must be before calling \""<<func<<"()\". " \
+			"Ignoring."); \
+		return; \
+	} else { /* swallow trailing semicolon */ }
+
+#define VERIFY_OPTIONS(func) \
+	VERIFY_INITIALIZED(func); \
+	if (currentApiState == STATE_WORLD_BLOCK) { \
+		errMsg("PARSER-ERR","Options cannot be set inside world block; " \
+			"\""<<func<<"\" not allowed.  Ignoring."); \
+		return; \
+	} else { /* swallow trailing semicolon */ }
+
+#define VERIFY_WORLD(func) \
+	VERIFY_INITIALIZED(func); \
+	if (currentApiState == STATE_OPTIONS_BLOCK) { \
+		errMsg("PARSER-ERR","Scene description must be inside world block; " \
+			"\""<<func<<"\" not allowed. Ignoring."); \
+		return; \
+	} else { /* swallow trailing semicolon */ }
+
+COREDLL void pbrtPluginTest(const std::string &name, const ParamSet &params) {
+}
+
+
+// *****************************************************************************
+COREDLL void ddfParseSolverParams(const string &name, const ParamSet &in_params) {
+	VERIFY_OPTIONS("SolverParams");
+	ParamSet params = in_params; 
+	SolverParams* solverParams = new SolverParams;
+
+	// identically copy init from another solver
+	string copyInit = params.FindOneString("copy-init","");
+	if(copyInit.length()>0) {
+		if(gSolverParams[copyInit]) {
+			*solverParams = *gSolverParams[copyInit];
+			if(DEBUG_PARSE) debMsg("PARSER","solver params inited from '"<<copyInit<<"' ");
+		} else {
+			errFatal("ddfParseSolver","Init for '"<<name<<"' from source params '"<<copyInit<<"' invalid! Not found...", SIMWORLD_ERRPARSE);
+		}
+	}
+
+	// adapt init from another solver, e.g., set timestep according to grid size
+	// same as copy init here, but adaptInit is called below
+	string adaptInit = params.FindOneString("adapt-init-from","");
+	if(adaptInit.length()>0) {
+		if(gSolverParams[adaptInit]) {
+			*solverParams = *gSolverParams[adaptInit];
+
+			if(DEBUG_PARSE) debMsg("PARSER","solver params adapted init from '"<<adaptInit<<"' ");
+		} else {
+			errFatal("ddfParseSolver","Adapt init for '"<<name<<"' from source params '"<<adaptInit<<"' invalid! Not found...", SIMWORLD_ERRPARSE);
+		}
+	}
+
+	solverParams->mName = name;
+
+	// check for existing overrides
+	if(gSolverParamSets["-override-"] != NULL) {
+	debMsg("PARSER","solver params "<<name<<" overriding...");
+		const ParamSet* overrideParams = gSolverParamSets["-override-"];
+		params.override(*overrideParams);
+	}
+
+	// init acutal values 
+	solverParams->initFromParamSet(params);
+
+	if(adaptInit.length()>0) {
+		if(!solverParams->adaptInit( gSolverParams[adaptInit] )) {
+			errFatal("ddfParseSolver","Adapt init for '"<<name<<"' from source params '"<<adaptInit<<"' failed! ...", SIMWORLD_ERRPARSE);
+		}
+	}
+
+	if (name.find("-override-",0) != string::npos ) {
+		// override param set, dont check for unused ones...
+	} else {
+		params.ReportUnused();
+	}
+
+	gSolverParamSets[name] = new ParamSet;
+	*gSolverParamSets[name] = params;
+	gSolverParams[name] = solverParams; 
+	if(DEBUG_PARSE) debMsg("PARSER","solver params "<<name<<", inited "<<solverParams->isInited()<<" "<<solverParams->toString() );
+}
+
+// *****************************************************************************
+COREDLL void ddfParseNoiseField(const std::string &name, const ParamSet &params) {
+	VERIFY_OPTIONS("NoiseField");
+	// store for later use
+	if(DEBUG_PARSE) debMsg("PARSER","creating noisefield '"<<name<<"' ");
+
+	
+	//string noisename = params.FindOneString("noisename","");
+	string globalsName = params.FindOneString("params","default");
+	SolverParams *sparms = gSolverParams[globalsName];
+
+	if(strlen(globalsName.c_str())<1 || 
+			sparms==NULL ||
+			(!sparms->verifyInit("ddfParseNoiseField"))
+			) {
+		errFatal("PARSER","Invalid fluid-params name! Noise not created '"<<name<<"', '"<<globalsName<<"' ...",
+				SIMWORLD_ERRPARSE);
+		return;
+	}
+
+	// adjust noise to grid size
+	const nVec3i n = sparms->getGridSize();
+	WAVELETNOISE::WaveletNoiseField *f = new WAVELETNOISE::WaveletNoiseField(name, params, n);
+	params.ReportUnused();
+
+	gNoiseFields[name] = f;
+	sparms->addNoiseField(f, name);
+}
+
+// *****************************************************************************
+COREDLL void ddfParseGrid(const string &name, const ParamSet &params) {
+	VERIFY_OPTIONS("Grid");
+
+	string globalsName = params.FindOneString("params","default");
+	SolverParams *sparms = gSolverParams[globalsName];
+	const nVec3i orgSize = sparms->getGridSize();
+
+	// create grid
+	string type = name; // type=name in this case
+	string gridname = params.FindOneString("gridname","");
+	float gridscale = params.FindOneFloat("scale",1.);
+	Vec3 gridsize = params.FindOneVector("size", Vec3(orgSize[0], orgSize[1], orgSize[2]) );
+	int flags = params.FindOneInt("display-flags", 0);
+	int sanCheckMode = params.FindOneInt("sanity-check-mode",2);
+	params.ReportUnused();
+	GridBase *gridBase = NULL;
+	
+	if(gridscale != 1. && (
+				(gridsize[0] != orgSize[0]) ||
+				(gridsize[1] != orgSize[1]) ||
+				(gridsize[2] != orgSize[2]) ) ) {
+		errFatal("parseGrid","Fatal grid init error, default size = "<<orgSize<<", requested size = "<<gridsize<<", requested scale = "<<gridscale, SIMWORLD_GRIDERROR);
+	} else {
+		if(gridscale != 1. ) {
+			gridsize = Vec3(orgSize[0],orgSize[1],orgSize[2]) * gridscale;
+		}
+	}
+	gridsize = Vec3((int)gridsize[0],(int)gridsize[1],(int)gridsize[2]);
+
+	if(strlen(gridname.c_str())<1 || 
+			sparms==NULL ||
+			(!sparms->verifyInit("ddfParseGrid"))
+			) {
+		errMsg("PARSER","Make grid: Invalid gridname or fluid-params! Grid not created '"<<gridname<<"', '"<<globalsName<<"' ...");
+		return;
+	}
+
+	// TODO - make sure names are unique for all grids!
+	if (type == "int") {
+		if(sparms->mGridsInt[gridname]!=NULL) {
+			errMsg("PARSER","Make grid: Invalid gridname '"<<gridname<<"'! Grid int already exists...");
+			return;
+		}
+
+		Grid<int> *ngrid = new Grid<int>(); 
+		ngrid->initGridMem(gridsize[0], gridsize[1], gridsize[2]);
+		ngrid->setName(gridname);
+		ngrid->setSanityCheckMode(sanCheckMode);
+
+		sparms->mGridsInt[gridname] = ngrid;
+		//debMsg("PARSER","Make grid: New int grid "<<gridname<<" done." );
+		gridBase = ngrid;
+
+	} else if (type == "vec3") {
+		if(sparms->mGridsVec3[gridname]!=NULL) {
+			errMsg("PARSER","Make grid: Invalid gridname '"<<gridname<<"'! Grid vec3 already exists...");
+			return;
+		}
+
+		Grid<DDF::Vec3> *ngrid = new Grid<DDF::Vec3>(); 
+		ngrid->initGridMem(gridsize[0], gridsize[1], gridsize[2]);
+		ngrid->setName(gridname);
+		ngrid->setSanityCheckMode(sanCheckMode);
+
+		sparms->mGridsVec3[gridname] = ngrid;
+		//debMsg("PARSER","Make grid: New vec3 grid "<<gridname<<" done." );
+		gridBase = ngrid;
+
+	} else if (type == "real") {
+		if(sparms->mGridsReal[gridname]!=NULL) {
+			errMsg("PARSER","Make grid: Invalid gridname '"<<gridname<<"'! Grid real already exists...");
+			return;
+		}
+
+		Grid<DDF::Real> *ngrid = new Grid<DDF::Real>(); 
+		ngrid->initGridMem(gridsize[0], gridsize[1], gridsize[2]);
+		ngrid->setName(gridname);
+		ngrid->setSanityCheckMode(sanCheckMode);
+
+		sparms->mGridsReal[gridname] = ngrid;
+		//debMsg("PARSER","Make grid: New real grid "<<gridname<<" done." );
+		gridBase = ngrid;
+
+	} else {
+		errMsg("PARSER","Make grid: Invalid grid type "<<type);
+	}
+
+	gridBase->setDisplayFlags(flags);
+	debMsg("PARSER","New "<<type<<" grid '"<<gridname<<"', size="<< gridsize[0]<<","<<gridsize[1]<<","<<gridsize[2]); 
+	params.ReportUnused();
+}
+
+
+// *****************************************************************************
+COREDLL void ddfParseGlutGuiParams(const std::string &name, const ParamSet &params) {
+	VERIFY_OPTIONS("GlutGui");
+	// store for later use
+	gGlutGuiParams = params;
+	// name doesnt matter...
+	if(DEBUG_PARSE) debMsg("PARSER","glutgui params "<<name<<" ");
+}
+
+COREDLL void ddfSolverBlockBegin() {
+	// init solver stack
+	std::cout << std::endl;
+
+	debMsg("ddfSolverBlockBegin","resetting ...");
+	lSolverPlugins.clear();
+	gpCurrentSolver = NULL;
+	gCurrentSolverName = std::string("-unnamed2-");
+}
+
+COREDLL void ddfParseSolver(const std::string &name, const ParamSet &params) {
+	string paramname = params.FindOneString("params","default");
+	SolverParams *sparams = gSolverParams[paramname];
+	if(!sparams) {
+		errMsg("ddfParseSolver","Invalid solver params '"<<paramname<<"' ");
+		exit(1);
+	}
+	gCurrentSolverName = name;
+	if(gFluidSolvers[gCurrentSolverName] != NULL) {
+		errFatal("ddfParseSolver","Duplicate fluid solver name '"<<name<<"' ", SIMWORLD_ERRPARSE);
+	}
+
+	params.ReportUnused();
+	FluidSolver* fsolver = new FluidSolver;
+	gpCurrentSolver = fsolver;
+	gpCurrentSolver->setName(gCurrentSolverName);
+
+	if(DEBUG_PARSE) debMsg("ddfParseSolver","solver "<<gCurrentSolverName<<", params:"<<paramname );
+	gpCurrentSolver->setParams(sparams);
+}
+COREDLL void ddfReferenceSolver(const std::string &name, const ParamSet &params) {
+	gCurrentSolverName = name;
+	if(gFluidSolvers[gCurrentSolverName] == NULL) {
+		errFatal("ddfReferenceSolver","Fluid solver name '"<<name<<"' not found!", SIMWORLD_ERRPARSE);
+	}
+	gpCurrentSolver = gFluidSolvers[name];
+}
+
+COREDLL void ddfParsePlugin(const std::string &name, const ParamSet &params) {
+	SolverPlugin* plugin = NULL;
+	debMsg("PARSER","creating plugin '"<<name<<"' " );
+
+	// try built-ins
+	plugin = SolverPlugin::makePlugin(name);
+
+	if(plugin) {
+		plugin->setPluginParams( gpCurrentSolver->getParams() );
+
+		// init base params
+		plugin->SolverPlugin::parseParams(params);
+
+		if(!plugin->parseParams(params)) {
+			errFatal("PARSER","unable to parse params for '"<<name<<"' ", SIMWORLD_PLUGINERROR);
+		}
+	}
+
+	if(!plugin) {
+		errFatal("ddfParsePlugin","unable to create '"<<name<<"' with params "<< params.ToString() , SIMWORLD_PLUGINERROR);
+		debMsg("ddfParsePlugin","This can be caused by certain options being disabled for cmake, check CMakeLists.txt for a list of options.");
+	}
+
+	params.ReportUnused();
+	lSolverPlugins.push_back(plugin);
+}
+
+COREDLL void ddfSolverBlockEnd() {
+	// finish and setup solver
+	if(DEBUG_PARSE) debMsg("ddfSolverBlockEnd","solver "<<gCurrentSolverName<<", initting");
+
+	debMsg("ddfSolverBlockEnd","plugins "<<lSolverPlugins.size() );
+	gpCurrentSolver->addPlugins(lSolverPlugins);
+
+	gFluidSolvers[gCurrentSolverName] = gpCurrentSolver;
+	debMsg("ddfSolver","Added solver "<<gCurrentSolverName<<". ");
+	gFluidSolversOrdered.push_back( gpCurrentSolver );
+
+	// store first inited solver as global default one
+	if(!gpFsolver) gpFsolver = gpCurrentSolver;
+}
+
+// *****************************************************************************
+// init plugin stack, same as solver plugin stack
+COREDLL void ddfInitBlockBegin() {
+	// init solver init plugin stack
+	std::cout << std::endl;
+
+	debMsg("ddfInitBlockBegin","resetting ...");
+	lSolverPlugins.clear();
+	gpCurrentSolver = NULL;
+	gCurrentSolverName = std::string("-unnamed3-");
+}
+
+COREDLL void ddfInitBlockEnd() {
+	// finish and setup solver
+	if(DEBUG_PARSE) debMsg("ddfInitBlockEnd","solver "<<gCurrentSolverName<<", init stack done");
+
+	debMsg("ddfInitBlockEnd","plugins "<<lSolverPlugins.size() );
+	gpCurrentSolver->addInitPlugins(lSolverPlugins);
+
+	gFluidSolvers[gCurrentSolverName] = gpCurrentSolver;
+
+	// init finished in closing tag
+	gpCurrentSolver->initFluid();
+	gpCurrentSolver->runInitPlugins();
+	gpCurrentSolver->setSolverInited(true);
+
+	// store first inited solver as global default one
+	if(!gpFsolver) gpFsolver = gpCurrentSolver;
+}
+
+
+COREDLL void pbrtWorldBegin() {
+	VERIFY_OPTIONS("WorldBegin");
+	currentApiState = STATE_WORLD_BLOCK;
+	//curTransform = Transform();
+	//namedCoordinateSystems["world"] = curTransform;
+	if(DEBUG_PARSE) debMsg("PARSER","world begin");
+}
+COREDLL void pbrtWorldEnd() {
+	VERIFY_WORLD("WorldEnd");
+	/*
+	// Ensure the search path was set
+	if (!renderOptions->gotSearchPath)
+		Severe("PBRT_SEARCHPATH environment variable "
+		                  "wasn't set and a plug-in\n"
+			              "search path wasn't given in the "
+						  "input (with the SearchPath "
+						  "directive).\n");
+	// Ensure there are no pushed graphics states
+	while (pushedGraphicsStates.size()) {
+		Warning("Missing end to pbrtAttributeBegin()");
+		pushedGraphicsStates.pop_back();
+		pushedTransforms.pop_back();
+	}
+	// Create scene and render
+	Scene *scene = renderOptions->MakeScene();
+	if (scene) scene->Render();
+	delete scene;
+	// Clean up after rendering
+	currentApiState = STATE_OPTIONS_BLOCK;
+	StatsPrint(stdout);
+	curTransform = Transform();
+	namedCoordinateSystems.erase(namedCoordinateSystems.begin(),
+		namedCoordinateSystems.end());
+	// */
+	if(DEBUG_PARSE) debMsg("PARSER","world end");
+}
+
+
+// *****************************************************************************
+// Parsing Global Interface
+COREDLL bool ParseFile(const std::string &filename) {
+	// externs from pbrtparse
+	extern FILE *yyin;
+	extern int yyparse(void);
+	extern string current_file;
+	extern int line_num;
+	extern int yydebug;
+	pbrtInit();
+
+	if (getenv("PBRT_YYDEBUG") != NULL)
+		yydebug = 1;
+
+	if (strcmp(filename.c_str(), "-") == 0)
+		yyin = stdin;
+	else
+		yyin = fopen(filename.c_str(), "r");
+
+	if (yyin != NULL) {
+		current_file = filename.c_str();
+		if (yyin == stdin) current_file = "<standard input>";
+		line_num = 1;
+		yyparse();
+		if (yyin != stdin) fclose(yyin);
+	}
+
+	current_file = "";
+	line_num = 0;
+	return (yyin != NULL);
+}
+
+// *****************************************************************************
+// Parsing Command Line
+COREDLL bool ParseString(const std::string &content) {
+	// externs from pbrtparse
+	extern FILE *yyin;
+	extern int yyparse(void);
+	extern string current_file;
+	extern int line_num;
+	extern int yydebug;
+	pbrtInit();
+
+	if (getenv("PBRT_YYDEBUG") != NULL)
+		yydebug = 1;
+
+	//char randNr[100];
+	//snprintf(randNr,100,"%d", rand() );
+	//std::string filename = std::string("./ddf_config_tmp_");
+	//filename.append( randNr ); 
+	//yyin = fopen(filename.c_str(), "w");
+
+	yyin = tmpfile();
+	if (yyin != NULL) {
+		fprintf(yyin, "// tmp conent file\n\n%s \n\n", content.c_str() );
+		fseek(yyin, SEEK_SET, 0);
+		//fclose(yyin);
+		//}
+
+		//yyin = fopen(filename.c_str(), "r");
+		//if (yyin != NULL) {
+		current_file = "<string-parse>";
+		line_num = 1;
+		yyparse();
+		fclose(yyin);
+	}
+
+	current_file = "";
+	line_num = 0;
+	return (yyin != NULL);
+}
+
+// search for fluid solve with given name
+COREDLL FluidSolver* ddfWorldFindSolver(const std::string solverName) {
+	if(gFluidSolvers.find(solverName) != gFluidSolvers.end() ) {
+		return gFluidSolvers[solverName];
+	}
+
+	errMsg("ddfWorldFindSolver","Solver '"<<solverName<<"' not found!");
+	std::cout<<helperPrintMap(gFluidSolvers,"ddfWorldFindSolver")<<"\n";
+	return NULL;
+}
+
+// search for params with given name
+COREDLL SolverParams* ddfWorldFindParams(const std::string name) {
+	if(gSolverParams.find(name) != gSolverParams.end() ) {
+		return gSolverParams[name];
+	}
+
+	errMsg("ddfWorldFindParams","Name '"<<name<<"' not found!");
+	std::cout<<helperPrintMap(gSolverParams,"ddfWorldFindParams")<<"\n";
+	return NULL;
+}

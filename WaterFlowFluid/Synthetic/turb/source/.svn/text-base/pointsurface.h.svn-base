@@ -1,0 +1,180 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2009 Nils Thuerey
+ *
+ * Solver class
+ *
+ *****************************************************************************/
+
+#ifndef DDF_POINTSURFACE_H
+#define DDF_POINTSURFACE_H
+
+
+#include "fluidsolver.h"
+namespace Expe { 
+	class KdTree;
+}
+
+namespace DDF { 
+
+
+//! a single SurfacePoint
+class SurfacePoint {
+	public:
+		// init newPatch
+		SurfacePoint() : pos(0.),normal(0.) {};
+		SurfacePoint(Vec3 p) : pos(p),normal(0.) {
+			posSanityCheck();
+		};
+		SurfacePoint(Vec3 p,Vec3 n) : pos(p),normal(n) {
+			posSanityCheck();
+		};
+		~SurfacePoint() { };
+
+		void posSanityCheck() {
+			// debugging check
+			for(int i=0; i<3; i++) {
+				if( pos[i] < -1000. || pos[i] > 1000. )
+					errFatal("SurfacePoint","Invalid position "<<pos, SIMWORLD_GENERICERROR);
+			}
+		}
+
+		inline Vec3 getPos() const { return pos; }
+		inline void setPos(Vec3 set) { 
+			pos = set; 
+			posSanityCheck();
+		}
+
+		inline Vec3 getNormal() const { return normal; }
+		inline void setNormal(Vec3 set) { normal = set; }
+
+		inline void advance(Vec3 vel, Real t) {
+			pos += vel*t;
+			posSanityCheck();
+		}
+
+		// real valued grid position
+		inline Vec3 calcGridPos(Vec3 gridsize) const {
+			Vec3 v = Vec3(
+					(int)(( pos[0]) * gridsize[0] + 0.5), 
+					(int)(( pos[1]) * gridsize[1] + 0.5), 
+#					if DDF_DIMENSION==3
+					(int)(( pos[2]) * gridsize[2] + 0.5) 
+#					else
+					gPatchSize/2
+#					endif
+				);
+			return v;
+		}
+		inline Vec3 calcGridPos(GridBase* grid) const {
+			return calcGridPos( vec2R(grid->getSize()) );
+		}
+		// static, for given position
+		static inline Vec3 calcGridPos(Vec3 ppos, Vec3 gridsize) {
+			Vec3 v = Vec3(
+					(int)(( ppos[0]) * gridsize[0] + 0.5), 
+					(int)(( ppos[1]) * gridsize[1] + 0.5), 
+#					if DDF_DIMENSION==3
+					(int)(( ppos[2]) * gridsize[2] + 0.5) 
+#					else
+					gPatchSize/2
+#					endif
+				);
+			return v;
+		} 
+
+		// position of point truncated & rounded into integer grid offset
+		inline nVec3i calcGridPosInt(Vec3 gridsize) const {
+			Vec3 v1 = calcGridPos(gridsize); 
+			return vec2I(v1);
+		} 
+		inline nVec3i calcGridPosInt(GridBase* grid) const {
+			return calcGridPosInt( vec2R(grid->getSize()) );
+		}
+
+	protected:
+		// public data members
+		//! position, normal
+		Vec3 pos;
+		Vec3 normal;
+}; // SurfacePoint
+
+
+//! data needed for point based surface tracking
+class SurfacePointSet {
+	public:
+		// ctor / dtor
+		SurfacePointSet();
+		~SurfacePointSet();
+
+		vector<SurfacePoint>* p() { return &pPoints; }
+
+		// delete old, make new...
+		void rebuildKdtree();
+
+		void setParams(Real mHIFac, int mMaxIter, Real mSigmaR, Real mSigmaN, Real dx);
+
+		Expe::KdTree *getKdTree(void) { return mpKdTree; }
+		void setKdTree(Expe::KdTree *set) { mpKdTree = set; }
+
+		// perform one projection step onto the implicit surface
+		void projectPoint(Vec3 x, Real& f, Vec3& gradF, bool* noPointsNear=NULL,
+				Vec3* normN=NULL );
+		// perform multiple projection step onto the implicit surface,
+		// moving the original point towards the surface, modifies x!
+		void projectPointIter(Vec3& x, Real& f, Vec3& gradF, bool* noPointsNear=NULL, 
+				Real* sign=NULL, int* iterations=NULL);
+
+		// perform one projection step of the normal at a point
+		void projectNormal(Vec3 x, Vec3& n, Real& f, Vec3& gradF, bool* noPointsNear=NULL,
+				Vec3* normN=NULL );
+
+		// finalize insertions and deletions from internal lists
+		void handleInsertDeletes();
+
+		// public surface params
+		Real mHIFac;
+		int mMaxIter;
+		Real mSigmaR, mSigmaN;
+
+		// kernel width etc.
+		bool debugImls; 
+		Real h_i, h_iSqr, h_iSqrInv;
+
+		// deletion functions
+		void addDelPoint(int index) {
+			if(delPoint.size() != pPoints.size()) 
+				delPoint.resize( pPoints.size() );
+			delPoint[index] = true;
+			removeCnt++;
+		}
+		bool checkDelPoint(int index) {
+			if(index >= (int)delPoint.size() )
+				return false;
+			return delPoint[index];
+		}
+		int getRemoveCount() { return removeCnt; }
+
+		// addition functions
+		void addNewPoint(SurfacePoint newp) {
+			newPoints.push_back( newp );
+		}
+
+	protected:
+		// actual storage of all points on the surface
+		vector<SurfacePoint> pPoints;
+		// kdtree for fast accesses
+		Expe::KdTree *mpKdTree;
+
+		// deletion / insertion lists
+		vector<int> delPoint;
+		vector<SurfacePoint> newPoints;
+		int removeCnt;
+};
+
+
+} // end namespace DDF 
+
+#endif // DDF_POINTSURFACE_H
+

@@ -1,0 +1,205 @@
+/******************************************************************************
+ *
+ * DDF - test1
+ * Copyright 2007 Nils Thuerey
+ *
+ * Solver Parameter storage, usually inited by parser
+ *
+ *****************************************************************************/
+
+#ifndef DDF_SOLVERPARAMS_H
+#define DDF_SOLVERPARAMS_H
+
+#include "grid.h"
+class ParamSet;
+
+namespace WAVELETNOISE { class WaveletNoiseField; }
+
+namespace DDF { 
+
+class GeomFile; 
+class FluidSolver; 
+
+
+class SolverParams {
+	public:
+		// cons
+		SolverParams(const std::string& name="");
+		// des
+		~SolverParams();
+		// check that globals have been inited, and are ok
+		bool verifyInit(string caller);
+		// initializer from parsed paramset
+		bool initFromParamSet(const ParamSet &params);
+		// adapt init from another solver (eg set timestep)
+		bool adaptInit(const SolverParams* const otherParams);
+
+		// solver name (from config)
+		std::string mName;
+
+		// time step (maximal value, might be smaller due to cflfac)
+		Real mMaxTimestep;
+		// cfl multiplier to change time step according to max velocitites
+		Real mCflFactor;
+		// gravity force
+		Vec3 mGravity;
+
+		// type of surface tracking: 1 = marker particles, 2 = level set
+		// currently unused! int mSurfaceTracker; 
+		// abort criteria for Fast Iterative and Sweeping Method
+		Real mFIMEpsilon;
+		Real mFSMEpsilon;
+		int  mFMMaxIterations;
+		// size of timestep for level set tracker (mTimestep * factor)
+		Real mTimestepLevelsetFactor;
+		// number of level set particles per cell, in 2D and in 3D
+		int mNumLsParticles2d;
+		int mNumLsParticles3d;
+
+		// cg pressure solver control: max iteration factor
+		Real mCgMaxIterFac;
+		// desired accuracy
+		Real mCgAccuracy;
+
+		// geometry file
+		std::string mGeomFile;
+		// actual loaded file mGeomFile
+		GeomFile *mpGeomGrid;
+
+		//! time step for animation output (<0 for no output)
+		Real mTimestepAnim;
+		//! output name prefix
+		std::string mAnimOutputFile;
+		//! output for blender or other program?
+		int mOutputProgram;
+
+		//! debug by showing substeps
+		bool mSubstepDebug;
+		//! region of interest for printing grid (inactive = -1)
+		int mPrintRoi[6];
+		//! quickly disable all prints, 0=all on, 1=all off, 2=only 2d
+		int mPrintGlobEnable;
+		//! step factor for fixed dt solver comparison
+		int mStepFactor;
+		// check all grid's contents for nans, or values larger than threshold
+		Real mSanityCheck;
+		
+		// Tobi needs more parameters
+		Vec3 mU0;
+		Vec3 mDomainOffset, mDomainSize;
+		bool mHostVorticitySystem;
+
+		// make a screen dump of the GLUT-GUI for each frame (if>1, dump only every n'th frame)
+		int mPNGScreenDumps;
+
+		// grids
+		std::map<string, Grid<Real>* > mGridsReal;
+		std::map<string, Grid<Vec3>* > mGridsVec3;
+		std::map<string, Grid<int>* >  mGridsInt;
+
+		//! access functions
+		void setInited(bool set) { mInited=set; }
+		bool isInited() const { return mInited; } 
+		void setQuit(bool set) { mQuit=set; }
+		bool getQuit() const { return mQuit; }
+		void setFluidSolver(FluidSolver* set) { mpFluidSolver=set; }
+		FluidSolver* getFluidSolver() const { return mpFluidSolver; }
+
+		Real getDt() const       { return mTimestep; }
+		Real getTimestep() const { return mTimestep; }
+		void setTimestep(Real set) { mTimestep = set; }
+
+		//! get/set grids in a secure(er) way
+		Grid<int>*  getGridInt(std::string name); 
+		Grid<Real>* getGridReal(std::string name);
+		Grid<Vec3>* getGridVec3(std::string name);
+		void setGridInt(std::string name, Grid<int>* set); 
+		void setGridReal(std::string name, Grid<Real>* set);
+		void setGridVec3(std::string name, Grid<Vec3>* set);
+		void getGridType(std::string name, Grid<int>* &set)  { set = getGridInt(name); };
+		void getGridType(std::string name, Grid<Real>* &set) { set = getGridReal(name); };
+		void getGridType(std::string name, Grid<Vec3>* &set) { set = getGridVec3(name); };
+		
+		//! get noise field
+		WAVELETNOISE::WaveletNoiseField* getNoiseField(std::string name);
+		//! add noise field
+		void addNoiseField(WAVELETNOISE::WaveletNoiseField* f, std::string name);
+		void addToNoiseTime(Real dt);
+
+		//! debug output
+		std::string printGridMaps();
+		std::string toString();
+		//! check if gridname exists
+		bool haveGridInt(std::string name);
+		bool haveGridReal(std::string name);
+		bool haveGridVec3(std::string name);
+		bool haveGridAny(std::string name);
+
+		void setGridSize(nVec3i set) { mGridSize=set; mDimMax=VMAX(set); mDeltaX=1./(Real)mDimMax; }
+		nVec3i getGridSize() const { return mGridSize; }
+		// compute spatial discretization, currently given by dimMax,
+		// might differ in future
+		inline Real getDeltaX() const  { return mDeltaX; }
+		// max dim.
+		inline int  getDimMax() const  { return mDimMax; }
+
+		// simulation time
+		inline Real getSimTime() const { return mSimTime; }
+		inline void addToSimTime(Real add) { mSimTime += add; }
+
+		// div. corr.
+		inline Real getDivergenceCorrection() const { return mDivergenceCorrection; }
+		inline void setDivergenceCorrection(Real set) { mDivergenceCorrection = set; }
+
+		inline Real getMultiplier() { return mAdapGridMultiplier; }
+		inline void setMultiplier(Real v) { mAdapGridMultiplier = v; }
+
+	protected: 
+		// global settings
+		bool mInited;
+		// quit?
+		bool mQuit;
+		// current time
+		Real mSimTime;
+
+		// time step (maximal value, might be smaller due to cflfac)
+		Real mTimestep;
+
+		// size of simulation grid
+		nVec3i mGridSize;
+		// size of a cell, spatial discr. dx, set by gridsize
+		Real mDeltaX;
+		// max. dimension
+		int mDimMax;
+
+		// adapt init 
+		bool mAdaptInit;
+		double mAdaptDtScale;
+		// gridsize multiplier for adapted init
+		Real mAdapGridMultiplier;
+
+		//! noise field storage
+		std::map<string, WAVELETNOISE::WaveletNoiseField* > mNoiseFields;
+
+		//! pass divergence correction on to poisson solver, e.g. for volume correction
+		Real mDivergenceCorrection;
+
+		//! simplify access to "parent" fluid solver
+		FluidSolver* mpFluidSolver;
+};
+
+// todo, make singleton
+//extern SolverParams gParserData;
+
+// defines for mSurfaceTracker values
+//#define ST_LEVELSET   2
+
+// level set extrapolation methods: fast marching, fast iterative marching, fast seq. marching
+#define LS_FMM 1
+#define LS_FIM 2
+#define LS_FSM 3
+
+}; // DDF
+
+#endif // DDF_SOLVERPARAMS_H
+

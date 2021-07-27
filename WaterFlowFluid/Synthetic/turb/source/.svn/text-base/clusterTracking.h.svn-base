@@ -1,0 +1,248 @@
+/******************************************************************************
+*
+* DDF - clusterTracking.h
+* This class contains functionality for clusters and tracking thereof over
+* time.
+*
+*****************************************************************************/
+
+#ifndef CLUSTERTRACKING_H
+#define CLUSTERTRACKING_H
+
+#include "fluidsolver.h"
+
+#include <iostream>
+#include <vector>
+
+namespace DDF
+{
+	
+
+	/////////////////////////////////////////////////////////////////////
+	// AABB class
+	/////////////////////////////////////////////////////////////////////
+	class AABB {
+
+
+	public:
+
+		int index;
+
+		int startTimeStamp;
+
+	private:
+
+		// globals
+		Vec3 mMin;
+		Vec3 mMax;
+
+
+	public:
+
+		// constructor
+		AABB();
+		AABB(Vec3 min, Vec3 max);
+		AABB(Vec3 min, Vec3 max, int indx);
+
+		// destructor
+		~AABB();
+
+		// copyconstructor
+		AABB(const AABB& aabb);
+
+		// set values
+		void set(Vec3 min, Vec3 max);
+
+		// get values
+		Vec3 min() const;
+		Vec3 max() const;
+
+		// intersection test
+		bool intersects(const AABB& otherBox) const;
+
+		// get combined box
+		AABB parentBox(const AABB& otherBox) const;
+
+		// clamp box 
+		void clampBox(Vec3 min, Vec3 max);
+
+		// increase box width
+		void growBox(int extraBorder);
+
+
+		// rounds min down, max up
+		void roundBox();
+
+
+	private:
+		// AABB's little helpers
+		int minimum(int a, int b) const;
+		int maximum(int a, int b) const;
+	};
+	/////////////////////////////////////////////////////////////////////
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// PointCluster class
+	/////////////////////////////////////////////////////////////////////
+	class PointCluster {
+
+
+	private:
+
+		// globals
+		std::vector<Vec3> mClusterList; 
+
+
+	public:
+
+		// constructor
+		PointCluster();
+
+		// copy constructor
+		PointCluster(const PointCluster& pointCluster);
+
+		// destructor
+		~PointCluster();
+
+
+		// add point
+		void addPoint(Vec3 point);
+
+		// add point
+		void addPoint(int x, int y, int z);
+
+		// get point
+		Vec3 point(int index) const;
+
+		// get size
+		int size() const;
+
+		// compute bounding box
+		AABB computeBox(int extraBorder) const;
+		AABB computeBox() const;
+	};
+	/////////////////////////////////////////////////////////////////////
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// ClusterTrack class
+	/////////////////////////////////////////////////////////////////////
+	class ClusterTrack {
+
+	private:
+
+		std::vector<AABB> mBoxList;
+
+		int mStartTimeStamp;
+
+		int mSupposedTrackLenght;
+
+		int mIndex;
+
+	public:
+
+		// constructor
+		ClusterTrack(const PointCluster& initialCluster, int time, int index);
+
+		// copy constructor
+		ClusterTrack(const ClusterTrack& clusterTrack);
+
+		// destructor
+		~ClusterTrack();
+
+		// timer increment
+		void incSupposedTracklength();
+
+		// cluster accept: when cluster aabb intersects last aabb
+		bool acceptPointCluster(const PointCluster& cluster);
+
+		// extrapolates the beginning of the track box list by one box
+		// using an average delta over the last 'boxDeltaHistory' box
+		// movements
+		void prepolateTrack(int boxDeltaHistory, Vec3 domainMax);
+
+
+		void growTrackBoxes(int extraSize, Vec3 resolutionMax);
+
+
+		void changeIndex(int newIndex);
+
+
+		AABB boxOfSimTick(int simTick);
+
+
+		// returns if the track is sealed 
+		bool sealed() const;
+
+		// length of track
+		int length() const;
+
+		// return last box
+		AABB lastBox() const;
+
+
+		void printTrack() const;
+
+	};
+	/////////////////////////////////////////////////////////////////////
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// ClusterTracker class
+	/////////////////////////////////////////////////////////////////////
+	class ClusterTracker {
+
+	private:
+
+		std::vector<ClusterTrack> mTracks;
+
+		int mNextFreeIndex;
+
+	public:
+
+		// constructor
+		ClusterTracker();
+
+		// copy constructor
+		ClusterTracker(const ClusterTracker& clusterTracker);
+
+		// destructor
+		~ClusterTracker();
+
+
+		// assign a list of clusters to the tracks (or create a new track)
+		void assignClusters(const std::vector<PointCluster>& newClusters, int currentTimeTick);
+
+		std::vector<AABB> getActiveBoxes() const;
+
+		void removeSmallTracks(int minLength);
+
+		void prepolateTracks(int nOfFrames, int boxHistory,Vec3 resolutionMax);
+
+		void growTrackBoxes(int extraSize, Vec3 resolutionMax);
+
+		void recomputeTrackIndices();
+
+		std::vector<AABB> getBoxesOfSimTick(int simTick);
+
+		void printAllTracks() const;
+
+
+	private:
+		// ClusterTrackers little helpers
+		void incSupposedTrackLengths();
+
+	};
+	/////////////////////////////////////////////////////////////////////
+	
+
+
+};
+
+#endif // CLUSTERTRACKING_H

@@ -1,0 +1,591 @@
+#/******************************************************************************
+#*
+#* DDF - test1
+#* Copyright 2007 Nils Thuerey
+#*
+#* cmake main file
+#*
+#*****************************************************************************/
+project (DDF)
+cmake_minimum_required(VERSION 2.6)
+
+SET(CMAKE_ALLOW_LOOSE_LOOP_CONSTRUCTS true)
+SET(VERBOSE 1) 
+#add_subdirectory(util)
+
+OPTION(NO64 "Switch 64bit support off for OsX systems" OFF)
+OPTION(USE64 "Switch 64bit support on for Linux" OFF)
+
+# unused, testing
+# ADD_DEFINITIONS(-DZLIB_DLL)
+IF(UNIX)
+  IF(APPLE)
+		# distinguish 10.5 and later
+		# set _CMAKE_OSX_VERSION to umame -r
+		EXEC_PROGRAM(/usr/bin/uname ARGS -r OUTPUT_VARIABLE _CMAKE_OSX_VERSION)
+		# check for 64bit osX
+		IF("${_CMAKE_OSX_VERSION}" MATCHES "9." AND NOT NO64 )
+			SET(SYSTEM "Darwin64")
+		ELSE()
+			SET(SYSTEM "Darwin")
+		ENDIF()
+		#MESSAGE("uname  ${_CMAKE_OSX_VERSION} ")
+  ELSE()
+    SET(SYSTEM "X11")
+  ENDIF()
+ELSE()
+  IF(WIN32)
+    SET(SYSTEM "Win32")
+  ELSE()
+    SET(SYSTEM "Unknown")
+  ENDIF()
+ENDIF()
+MESSAGE("System is ${SYSTEM}")
+
+
+#/******************************************************************************
+# setup vars
+
+IF(NOT CMAKE_BUILD_TYPE) 
+	SET(CMAKE_BUILD_TYPE "Release") 
+ELSE()
+	MESSAGE("Build-type: '${CMAKE_BUILD_TYPE}'")
+ENDIF()
+
+# compilation versions
+OPTION(OPENMP "Use OpenMP multi-threading" OFF)
+OPTION(PROFILE "Enable profiling" OFF)
+OPTION(DEBUG "Enable debug compilation" OFF)
+
+# solver behavior
+OPTION(TWOD "Enable 2d compilation" OFF)
+OPTION(GLUTGUI "Compile with Glut gui" OFF)
+OPTION(DOUBLEPRECISION "Precision of floating point comp's (auto=2 for debug)" OFF)
+OPTION(NOPNG "Switch png support off" ON)
+OPTION(USEPARSER "Compile with config file parser" ON)
+
+# additional/optional plugins and functionality
+OPTION(MESHSURFACE "Toggle mesh surface tracking" OFF)
+OPTION(MESH_NOQHULL "Disable mesh surface qhull usage" OFF)
+OPTION(WLTURB "Toggle wavelet turbulence plugin compiling on/off" OFF)
+
+# manual surface mesh code configiration, use this for standalone version
+#SET(MESHSURFACE_DIR "surfaceMesh_standalone")
+#SET(MESHSURFACE_STANDALONE 1)
+# and this for FEM version
+SET(MESHSURFACE_DIR "surfaceMesh")
+SET(MESHSURFACE_STANDALONE 0)
+
+# parser generation on/off: set manually below
+
+
+# make sure debug settings match...
+IF(NOT DEBUG)
+	IF(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+		SET(DEBUG 1) 
+	ENDIF()
+ENDIF()
+IF(DEBUG)
+	SET(CMAKE_BUILD_TYPE "Debug")
+ENDIF()
+
+# enable gui by default for win32
+IF(WIN32 AND NOT UNIX)
+	SET(GLUTGUI 1)
+ENDIF()
+
+IF(NOT WIN32)
+	MESSAGE("")
+	MESSAGE("Options - "
+		" -DNO64='${NO64}' "
+		" -DUSE64='${USE64}' "
+		" -DOPENMP='${OPENMP}' "
+		" -DPROFILE='${PROFILE}' "
+		" -DDEBUG='${DEBUG}' "
+		" -DTWOD='${TWOD}' "
+		" -DUSEPARSER='${USEPARSER}' "
+		" -DDOUBLEPRECISION='${DOUBLEPRECISION}' "
+		" -DGLUTGUI='${GLUTGUI}' "
+		" -DNOPNG='${NOPNG}' "
+		" -DMESHSURFACE='${MESHSURFACE}' "
+		" -DWLTURB='${WLTURB}' "
+		)
+	MESSAGE("")
+ENDIF() 
+
+
+SET(DDF_LIBS  ) # DDF_LIBS
+SET(DDF_LIB_PATHS)
+SET(DDF_LINKADD "") # additional linker flags, not a list
+
+SET(DDF_EXECCMD ddfCmd)
+
+# flex / bison
+SET(FLEX_EXECUTABLE "/usr/bin/flex")
+SET(BISON_EXECUTABLE "/usr/bin/bison")
+
+
+SET(DDF_SOURCES
+		source/glutgui.cpp 
+		source/guihelpers.cpp 
+		source/patches.cpp 
+		source/fastiterativeeikonal.cpp
+		source/fastsweepingeikonal.cpp
+		source/fluidsolver.cpp 
+		source/fileio.cpp 
+		source/solverparams.cpp 
+		source/levelset.cpp 
+		source/vortexpart.cpp
+		source/conjugategrad.cpp
+		source/poissonsolvers.cpp
+		source/solverinit.cpp
+		source/asciiFileReader.cpp
+		source/clusterTracking.cpp
+		source/convert.cpp
+		source/volumetricFluidMipMap.cpp
+		# utility functions
+		util/globals.cpp
+		util/geomfile.cpp
+		util/GLFontRenderer.cpp
+		util/isosurface.cpp
+		util/paramset.cpp
+		util/randomlib.cpp
+		util/imageio.cpp
+		util/kdtree/ExpeKdTree.cpp
+		util/kdtree/ExpeQueryDataStructure.cpp
+		source/pointsurface.cpp
+		#util/kdtree/ExpeVector3.cpp
+		# plugin implementations
+		source/stdplugins.cpp
+		source/freesurfaceplugins.cpp 
+		source/smokeplugins.cpp 
+		source/initplugins.cpp
+		source/vortexplugins.cpp
+		source/obstacle2Dplugins.cpp
+		source/fluidMatchingPlugins.cpp
+		source/gridOpPlugins.cpp
+		source/animplugins.cpp
+		source/reynoldsplugins.cpp
+		source/advectionplugins.cpp
+		source/viscoelasplugins.cpp
+		source/wlturbplugins.cpp
+		source/testplugins.cpp
+	 ) # DDF_SOURCES
+# set glutgui only when option is set?
+
+SET(DDF_HEADERS
+		source/conjugategrad.h
+		source/fastiterativeeikonal.h
+		source/fastmarch.h
+		source/fastsweepingeikonal.h
+		source/fluidsolver.h
+		source/grid.h
+		source/solverinit.h
+		source/asciiFileReader.h
+		source/clusterTracking.h
+		source/convert.h
+		source/volumetricFluidMipMap.h
+		source/levelset.h
+		source/operators.h
+		source/particles.h
+		source/patches.h
+		source/solverparams.h
+		source/solverplugin.h
+		util/arrays.h
+		util/boundbox.h
+		util/geomfile.h
+		util/GLFontData.h
+		util/GLFontRenderer.h
+		util/globals.h
+		util/imageio.h
+		util/isosurface.h
+		util/lastgood_parser/pbrtparse.cpp.h
+		util/lic.h
+		util/mcubes_tables.h
+		util/opengl_includes.h
+		util/paramset.h
+		util/randomlib.h
+		util/randomstream.h
+		util/vectorbase.h
+		util/waveletnoise.h
+	) # DDF_HEADERS
+
+# include dirs & libs
+SET(DDF_INCLUDES
+		${DDF_SOURCE_DIR}/source 
+		${DDF_SOURCE_DIR}/util
+		${DDF_SOURCE_DIR}/util/kdtree
+		${CMAKE_CURRENT_BINARY_DIR} # for config.h
+	 ) # DDF_INCLUDES
+
+# compile 3D mesh surface code, 2D fallback compiled automatically
+IF(MESHSURFACE)
+	MESSAGE("Meshsurface Options - " " standalone='${MESHSURFACE_STANDALONE}' " " dir='${MESHSURFACE_DIR}' ")
+
+	# standalone
+	IF(MESHSURFACE_STANDALONE) 
+		SET(MS_DIR1 "${MESHSURFACE_DIR}/source")
+		SET(MS_DIR2 "${MESHSURFACE_DIR}/source")
+		SET(MS_DIRINC3 "${MESHSURFACE_DIR}/source")
+	ELSE()
+		# CJW version
+		SET(MS_DIR1 "${MESHSURFACE_DIR}/Systems/TetLib/Src/")
+		SET(MS_DIR2 "${MESHSURFACE_DIR}/Projects/EmbeddedGoop/")
+		SET(MS_DIRINC3 "${MESHSURFACE_DIR}/Systems/SpringMass/Src/")
+	ENDIF()
+
+	# include dirs & libs
+	#LIST(APPEND DDF_INCLUDES ${DDF_SOURCE_DIR}/${MESHSURFACE_DIR}/source) 
+	#LIST(APPEND DDF_INCLUDES ${DDF_SOURCE_DIR}/surfaceMesh/Systems/TetLib/Src/ ${DDF_SOURCE_DIR}/surfaceMesh/Systems/SpringMass/Src/) # DDF_INCLUDES 
+	LIST(APPEND DDF_INCLUDES
+			${MESHSURFACE_DIR}/ddfSources
+			${DDF_SOURCE_DIR}/${MS_DIR1}
+			${DDF_SOURCE_DIR}/${MS_DIR2}
+			${DDF_SOURCE_DIR}/${MS_DIRINC3}) # DDF_INCLUDES
+
+	# mesh ddf plugins
+	LIST(APPEND DDF_SOURCES
+		${MESHSURFACE_DIR}/ddfSources/meshsurfaceplugins.cpp
+		${MESHSURFACE_DIR}/ddfSources/mesh2dplugins.cpp
+		${MESHSURFACE_DIR}/ddfSources/mesh2dhelper.cpp
+		${MESHSURFACE_DIR}/ddfSources/meshinit.cpp
+		${MESHSURFACE_DIR}/ddfSources/meshwaveplugins.cpp
+		${MESHSURFACE_DIR}/ddfSources/meshhelper.cpp
+		${MESHSURFACE_DIR}/ddfSources/surfacetension.cpp
+		)
+
+	# surfacemesh code , add mesh surface sources 
+	IF(NOT TWOD)
+		LIST(APPEND DDF_SOURCES 
+			${MS_DIR1}/surfaceMesh.cpp
+			${MS_DIR1}/cornerTable.cpp
+			${MS_DIR1}/smoothing.cpp 
+			${MS_DIR1}/octree.cpp 
+			${MS_DIR2}/signedDistance3D.cpp
+			${MS_DIR2}/meshSurgery3D.cpp
+			${MS_DIR2}/convexHull.cpp
+			${MESHSURFACE_DIR}/ddfSources/meshSurgery3DTS.cpp
+			)
+	ENDIF()
+
+	LIST(APPEND DDF_LIBS "qhull")
+
+	# compilation switches with defines:
+	add_definitions( -DDDF_MESHSURFACE=1 ) # surfacemesh
+	add_definitions( -DNOINVENTOR=1 ) # surfacemesh , prevent inventor usage 
+	add_definitions( -DMSSTANDALONE=1 ) # standalone surfacemesh
+ENDIF()
+
+# qhull disabled?
+IF(MESH_NOQHULL)
+	add_definitions( -DDDF_NOQHULL=1 ) # disable qhull
+ENDIF()
+
+
+# 2D only needs DDF_MESHSURFACE def
+#IF(MESHSURFACE AND TWOD) 
+#add_definitions( -DDDF_MESHSURFACE=1 ) # surfacemesh
+#ENDIF()
+
+
+# wavelet turbulence code inclusion
+IF(WLTURB) 
+	LIST(APPEND DDF_SOURCES 
+		wlturbulence/fluid3dStatic.cpp
+		wlturbulence/waveletTurbulencer.cpp 
+		wlturbulence/vectornoise.cpp
+		)
+
+	LIST(APPEND DDF_INCLUDES
+			${DDF_SOURCE_DIR}/wlturbulence
+		 ) # DDF_INCLUDES
+
+	# compilation switches with defines:
+	add_definitions( -DDDF_WLTURB=1 ) # make wlturb known to DDF
+	add_definitions( -DO_PNG_OUT=0 ) # wlturb
+	add_definitions( -DVELOCITYLOADER_COMPILE=1 ) # wlturb
+	add_definitions( -DWITHOUT_OPENGL=1 ) # wlturb
+ENDIF()
+
+# compile with config file parser
+IF(USEPARSER)
+	LIST(APPEND DDF_SOURCES
+		util/parser.cpp
+		source/main.cpp )
+	
+	LIST(APPEND DDF_HEADERS
+		util/parser.h )
+
+	SET(GENERATE_PARSER true)
+	add_definitions( -DDDF_USEPARSER=1 )
+ELSE()
+	LIST(APPEND DDF_SOURCES
+		source/main_noparser.cpp )
+
+	SET(GENERATE_PARSER false)
+ENDIF()
+
+# Create custom command for flex/lex (note the outputs)
+# for windows/vc, resort to prebuilt
+IF(WIN32 AND NOT UNIX)
+		SET(GENERATE_PARSER false)
+ENDIF()
+IF(GENERATE_PARSER)
+	# Create target for the parser
+	ADD_CUSTOM_TARGET(PbrtParser echo "Creating pbrtparse.cpp & pbrtlex.cpp")
+
+	ADD_CUSTOM_COMMAND(
+		SOURCE ${DDF_SOURCE_DIR}/util/pbrtlex.l
+		COMMAND ${FLEX_EXECUTABLE} 
+		ARGS -o${DDF_BINARY_DIR}/pbrtlex.cpp
+			 ${DDF_SOURCE_DIR}/util/pbrtlex.l
+		TARGET PbrtParser
+		OUTPUTS ${DDF_BINARY_DIR}/pbrtlex.cpp)
+
+	# Create custom command for bison/yacc (note the DEPENDS)
+	ADD_CUSTOM_COMMAND(
+		SOURCE ${DDF_SOURCE_DIR}/util/pbrtparse.y
+		COMMAND ${BISON_EXECUTABLE} 
+		ARGS  -d -v -t 
+			 -y ${DDF_SOURCE_DIR}/util/pbrtparse.y
+			 -o ${DDF_BINARY_DIR}/pbrtparse.cpp
+		TARGET PbrtParser
+		DEPENDS ${DDF_BINARY_DIR}/pbrtlex.cpp
+		OUTPUTS ${DDF_BINARY_DIR}/pbrtparse.cpp)
+
+	# Add pbrtparse.cpp to the list of sources
+	#SET(DDF_SRCS ${DDF_SRCS} ${DDF_BINARY_DIR}/util/pbrtparse.cpp) 
+	LIST(APPEND DDF_SOURCES ${DDF_BINARY_DIR}/pbrtlex.cpp )
+	LIST(APPEND DDF_SOURCES ${DDF_BINARY_DIR}/pbrtparse.cpp )
+
+	# Since pbrtparse.cpp does not exists yet when cmake is run, mark
+	# it as generated
+	#SET_SOURCE_FILES_PROPERTIES(${DDF_BINARY_DIR}/util/pbrtparse.cpp GENERATED)
+	SET_SOURCE_FILES_PROPERTIES(util/pbrtparse.cpp GENERATED)
+	SET_SOURCE_FILES_PROPERTIES(util/pbrtlex.cpp GENERATED)
+
+	# Include binary directory to include pbrtlex.cpp in pbrtparse.cpp
+	INCLUDE_DIRECTORIES(${DDF_BINARY_DIR})
+ELSEIF(USEPARSER)
+	IF(NOT WIN32)
+		MESSAGE("Using last good / generated parser files...")
+	ENDIF()
+	LIST(APPEND DDF_SOURCES ${DDF_SOURCE_DIR}/util/lastgood_parser/pbrtlex.cpp )
+	LIST(APPEND DDF_SOURCES ${DDF_SOURCE_DIR}/util/lastgood_parser/pbrtparse.cpp )
+	INCLUDE_DIRECTORIES(${DDF_SOURCES_DIR}/lastgood_parser)
+ENDIF()
+
+
+#/******************************************************************************
+
+# win32 msvc specialties
+IF(WIN32 AND NOT UNIX)
+	LIST(APPEND DDF_SOURCES ${DDF_HEADERS} )
+	LIST(APPEND DDF_INCLUDES ${DDF_SOURCE_DIR}/lib/zlib/include )
+	LIST(APPEND DDF_INCLUDES ${DDF_SOURCE_DIR}/lib/png/include )
+	LIST(APPEND DDF_INCLUDES ${DDF_SOURCE_DIR}/lib/glut )
+	SET(DDF_LIBS
+		${DDF_SOURCE_DIR}/lib/glut/glut32
+		${DDF_SOURCE_DIR}/lib/zlib/lib/libz
+		${DDF_SOURCE_DIR}/lib/png/lib/libpng )
+	LIST(APPEND DDF_LIB_PATHS ${DDF_SOURCE_DIR}/lib/png/lib )
+	LIST(APPEND DDF_LIB_PATHS ${DDF_SOURCE_DIR}/lib/zlib/lib )
+
+	# remove some warnings 
+	SET(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   /wd4244 /wd4305 /D_CRT_SECURE_NO_WARNINGS ")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4305 /D_CRT_SECURE_NO_WARNINGS ")
+
+	# enable openmp for release compilation (default for windows)
+	SET(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /DDDF_OPENMP=1 /openmp ")
+	SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /DDDF_OPENMP=1 /openmp ")
+	# debugging
+	SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /DDDF_DEBUG=1 ")
+	SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /DDDF_DEBUG=1 ")
+ELSE()
+	LIST(APPEND DDF_LIBS "dl")
+ENDIF()
+
+# apple custom config
+IF(APPLE)
+	# might be needed for older versions:
+	# LIST(APPEND DDF_INCLUDES "/usr/include/")
+	# LIST(APPEND DDF_INCLUDES "/usr/include/sys/")
+	# LIST(APPEND DDF_LIB_PATHS "/usr/lib/")
+	# install libpng with fink or macports, then include here:
+
+	#LIST(APPEND DDF_INCLUDES "/usr/lib/")
+	#LIST(APPEND DDF_INCLUDES "/sw/include/")
+	#LIST(APPEND DDF_LIB_PATHS "/sw/lib/")
+	#LIST(APPEND DDF_INCLUDES "/opt/local/include/")
+	#LIST(APPEND DDF_LIB_PATHS "/opt/local/lib/")
+
+	# stupid 10.5 opengl fix:
+	LIST(APPEND DDF_LIB_PATHS "/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries")
+
+	IF("${SYSTEM}" MATCHES "Darwin64")
+		# 64bit mac
+		SET(DDF_LINKADD "${DDF_LINKADD} -m64 ")
+		ADD_DEFINITIONS( -m64 )
+	ENDIF()
+ENDIF()
+
+IF(UNIX)
+	IF(USE64)
+		# 64bit linux
+		SET(DDF_LINKADD "${DDF_LINKADD} -m64 ")
+		ADD_DEFINITIONS( -m64 )
+	ENDIF()
+ENDIF()
+
+
+#/******************************************************************************
+
+# doesnt work for MSVC
+# IF(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
+IF(NOT WIN32)
+	IF(DEBUG)
+		add_definitions( -DDDF_DEBUG )
+		add_definitions( -O1 -fno-inline )
+		# additional c++ warning
+		SET(CMAKE_CXX_FLAGS_DEBUG " -ggdb  -W -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wredundant-decls  -Wreorder -Wctor-dtor-privacy -Wnon-virtual-dtor -Woverloaded-virtual -Wsign-promo -Wsynth  -Wuninitialized -Wextra -Wreturn-type  -Wparentheses -Wimplicit  -Wformat  -Wchar-subscripts -Wswitch   ")
+		# stricter: no optimizations and inlining, comment out if needed...
+		SET(CMAKE_CXX_FLAGS_DEBUG " -O0 -fno-inline ${CMAKE_CXX_FLAGS_DEBUG}   ")
+		
+		# old, more paranoid...
+		# SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}  -W -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wredundant-decls  -Wreorder -Wctor-dtor-privacy -Wnon-virtual-dtor -Woverloaded-virtual -Wsign-promo -Wsynth  -Wuninitialized -Wextra -Wreturn-type  -Wparentheses -Wimplicit  -Wformat  -Wchar-subscripts -Wswitch  -Wconversion ")
+
+		# efence can cause problems, eg with PLS in debug mode...
+		IF(UNIX AND NOT APPLE AND 1)
+			LIST(APPEND DDF_LIBS "efence")
+		ENDIF()
+	ELSE()
+		# non-debug, optimized version
+		add_definitions( -O3 )
+	ENDIF()
+ELSE()
+	# get rid of some MSVC warnings
+	add_definitions( /wd4018 /wd4146 /wd4800 )
+ENDIF()
+
+#IF(${CMAKE_BUILD_TYPE} STREQUAL "Release")
+#add_definitions( -O2  )
+#ENDIF(${CMAKE_BUILD_TYPE} STREQUAL "Release")
+
+
+IF(TWOD)
+	#message("2d !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+	add_definitions( -DDDF_DIMENSION=2 )
+ENDIF()
+
+
+IF(DOUBLEPRECISION)
+	#message("double prec !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+	add_definitions( -DFLOATINGPOINT_PRECISION=2 )
+ELSE()
+	add_definitions( -DFLOATINGPOINT_PRECISION=1 )
+ENDIF()
+
+
+IF(GLUTGUI)
+	add_definitions( -DDDF_GLUTGUI=1 )
+	SET(DDF_EXECCMD ddfGlutGui)
+	IF(APPLE)
+		SET(DDF_LINKADD "${DDF_LINKADD} -framework GLUT -framework OpenGL ")
+	ELSE()
+		IF(WIN32 AND NOT UNIX)
+			# ...
+		ELSE()
+			#LIST(APPEND DDF_LIBS "gl")
+			LIST(APPEND DDF_LIBS "glut")
+		ENDIF()
+	ENDIF()
+ENDIF()
+
+
+IF(OPENMP)
+	IF(NOT WIN32)
+		add_definitions( -fopenmp -DDDF_OPENMP=1 )
+		# SET(DDF_LINKADD " -lz -L/opt/gcc-4.3/usr/local/lib -lgomp ")
+		LIST(APPEND DDF_LIBS "gomp")
+	ENDIF()
+ENDIF()
+
+
+IF(PROFILE)
+	message("Dont forget to modify compiler setting!")
+	# add_definitions( -pg -O2 -fno-inline )
+	add_definitions( -pg -O2 )
+ENDIF()
+
+
+
+
+#/******************************************************************************
+# configure config.h
+
+# old library find:
+# FOREACH(LIBPATH ${DDF_LIB_PATHS})
+# CHECK_LIBRARY_EXISTS(png png_init_io ${LIBPATH} HAVE_PNGLIB)
+#	MESSAGE("have png '${HAVE_PNGLIB}' '${LIBPATH}'")
+# ENDFOREACH(LIBPATH)
+
+include(CheckIncludeFiles)
+CHECK_INCLUDE_FILES(malloc.h HAVE_MALLOC_H)
+include(CheckLibraryExists)
+
+include(FindZLIB)
+SET(HAVE_ZLIB ${ZLIB_FOUND})
+# MESSAGE("have zl '${HAVE_ZLIB}' '${ZLIB_FOUND}'")
+# IF(HAVE_ZLIB) ENDIF()
+# always useful...
+LIST(APPEND DDF_LIBS "z")
+
+include(FindPNG)
+SET(HAVE_PNGLIB ${PNG_FOUND})
+IF(NOPNG) 
+	# manual png disable
+	SET(HAVE_PNGLIB 0)
+ENDIF()
+#MESSAGE("have png '${HAVE_PNGLIB}' '${PNG_FOUND}'")
+IF(HAVE_PNGLIB) 
+	LIST(APPEND DDF_LIBS "png")
+	MESSAGE("png lib added!")
+ENDIF()
+IF(WIN32 AND NOT UNIX)
+	SET(HAVE_PNGLIB 1)
+ENDIF()
+
+
+# write config.h
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h)
+	
+
+#/******************************************************************************
+# setup executable
+
+
+SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} ${DDF_LINKADD} ")
+SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} ${DDF_LINKADD} ")
+
+
+include_directories( ${DDF_INCLUDES} ) 
+link_directories( ${DDF_LIB_PATHS} ) 
+
+add_executable( ${DDF_EXECCMD} ${DDF_SOURCES} )
+
+target_link_libraries( ${DDF_EXECCMD} ${DDF_LIBS} )
+
+
+# debug
+MESSAGE("DEBUG Flag-Summary - Includes: '${DDF_INCLUDES}' | Libs: '${DDF_LIBS}' | LibPaths: '${DDF_LIB_PATHS}' ")
+
+#/******************************************************************************
+# setup tests
+enable_testing()
+add_test(Grid-Laplace        ${DDF_EXECCMD} "test" "1")
+add_test(Grid-CgStd          ${DDF_EXECCMD} "test" "2")
+add_test(Grid-Patch_JacVSCg  ${DDF_EXECCMD} "test" "3")
+add_test(Grid-Patch_Asymm    ${DDF_EXECCMD} "test" "4")
+add_test(Grid-NsSetup        ${DDF_EXECCMD} "test" "5")
+
+

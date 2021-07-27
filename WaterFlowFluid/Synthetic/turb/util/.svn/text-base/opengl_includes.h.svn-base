@@ -1,0 +1,18 @@
+// wrap includes for OpenGL
+
+#if DDF_GLUTGUI==1
+
+#if defined(__APPLE__)
+// mac
+#include <GLUT/glut.h>
+#else 
+#if defined(WIN32) 
+// windows
+#include <GL/glut.h>
+#else
+// linux
+#include <GL/glut.h>
+#endif 
+#endif
+#endif // DDF_GLUTGUI==1
+

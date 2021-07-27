@@ -1,0 +1,322 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2008 Johannes Schmid
+ *
+ * Implementation for a Fast Sweeping Method (FSM) solver for the Eikonal equation
+ * 
+ *****************************************************************************/
+
+#include "fastsweepingeikonal.h"
+
+namespace DDF {
+
+const Real FastSweepingEikonal::mFarValue = 1000000.0;
+
+FastSweepingEikonal::FastSweepingEikonal(int sizex, int sizey, int sizez, int slice2d,
+										 FluidSolver* pFluidSolver) :
+	mpPhi(NULL), mpFSFlags(NULL), 
+	mSizex(sizex), mSizey(sizey), mSizez(sizez), m2DSlice(slice2d),
+	mNumIterations(0), mMaxIterations(64)
+{
+	mVT.setFsolver(pFluidSolver);
+}
+
+FastSweepingEikonal::~FastSweepingEikonal()
+{
+}
+
+int FastSweepingEikonal::getUpwindCells(/*GridCellCoord* cells, */Real* phi, char* dir, int x, int y, int z, int flag)
+{
+	int okcnt = 0;
+	Real phiplus, phiminus;
+	Real phiplusabs, phiminusabs;
+	int fplus, fminus;
+
+	const int VALID_UW = FSINTERFACE;
+
+	// condition for upwind value:
+	// cell is active or alive AND
+	//		(|phi| is smaller than neighbour in other direction
+	//		OR neighbour in other direction is not active or alive)
+	//
+	// WARNING: the special case where both cells are valid and
+	// both phis are equal must also be respected!!
+
+	fplus  = mpFSFlags->getGlobal(x+1,y,z);
+	fminus = mpFSFlags->getGlobal(x-1,y,z);
+	phiplus  = phiplusabs  = mpPhi->getGlobal(x+1,y,z);
+	phiminus = phiminusabs = mpPhi->getGlobal(x-1,y,z);
+	if (flag == FSINSIDE) {
+		phiplusabs = -phiplusabs;
+		phiminusabs = -phiminusabs;
+	}
+	if ((fplus >= VALID_UW) &&
+		((phiplusabs <= phiminusabs) || (fminus < VALID_UW)))
+	{
+/*			cells[okcnt].x = x+1;
+			cells[okcnt].y = y;
+			cells[okcnt].z = z;*/
+			phi[okcnt] = phiplus;
+			dir[okcnt] = 0;
+			okcnt++;
+	}
+	else if ((fminus >= VALID_UW) &&
+		((phiminusabs < phiplusabs) || (fplus < VALID_UW)))
+	{
+/*			cells[okcnt].x = x-1;
+			cells[okcnt].y = y;
+			cells[okcnt].z = z;*/
+			phi[okcnt] = phiminus;
+			dir[okcnt] = 1;
+			okcnt++;
+	}
+
+	fplus  = mpFSFlags->getGlobal(x,y+1,z);
+	fminus = mpFSFlags->getGlobal(x,y-1,z);
+	phiplus  = phiplusabs = mpPhi->getGlobal(x,y+1,z);
+	phiminus = phiminusabs = mpPhi->getGlobal(x,y-1,z);
+	if (flag == FSINSIDE) {
+		phiplusabs = -phiplusabs;
+		phiminusabs = -phiminusabs;
+	}
+	if ((fplus >= VALID_UW) &&
+		((phiplusabs <= phiminusabs) || (fminus < VALID_UW)))
+	{
+/*			cells[okcnt].x = x;
+			cells[okcnt].y = y+1;
+			cells[okcnt].z = z;*/
+			phi[okcnt] = phiplus;
+			dir[okcnt] = 2;
+			okcnt++;
+	}
+	else if ((fminus >= VALID_UW) &&
+		((phiminusabs < phiplusabs) || (fplus < VALID_UW)))
+	{
+/*			cells[okcnt].x = x;
+			cells[okcnt].y = y-1;
+			cells[okcnt].z = z;*/
+			phi[okcnt] = phiminus;
+			dir[okcnt] = 3;
+			okcnt++;
+	}
+
+	if (gDim==3) {
+		fplus  = mpFSFlags->getGlobal(x,y,z+1);
+		fminus = mpFSFlags->getGlobal(x,y,z-1);
+		phiplus  = phiplusabs  = mpPhi->getGlobal(x,y,z+1);
+		phiminus = phiminusabs = mpPhi->getGlobal(x,y,z-1);
+		if (flag == FSINSIDE) {
+			phiplusabs = -phiplusabs;
+			phiminusabs = -phiminusabs;
+		}
+		if ((fplus >= VALID_UW) &&
+			((phiplusabs <= phiminusabs) || (fminus < VALID_UW)))
+		{
+/*				cells[okcnt].x = x;
+				cells[okcnt].y = y;
+				cells[okcnt].z = z+1;*/
+				phi[okcnt] = phiplus;
+				dir[okcnt] = 4;
+				okcnt++;
+		}
+		else if ((fminus >= VALID_UW) &&
+			((phiminusabs < phiplusabs) || (fplus < VALID_UW)))
+		{
+/*				cells[okcnt].x = x;
+				cells[okcnt].y = y;
+				cells[okcnt].z = z-1;*/
+				phi[okcnt] = phiminus;
+				dir[okcnt] = 5;
+				okcnt++;
+		}
+	}
+
+	return okcnt;
+}
+
+Real FastSweepingEikonal::computeDistance(int x, int y, int z, int flag, Real* uwphi, int uwcnt)
+{
+	Real ret = mFarValue;
+	int f = mpFSFlags->getGlobal(x,y,z);
+	Real dir = (flag == FSINSIDE) ? -1.0 : 1.0;
+	
+	switch(uwcnt) {
+	case 3: {
+		// take all values
+		Real ca=uwphi[0]*dir, cb=uwphi[1]*dir, cc=uwphi[2]*dir;
+
+		if (ca > cb) std::swap(ca, cb);
+		if (cb > cc) std::swap(cb, cc);
+		if (ca > cb) std::swap(ca, cb);
+
+		ret = ca + 1.0;
+		if (ret > cb) {
+			ret = 0.5 * (ca + cb + sqrt(2-(ca-cb)*(ca-cb)));
+			
+			if (ret > cc) {
+				const Real csqrt = std::max(0.0, -2.0*(ca*ca+cb*cb-cb*cc+cc*cc-ca*(cb+cc))+3);
+				ret = 1.0/3*(ca + cb + cc + sqrt(csqrt));
+			}
+		}
+
+		ret *= dir;
+		} break; 
+	case 2: {
+		// take just the 2 ok values
+		if (fabs(uwphi[0]-uwphi[1]) >= 1.0) {
+			ret = std::min(uwphi[0]*dir,uwphi[1]*dir)*dir + dir;
+		} else {
+			// t=0.5*( a+b+ (2*g*g-(b-a)*(b-a))^0.5)
+			const Real csqrt = MAX(0. , 2.-(uwphi[1]-uwphi[0])*(uwphi[1]-uwphi[0]) );
+			// clamp to make sure the sqrt is valid
+			ret = 0.5*( uwphi[0]+uwphi[1]+ dir*sqrt(csqrt) );
+			//debMsg("RET","a="<<a<<" b="<<b<<" ret="<<ret );
+		}
+		} break; 
+
+	case 1: {
+		// just use the one remaining value
+		ret = uwphi[0] + dir; // direction = +- 1
+		} break; 
+
+	default:
+		errMsg("FIM::computeDistance"," at "<<x<<","<<y<<","<<z<< ", invalid case "<<uwcnt<<", phi values "<<uwphi[0]<<" "<<uwphi[1]<<" "<<uwphi[2]);
+		//debugPrintGrid(z,x,y);
+		exit(1);
+
+		break;
+	}
+
+	return ret;
+}
+
+void FastSweepingEikonal::velExtrapolation(int x, int y, int z, Real phiNew, Real* uwphi, char* uwdir, int uwcnt)
+{
+	Real weights[6];
+	
+	for (int i=0; i<6; i++)
+		weights[i] = 0.0;
+
+	if (uwcnt == 1)
+		weights[(int)uwdir[0]] = 1.0;
+	else {
+		Real wnorm = 0.0;
+		for (int i=0; i<uwcnt; i++) {
+			Real w = fabs(phiNew - uwphi[i]);
+			if (w > mEpsilon) {
+				weights[(int)uwdir[i]] = w;
+				wnorm += w;
+			}
+		}
+		if (!(wnorm>0.0))
+			*((int*)0) = 1;
+		wnorm = 1.0/wnorm;
+		for (int i=0; i<6; i++)
+			weights[i] *= wnorm;
+	}
+
+	mVT.transpTouch(x,y,z,0,0,0,weights,phiNew); 
+}
+
+void FastSweepingEikonal::solveEikonal(FlagGrid* fsFlags, Grid<Real>* pPhi, Real epsilon, bool doVelTransport)
+{
+	mpFSFlags = fsFlags;
+	mpPhi = pPhi;
+	mEpsilon = epsilon;
+
+	int startx = 1;
+	int endx = mSizex - 1;
+	int starty = 1;
+	int endy = mSizey - 1;
+	int startz, endz;
+	if (gDim == 2) {
+		startz = m2DSlice;
+		endz = startz + 1;
+	} else {
+		 startz = 1;
+		 endz = mSizez - 1;
+	}
+	int incx = 1, incy = 1, incz = 1; 
+	Real residual = mEpsilon + 1.0; 
+	int numSweeps = pow(2.0, gDim);
+	int numIterations = 0;
+
+	mVT.initMarching();
+	
+	while ((residual > mEpsilon) && (numIterations < mMaxIterations)) {
+		residual = 0.0;
+
+		for (int sweep = 0; sweep < numSweeps; sweep++) {
+
+			//for (int z = startz; z != endz; z += incz) {
+
+#			pragma omp parallel default(shared) reduction(+:residual)
+#			pragma omp for
+			for (int z = startz; z < endz; z += incz) {
+				for (int y = starty; y != endy; y += incy) {
+					for (int x = startx; x != endx; x += incx) {
+						int flag = mpFSFlags->getGlobal(x,y,z);
+						if (flag > FSINTERFACE) {
+							Real& phi = mpPhi->getGlobal(x,y,z);
+							
+							Real uwphi[3];
+							char uwdir[3];
+
+							int uwcnt = getUpwindCells(uwphi, uwdir, x, y, z, flag);
+							Real phiNew = computeDistance(x, y, z, flag, uwphi, uwcnt);
+							
+							Real sign = (flag == FSINSIDE) ? -1 : 1;
+							if (phiNew*sign < phi*sign) {
+								residual += fabs(phi-phiNew);
+								phi = phiNew;
+								if ((flag == FSOUTSIDE) && doVelTransport)
+									velExtrapolation(x, y, z, phiNew, uwphi, uwdir, uwcnt);
+							}
+						}
+					}
+				}
+			}
+
+			// set up next sweeping direction
+			std::swap(startx, endx);
+			incx *= -1;
+			if (incx == 1) {
+				std::swap(starty, endy);
+				incy *= -1;
+				if ((incy == 1) && (gDim == 3)) {
+					std::swap(startz, endz);
+					incz *= -1;
+				}
+			}
+		}
+
+		numIterations++;
+	}
+
+	// copy values into boundary
+	for(int i=0;i<        1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i+1,j,k); }
+	for(int i=mSizex-2;i<mSizex-1;i++) 
+		for(int j=0;j<mSizey;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i+1,j,k) = mpPhi->getGlobal(i,j,k); }
+	for(int i=0;i<mSizex;i++) 
+		for(int j=0;j<        1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i,j+1,k); }
+	for(int i=0;i<mSizex;i++) 
+		for(int j=mSizey-2;j<mSizey-1;j++) 
+			for(int k=0;k<mSizez;k++) { mpPhi->getGlobal(i,j+1,k) = mpPhi->getGlobal(i,j,k); }
+	if(gDim==3) {
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=0;k<        1;k++) { mpPhi->getGlobal(i,j,k) = mpPhi->getGlobal(i,j,k+1); }
+		for(int i=0;i<mSizex;i++) 
+			for(int j=0;j<mSizey;j++) 
+				for(int k=mSizez-2;k<mSizez-1;k++) { mpPhi->getGlobal(i,j,k+1) = mpPhi->getGlobal(i,j,k); }
+	}
+
+	debMsg("FastSweepingEikonal::solveEikonal","Stats - numIterations: " << numIterations << ", residual: " << residual );
+}
+
+} // namespace DDF

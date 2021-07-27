@@ -1,0 +1,62 @@
+Film "image"
+	#"integer xresolution" [1280] "integer yresolution" [720]
+	#"integer xresolution" [640] "integer yresolution" [360]
+	"integer xresolution" [320] "integer yresolution" [180]
+	#"integer xresolution" [300] "integer yresolution" [300]
+	#"integer xresolution" [100] "integer yresolution" [100]
+    "string filename" "##OUTPUT##"
+
+Sampler "lowdiscrepancy" 
+  #"integer pixelsamples" [2] 
+  "integer pixelsamples" [16] 
+PixelFilter "box"
+
+# use this one
+LookAt 1.69517 2.72141 1.90281 1.27472 1.94635 1.43109 -0.438467 0.628725 -0.642224
+
+Camera "perspective" "float fov" [45]
+
+SurfaceIntegrator "directlighting"
+
+WorldBegin
+
+AttributeBegin
+  CoordSysTransform "camera"
+AttributeEnd
+
+AttributeBegin
+Rotate -90 1 0 0
+LightSource "infinite" "color L" [3 3 3] "integer nsamples" [16] "string mapname" ["./pbrt_scenes/skylight-sunset.exr"]
+AttributeEnd
+Include "./pbrt_scenes/houdini_scene_geometry.pbrt"
+
+ObjectBegin "RedCube"
+  Material "matte" "color Kd" [1 0.1 0.1 ]
+ Shape "trianglemesh" "integer indices"
+ [ 0 1 2  2 0 3 
+   0 4 1  5 4 1
+   2 1 5  2 5 6 
+   3 0 4  3 4 7 
+   3 6 2  3 6 7 
+   4 6 5  4 6 7]
+    "point P" [-0.5 -0.5 -0.5   0.5 -0.5 -0.5   0.5 -0.5 0.5   -0.5 -0.5 0.5  -0.5  0.5 -0.5   0.5  0.5 -0.5   0.5  0.5 0.5   -0.5  0.5 0.5 ]
+ObjectEnd
+
+AttributeBegin
+ Identity
+ Rotate ##ANGLE## 0 1 0
+ Translate 0 0 0.67
+ Translate 0.00749427 0.260715 -0.00250574
+ Translate  0 -0.5  0.0
+ Scale 0.26 1 0.51
+ ObjectInstance "RedCube"
+AttributeEnd
+
+AttributeBegin
+ Texture "height" "float" "field" "string filename" "##INPUT##" "float amplitude" 0.1
+ Material "uber" "color Kd" [0 0.1 0.15] "color Kr" [0.9 0.9 0.9] "color Ks" [0.1 0.1 0.1] "float roughness" [0.9] "float index" [1.34] 
+ "texture bumpmap" "height"
+ Include "##GEOMETRY##"
+AttributeEnd
+
+WorldEnd

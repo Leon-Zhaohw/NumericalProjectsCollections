@@ -1,0 +1,563 @@
+/******************************************************************************
+*
+* DDF - clusterTracking.cpp
+* This class contains functionality for clusters and tracking thereof over
+* time.
+*
+*****************************************************************************/
+
+
+#include "clusterTracking.h"
+
+
+
+namespace DDF {
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// AABB class
+	/////////////////////////////////////////////////////////////////////
+
+	// constructor
+	AABB::AABB() {
+		mMin = Vec3(-1,-1,-1);
+		mMax = Vec3(-1,-1,-1);
+
+		index = 0;
+
+		startTimeStamp = 0;
+	}
+
+	AABB::AABB(Vec3 min, Vec3 max) {
+		mMin = min;
+		mMax = max;
+
+		index = 0;
+
+		startTimeStamp = 0;
+	}
+
+	AABB::AABB(Vec3 min, Vec3 max, int indx) {
+		mMin = min;
+		mMax = max;
+
+		index = indx;
+
+		startTimeStamp = 0;
+	}
+
+	AABB::AABB(const AABB& aabb) {
+		mMin = aabb.mMin;
+		mMax = aabb.mMax;
+
+		index = aabb.index;
+
+		startTimeStamp = aabb.startTimeStamp;
+	}
+
+	// destructor
+	AABB::~AABB() {
+
+	}
+
+	// set values
+	void AABB::set(Vec3 min, Vec3 max) {
+		mMin = min;
+		mMax = max;
+	}
+
+	// get values
+	Vec3 AABB::min() const {
+		return mMin;
+	}
+
+	Vec3 AABB::max() const {
+		return mMax;
+	}
+
+	// intersection test
+	bool AABB::intersects(const AABB& otherBox) const {
+		return
+			(min().x <= otherBox.max().x) && (max().x >= otherBox.min().x) &&
+			(min().y <= otherBox.max().y) && (max().y >= otherBox.min().y) &&
+			(min().z <= otherBox.max().z) && (max().z >= otherBox.min().z);
+	}
+
+	// get combined box
+	AABB AABB::parentBox(const AABB& otherBox) const {
+		Vec3 newMin = Vec3(minimum(min().x, otherBox.min().x),
+			               minimum(min().y, otherBox.min().y),
+						   minimum(min().z, otherBox.min().z));
+		Vec3 newMax = Vec3(maximum(max().x, otherBox.max().x),
+						   maximum(max().y, otherBox.max().y),
+			               maximum(max().z, otherBox.max().z));
+		// return new aabb
+		return AABB(newMin, newMax);
+	}
+
+
+	// clamp box 
+	void AABB::clampBox(Vec3 min, Vec3 max) {
+		if (mMin.x < min.x) mMin.x = min.x;
+		if (mMin.y < min.y) mMin.y = min.y;
+		if (mMin.z < min.z) mMin.z = min.z;
+
+		if (mMax.x > max.x) mMax.x = max.x;
+		if (mMax.y > max.y) mMax.y = max.y;
+		if (mMax.z > max.z) mMax.z = max.z;
+	}
+
+
+	// increase box size
+	void AABB::growBox(int extraBorder) {
+		Vec3 v = Vec3(extraBorder, extraBorder, extraBorder);
+		mMin -= v;
+		mMax += v;
+	}
+
+	// rounds min down, max up
+	void AABB::roundBox() {
+		mMin.x = floor(mMin.x);
+		mMin.y = floor(mMin.y);
+		mMin.z = floor(mMin.z);
+
+		mMax.x = ceil(mMax.x);
+		mMax.y = ceil(mMax.y);
+		mMax.z = ceil(mMax.z);
+	}
+
+
+	// AABB's little helpers
+	int AABB::minimum(int a, int b) const {
+		if (a < b) return a;
+		return b;
+	}
+	int AABB::maximum(int a, int b) const {
+		if (a > b) return a;
+		return b;
+	}
+
+	/////////////////////////////////////////////////////////////////////
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// PointCluster class
+	/////////////////////////////////////////////////////////////////////
+
+	// constructor
+	PointCluster::PointCluster() {
+
+	}
+
+
+	PointCluster::PointCluster(const PointCluster& pointCluster) {
+		// copy cluster list
+		mClusterList = pointCluster.mClusterList;
+	}
+
+
+	// destructor
+	PointCluster::~PointCluster() {
+
+	}
+
+	// add point
+	void PointCluster::addPoint(Vec3 point) {
+		mClusterList.push_back(point);
+	}
+
+	// add point
+	void PointCluster::addPoint(int x, int y, int z) {
+		mClusterList.push_back(DDF::Vec3(x,y,z));
+	}
+
+	// get point
+	Vec3 PointCluster::point(int index) const {
+		return mClusterList[index];
+	}
+
+	// get size
+	int PointCluster::size() const {
+		return mClusterList.size();
+	}
+
+
+	// compute bounding box
+	AABB PointCluster::computeBox(int extraBorder) const {
+		// init min to infinity, max to -infinity
+		Vec3 min = Vec3(1E99,1E99,1E99);
+		Vec3 max = Vec3(-1E99,-1E99,-1E99);
+
+		// parse all points
+		for (int i = 0; i < mClusterList.size(); i++) {
+			Vec3 p = mClusterList.at(i);
+			
+			// update min
+			if (p.x < min.x) min.x = p.x;
+			if (p.y < min.y) min.y = p.y;
+			if (p.z < min.z) min.z = p.z;
+
+			// update max
+			if (p.x > max.x) max.x = p.x;
+			if (p.y > max.y) max.y = p.y;
+			if (p.z > max.z) max.z = p.z;
+		}
+
+		// return aabb with extra border
+		Vec3 border = Vec3(extraBorder, extraBorder, extraBorder);
+		return AABB(min - extraBorder, max + extraBorder);
+	}
+
+	AABB PointCluster::computeBox() const {
+		return computeBox(0);
+	}
+
+	/////////////////////////////////////////////////////////////////////
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// ClusterTrack class
+	/////////////////////////////////////////////////////////////////////
+
+	// constructor
+	ClusterTrack::ClusterTrack(const PointCluster& cluster, int time, int index) {
+		// init
+		AABB box = cluster.computeBox();
+		box.index = index;
+		box.startTimeStamp = time;
+
+		mBoxList.push_back(box);
+
+		mStartTimeStamp = time;
+		mSupposedTrackLenght = 0;
+
+		mIndex = index;
+	}
+
+	// copy constructor
+	ClusterTrack::ClusterTrack(const ClusterTrack& clusterTrack) {
+		// init
+		mStartTimeStamp = clusterTrack.mStartTimeStamp;
+		mSupposedTrackLenght = 0;
+
+		mIndex = clusterTrack.mIndex;
+
+		mBoxList = clusterTrack.mBoxList;
+
+		mSupposedTrackLenght = clusterTrack.mSupposedTrackLenght;
+		mStartTimeStamp = clusterTrack.mStartTimeStamp;
+	}
+
+
+	// destructor
+	ClusterTrack::~ClusterTrack() {
+
+	}
+
+
+	// timer increment
+	void ClusterTrack::incSupposedTracklength() {
+		mSupposedTrackLenght += 1;
+	}
+
+	// cluster accept
+	bool ClusterTrack::acceptPointCluster(const PointCluster& cluster) {
+
+		// tracklength < windowlist size --> dont accept (full)
+		if (mBoxList.size() > mSupposedTrackLenght) return false;
+
+		// tracklength > windowlist size --> dont accept (sealed)
+		if (sealed()) return false;
+
+
+
+		// get aabb
+		AABB clusterAABB = cluster.computeBox();
+
+		// test if cluster intersects last box
+		if (clusterAABB.intersects(mBoxList.back())) {
+
+			// accept cluster
+			clusterAABB.index = mIndex;
+			clusterAABB.startTimeStamp = mStartTimeStamp;
+			mBoxList.push_back(clusterAABB);
+			return true;
+		}
+		return false;
+	}
+
+
+	// extrapolates the beginning of the track box list by one box
+	// using an average delta over the last 'boxDeltaHistory' box
+	// movements (if possible = when not starting at frame 0)
+	void ClusterTrack::prepolateTrack(int boxHistory, Vec3 domainMax) {
+		// test if prepolation possible
+		if (mStartTimeStamp > 0) {
+
+			// compute delta movement
+			Vec3 interpol_D_min = Vec3(0,0,0);
+			Vec3 interpol_D_max = Vec3(0,0,0);
+
+			if (boxHistory < 0) boxHistory = 0;
+			
+			// sum up history
+			for (int i = 0; i < boxHistory; i++) {
+				interpol_D_min = interpol_D_min + ( mBoxList[i].min() - mBoxList[i+1].min() );
+				interpol_D_max = interpol_D_max + ( mBoxList[i].max() - mBoxList[i+1].max() );
+			}
+			
+			// normalize delta
+			interpol_D_min = interpol_D_min / boxHistory;
+			interpol_D_max = interpol_D_max / boxHistory;
+
+			// create new box
+			AABB newBox = AABB(mBoxList[0].min() + interpol_D_min, mBoxList[0].max() + interpol_D_max);
+			newBox.index = mBoxList[0].index;
+			newBox.startTimeStamp = mStartTimeStamp;
+			newBox.roundBox();
+
+			// clamp box to domain
+			newBox.clampBox(Vec3(0,0,0), domainMax);
+
+			// add box to the top of the track and adjust track parameters
+			std::vector<AABB> prepolatedBoxList;
+			prepolatedBoxList.push_back(newBox);
+			for (int i = 0; i < mBoxList.size(); i++) {
+				prepolatedBoxList.push_back(mBoxList[i]);
+			}
+			mBoxList.clear();
+			mBoxList = prepolatedBoxList;
+
+			mStartTimeStamp -= 1;
+			mSupposedTrackLenght += 1;
+
+			// reset start time stamps of boxes
+			for (int i = 0; i < mBoxList.size(); i++) {
+				mBoxList[i].startTimeStamp = mStartTimeStamp;
+			}
+
+		}
+	}
+
+
+
+	void ClusterTrack::growTrackBoxes(int extraSize, Vec3 resolutionMax) {
+		for (int i = 0; i < mBoxList.size(); i++) {
+			mBoxList[i].growBox(extraSize);
+			mBoxList[i].clampBox(Vec3(0,0,0), resolutionMax);
+		}
+	}
+
+
+	// returns if the track is sealed 
+	bool ClusterTrack::sealed() const {
+		return mBoxList.size() < mSupposedTrackLenght; 
+	}
+
+
+	// length of track
+	int ClusterTrack::length() const {
+		return mBoxList.size();
+	}
+
+
+	// returns last box
+	AABB ClusterTrack::lastBox() const {
+		return mBoxList.back();
+	}
+
+	void ClusterTrack::changeIndex(int newIndex) {
+		mIndex = newIndex;
+		for (int i = 0; i < mBoxList.size(); i++) {
+			mBoxList[i].index = newIndex;
+		}
+	}
+
+	AABB ClusterTrack::boxOfSimTick(int simTick) {
+		// test if simTick is in the box range
+		if ((simTick < mStartTimeStamp) || (simTick >= mStartTimeStamp + mBoxList.size())) {
+			AABB badBox = AABB();
+			badBox.index = -1;
+			return badBox;
+		}
+		// get box
+		return mBoxList[simTick - mStartTimeStamp];
+	}
+
+
+
+
+	void ClusterTrack::printTrack() const {
+		printf("==============================================================================\n");
+		printf("Track ID: %i\n", mIndex);
+		printf("==============================================================================\n");
+		printf("StartTime: %i\n", mStartTimeStamp);
+		printf("TrackLength: %i\n", length());
+		printf("------------------------------------------------------------------------------\n");
+		printf("Boxes:\n");
+		for (int i = 0; i < mBoxList.size(); i++) {
+			printf("i=%i, min=(%f,%f,%f), max=(%f,%f,%f)\n", mStartTimeStamp+i, mBoxList[i].min().x, mBoxList[i].min().y, mBoxList[i].min().z,
+				                                                                mBoxList[i].max().x, mBoxList[i].max().y, mBoxList[i].max().z);
+		}
+		printf("------------------------------------------------------------------------------\n");
+		printf("\n");
+	}
+
+
+
+	/////////////////////////////////////////////////////////////////////
+
+
+
+
+	/////////////////////////////////////////////////////////////////////
+	// ClusterTracker class
+	/////////////////////////////////////////////////////////////////////
+
+	// constructor
+	ClusterTracker::ClusterTracker() {
+		mNextFreeIndex = 0;
+	}
+
+	// copy constructor
+	ClusterTracker::ClusterTracker(const ClusterTracker& clusterTracker) {
+		mTracks = clusterTracker.mTracks;
+		mNextFreeIndex = clusterTracker.mNextFreeIndex;
+	}
+
+	// destructor
+	ClusterTracker::~ClusterTracker() {
+	}
+
+
+	// assign a list of clusters to the tracks (or create a new track)
+	void ClusterTracker::assignClusters(const std::vector<PointCluster>& newClusters, int currentTimeTick) {
+
+		// go through list
+		for (int i = 0; i < newClusters.size(); i++) {
+			PointCluster cluster = newClusters[i];
+
+			bool clusterAdded = false;
+			// go through list of tracks to add cluster
+			for (int j = 0; j < mTracks.size(); j++) {
+				if (mTracks[j].acceptPointCluster(cluster)) {
+					clusterAdded = true;
+					break;
+				}
+			}
+
+
+			// see if new track needs to be created
+			if (!clusterAdded) {
+				// create new track
+				ClusterTrack newTrack = ClusterTrack(cluster, currentTimeTick, mNextFreeIndex);
+				mTracks.push_back(newTrack);
+				mNextFreeIndex++;
+			}
+
+		}
+
+		// inc supposed track lengths (this will open up the ones that were extended, and seal
+		// the ones that were not)
+		incSupposedTrackLengths();
+	}
+
+
+	void ClusterTracker::incSupposedTrackLengths() {
+		// inc s.t.l. of all tracks
+		for (int i = 0; i < mTracks.size(); i++) {
+			mTracks[i].incSupposedTracklength();
+		}
+	}
+
+
+	std::vector<AABB> ClusterTracker::getActiveBoxes() const {
+
+		std::vector<AABB> returnList;
+
+		for (int i = 0; i < mTracks.size(); i++) {
+			if (!mTracks[i].sealed()) {
+				returnList.push_back(mTracks[i].lastBox());
+			}
+		}
+
+		return returnList;
+	}
+
+
+	void ClusterTracker::removeSmallTracks(int minLength) {
+		std::vector<ClusterTrack> cleanedTracks;
+		// copy all tracks that are long enough into cleaned tracks
+		for (int i = 0; i < mTracks.size(); i++) {
+			if (mTracks[i].length() >= minLength) {
+				cleanedTracks.push_back(mTracks[i]);
+			}
+		}
+
+		// switch track lists
+		mTracks.clear();
+		mTracks = cleanedTracks;
+
+		// restore index order (0...n)
+		recomputeTrackIndices();
+	}
+
+
+	// generates windows on the track beginning with bilinear interpolation
+	void ClusterTracker::prepolateTracks(int nOfFrames, int boxHistory, Vec3 domainMax) {
+
+		// go through all tracks
+		int s = mTracks.size();
+		for (int i = 0; i < mTracks.size(); i++) {
+			for (int f = 0; f < nOfFrames; f++) mTracks[i].prepolateTrack(boxHistory, domainMax);
+		}
+	}
+
+
+	void ClusterTracker::growTrackBoxes(int extraSize, Vec3 resolutionMax) {
+		for (int i = 0; i < mTracks.size(); i++) {
+			mTracks[i].growTrackBoxes(extraSize, resolutionMax);
+		}
+	}
+
+
+	void ClusterTracker::recomputeTrackIndices() {
+		mNextFreeIndex = 0;
+		for (int i = 0; i < mTracks.size(); i++) {
+			mTracks[i].changeIndex(mNextFreeIndex);
+			mNextFreeIndex++;
+		}
+	}
+
+
+	std::vector<AABB> ClusterTracker::getBoxesOfSimTick(int simTick) {
+		std::vector<AABB> timeBoxes;
+		
+		// ask all tracks for their box
+		for (int i = 0; i < mTracks.size(); i++) {
+			AABB candidateBox = mTracks[i].boxOfSimTick(simTick);
+			if (candidateBox.index != -1) timeBoxes.push_back(candidateBox);
+		}
+
+		return timeBoxes;
+	}
+
+
+
+	void ClusterTracker::printAllTracks() const {
+		for (int i = 0; i < mTracks.size(); i++) {
+			mTracks[i].printTrack();
+		}
+	}
+
+
+	/////////////////////////////////////////////////////////////////////
+
+
+
+} // DDF

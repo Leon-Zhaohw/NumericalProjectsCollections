@@ -1,0 +1,1303 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * Standard plugins: pressure solve, forces etc.
+ *
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+
+#include "matrixbase.h"
+
+// safety boundary for semi lagrange advection step
+#define SLADVBOUND 2
+
+namespace DDF { 
+
+static inline bool doSetVelocity(int nbflag, int myflag) {
+	if (fgIsObstacle(nbflag) && !fgIsInflow(myflag) ) {
+		return false;
+	}
+	return true;
+}
+
+// directly update a grid with forces, dont copy or
+// reset boundary vels like fsAddForces
+class fsAddForceSimple : public GridOpBaseFlagbord<1> {
+	public:
+		fsAddForceSimple(FlagGrid *flags, Grid<Vec3> *src, Vec3 force, int mod = 0, Real thresh = 0.8) : 
+			GridOpBaseFlagbord<1>(), mpVecgrid(src), 
+  			mModFunc(mod), mThresh(thresh)	{ 
+			mForce = force;
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsAddForceSimple() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVecgrid.gridAccInit(mpVecgrid, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// set velocity at NB cell, given current flag myflag?
+		inline bool __doSetVelocity(int nbflag, int myflag) {
+			if (fgIsObstacle(nbflag) && !fgIsInflow(myflag) ) {
+				return false;
+			}
+			return true;
+		}
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			int myFlag = getFlagAcc()(i,j,k);
+
+			if ( !doSetVelocity(myFlag, myFlag) ) 
+				return;
+			
+			if (fgIsEmpty(myFlag) ) 
+				return;
+
+			if (fgIsFluid(myFlag) ) { 
+				// fluid cells 
+
+				Vec3 f = mForce;
+				if(mModFunc==1) {
+					Real h = (Real)j / (Real)mpVecgrid->getSizeY();
+					// scale to 0-1
+					h -= mThresh;
+					if(h > 0.) {
+						h *= 1. / (Real)(1.-mThresh);
+						// exponentionally upscale
+						h += 1.;
+						h = h*h*h;
+						f *= h;
+					}
+				}
+
+				Vec3& val = gaVecgrid.write(i,j,k);
+				// only add for faces that are between fluid/fluid fl/empty cells
+				if ( doSetVelocity(getFlagAcc()(i-1,j,k), myFlag) ) {
+					val[0] += f[0]; 
+				} 
+
+				if (doSetVelocity(getFlagAcc()(i,j-1,k), myFlag) ) {
+					val[1] += f[1]; 
+				} 
+
+				if ( (doSetVelocity(getFlagAcc()(i,j,k-1), myFlag) ) && (gDim==3) ) {
+					val[2] += f[2];
+				} 
+				return;
+			} 
+		};
+		void reduce(fsAddForceSimple &op) { };
+
+	protected:
+		Grid<Vec3> *mpVecgrid;
+		GridAccessor<Vec3,1> gaVecgrid;
+		Vec3 mForce;
+		int mModFunc;
+		Real mThresh;
+
+}; // fsAddForceSimple */
+
+// add forces to vels, force is given as parameter
+class spAddForceSimple : public SolverPlugin {
+	public:
+		spAddForceSimple() : SolverPlugin(), mVelSrc("-unnamed1-"),
+   				//mModFunc(0), mThresh(0.8), 
+					mForce(0.) { };
+		~spAddForceSimple() { };
+		virtual bool initPlugin() { return true; };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVelSrc = params.FindOneString("grid", mVelSrc );
+			mForce = params.FindOneVector("force", mForce );
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddForceSimple","step "<<dt<<" velsgrid:"<<mVelSrc<<" ");
+			Grid<Vec3>* velsrc = mpPlParams->getGridVec3(mVelSrc);
+
+			// mod func disabled here
+			Vec3 f= mForce *dt* mpPlParams->getDeltaX();
+			fsAddForceSimple(mpPlParams->getFluidSolver()->getGridFlags(), velsrc, f, 0, 1. );
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelSrc; //, mVelDst;
+		Vec3 mForce;
+		// int mModFunc; Real mThresh;
+		// TODO, allow adding arbitrary force
+};
+
+// add gravity forces to vels
+class spAddForceGravity : public SolverPlugin {
+	public:
+		spAddForceGravity() : SolverPlugin(), mVelSrc("-unnamed1-"),
+   				mModFunc(0), mThresh(0.8) { };
+		~spAddForceGravity() { };
+		virtual bool initPlugin() { return true; };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVelSrc = params.FindOneString("grid", mVelSrc );
+			mModFunc = params.FindOneInt("mod-func", mModFunc );
+			mThresh = params.FindOneFloat("thresh", mThresh );
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddForceGravity","step "<<dt<<" velsgrid:"<<mVelSrc<<" ");
+			Grid<Vec3>* velsrc = mpPlParams->getGridVec3(mVelSrc);
+
+			Vec3 f= mpPlParams->getFluidSolver()->getGravity() *dt* mpPlParams->getDeltaX();
+			fsAddForceSimple(mpPlParams->getFluidSolver()->getGridFlags(), velsrc, f, 
+					mModFunc, mThresh );
+
+			//swapGrids(mpPlParams, mVelSrc, mVelDst);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelSrc; //, mVelDst;
+		int mModFunc;
+		Real mThresh;
+		// TODO, allow adding arbitrary force
+};
+
+
+//*****************************************************************************
+// force add - OLD, use add-gravity / add-force-simple in combination with set-noslip-bcs now!!!
+// use velocities from one grid, update to the other unnecessary copy, but important not to confuse updated and non-updated values
+// for empty cell boundaries these have to contain valid values for interpolations etc. of the following steps
+// thus empty cells are checked for fluid nb's - if they have one, the neighboring velocity is used and updated with force
+class fsAddForceCopy : public GridOpBaseFlagbord<1> {
+	public:
+		fsAddForceCopy(FlagGrid *flags, Grid<Vec3> *src, Grid<Vec3> *dst, Vec3 force, int mod = 0, Real thresh = 0.8) : 
+			GridOpBaseFlagbord<1>(), mpSrc(src), mpDst(dst),
+  			mModFunc(mod), mThresh(thresh)	{ 
+			mForce = force;
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsAddForceCopy() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// set velocity at NB cell, given current flag myflag?
+		inline bool __doSetVelocity(int nbflag, int myflag) {
+			if (fgIsObstacle(nbflag) && !fgIsInflow(myflag) ) {
+				return false;
+			}
+			return true;
+		}
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			// safety - always write
+			Vec3& vdst = gaDst.write(i,j,k);
+			int myFlag = getFlagAcc()(i,j,k);
+
+			if ( !doSetVelocity(myFlag, myFlag) ) { 
+				gaDst.write(i,j,k) = Vec3(0.); 
+				return;
+			} else if (fgIsEmpty(myFlag) ) {
+				vdst =  gaSrc(i,j,k);  // copy all values here...
+				return; 
+			} else if (fgIsFluid(myFlag) ) { 
+				// fluid cells 
+				Vec3 vsrc = gaSrc(i,j,k); 
+
+				Vec3 f = mForce;
+				if(mModFunc==1) {
+					Real h = (Real)j / (Real)mpSrc->getSizeY();
+					// scale to 0-1
+					h -= mThresh;
+					if(h > 0.) {
+						h *= 1. / (Real)(1.-mThresh);
+						// exponentionally upscale
+						h += 1.;
+						h = h*h*h;
+						f *= h;
+					}
+				}
+
+				// only add for faces that are between fluid/fluid fl/empty cells
+				if ( doSetVelocity(getFlagAcc()(i-1,j,k), myFlag) ) {
+					vsrc[0] += f[0]; 
+				} else { vsrc[0] = 0.; }
+
+				if (doSetVelocity(getFlagAcc()(i,j-1,k), myFlag) ) {
+					vsrc[1] += f[1]; 
+					// LDC test, DEBUG
+					//if (0) { const nVec3i off = gaFlags.getAccPatch()->mOffset + nVec3i(i,j,k); if (off[0] == 1) vsrc[1] = 27.5; }
+				} else { vsrc[1] = 0.; }
+
+				if ( (doSetVelocity(getFlagAcc()(i,j,k-1), myFlag) ) && (gDim==3) ) {
+					vsrc[2] += f[2];
+				} else { vsrc[2] = 0.; }
+
+				vdst = vsrc;
+				return;
+			} 
+		};
+		void reduce(fsAddForceCopy &op) { };
+
+	protected:
+		Grid<Vec3> *mpSrc, *mpDst;
+		GridAccessor<Vec3,1> gaSrc;
+		GridAccessor<Vec3,0> gaDst;
+		Vec3 mForce;
+		int mModFunc;
+		Real mThresh; 
+}; // fsAddForceCopy */
+
+// add forces to vels
+class spAddForces : public SolverPlugin {
+	public:
+		spAddForces() : SolverPlugin(),
+   				mVelSrc("vel-curr"),
+   				mVelDst("vec-temp"), mModFunc(0), mThresh(0.8) { };
+		~spAddForces() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVelSrc = params.FindOneString("vel-src", mVelSrc );
+			mVelDst = params.FindOneString("vel-dst", mVelDst );
+			mModFunc = params.FindOneInt("mod-func", mModFunc );
+			mThresh = params.FindOneFloat("thresh", mThresh );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spAddForces","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAddForces","\n\nWARNING spAddForces is deprecated, use add-force and set-obstacle-bcs instead!!!!!!!!!!!!!!!! \n");
+			debMsg("spAddForces","step "<<dt<<" velsgrid:"<<mVelSrc<<" to "<<mVelDst); 
+			Grid<Vec3>* velsrc = mpPlParams->getGridVec3(mVelSrc);
+			Grid<Vec3>* veldst = mpPlParams->getGridVec3(mVelDst);
+
+			Vec3 f= mpPlParams->getFluidSolver()->getGravity() *dt* mpPlParams->getDeltaX();
+			fsAddForceCopy(mpPlParams->getFluidSolver()->getGridFlags(), velsrc, veldst, f, 
+					mModFunc, mThresh );
+
+			swapGrids(mpPlParams, mVelSrc, mVelDst);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelSrc, mVelDst;
+		int mModFunc;
+		Real mThresh;
+};
+
+
+//*****************************************************************************
+
+class fsSetNoslipBcs : public GridOpBaseFlagbord<1> {
+	public:
+		fsSetNoslipBcs(FlagGrid *flags, Grid<Vec3> *src) :
+			GridOpBaseFlagbord<1>(), mpVecgrid(src) {
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsSetNoslipBcs() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVecgrid.gridAccInit(mpVecgrid, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		// set velocity at NB cell, given current flag myflag?
+		inline bool __doSetVelocity(int nbflag, int myflag) {
+			if (fgIsObstacle(nbflag) && !fgIsInflow(myflag) ) {
+				return false;
+			}
+			return true;
+		}
+
+		// add forces and update empty cells free surface boundaries
+		inline void operator() (int i, int j, int k) { 
+			int myFlag = getFlagAcc()(i,j,k);
+			Vec3& vel = gaVecgrid.write(i,j,k);
+
+			if ( !doSetVelocity(myFlag, myFlag) ) {
+				vel = Vec3(0.);
+				return;
+			}
+			
+			if (fgIsEmpty(myFlag) ) 
+				return;
+
+			if (fgIsFluid(myFlag) ) { 
+				// only add for faces that are between fluid/fluid fl/empty cells
+				if (  !doSetVelocity(getFlagAcc()(i-1,j,k), myFlag) ) { vel[0] = 0.; }
+
+				if (  !doSetVelocity(getFlagAcc()(i,j-1,k), myFlag) ) { vel[1] = 0.; }
+
+				if ( (!doSetVelocity(getFlagAcc()(i,j,k-1), myFlag) ) && (gDim==3) ) { vel[2] = 0.; }
+
+				return;
+			} 
+		};
+		void reduce(fsSetNoslipBcs &op) { };
+
+	protected:
+		Grid<Vec3> *mpVecgrid;
+		GridAccessor<Vec3,1> gaVecgrid;
+		Vec3 mForce;
+		int mModFunc;
+		Real mThresh;
+
+}; // fsSetNoslipBcs */
+
+// add forces to vels
+class spSetNoslipBcs : public SolverPlugin {
+	public:
+		spSetNoslipBcs() : SolverPlugin(), mVel("-unnamed1-") { };
+		~spSetNoslipBcs() { };
+		virtual bool initPlugin() { return true; }; 
+		virtual bool parseParams(const ParamSet& params) {
+			mVel = params.FindOneString("grid", mVel );
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spSetNoslipBcs","step "<<dt<<" velsgrid:"<<mVel<<" to "<<mVel); 
+			Grid<Vec3>* velsrc = mpPlParams->getGridVec3(mVel);
+			fsSetNoslipBcs(mpPlParams->getFluidSolver()->getGridFlags(), velsrc );
+			return true;
+		};
+	protected:
+		std::string mVel;
+};
+
+
+
+//*****************************************************************************
+// compute volume correction divergence
+class spComputeVolumeCorrection : public SolverPlugin {
+	public:
+		spComputeVolumeCorrection() : SolverPlugin(),
+   				mPhi("-unnamed1-"), mCorrY(0.),
+					mTargetVol(0.5), mKP(1.), mKL(1.)
+   				{ };
+		~spComputeVolumeCorrection() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mPhi = params.FindOneString("phi", mPhi );
+			mTargetVol = params.FindOneFloat("target-volume", mTargetVol );
+			mKP = params.FindOneFloat("corr-kp", mKP );
+			mKL = params.FindOneFloat("corr-kl", mKL );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spComputeVolumeCorrection","step "<<dt<<" phi:"<<mPhi<<" "); 
+			Grid<Real>* phi = mpPlParams->getGridReal(mPhi);
+
+			std::string mNameGridReal("phi-curr"), mNameDens("density");
+			// volume cons test
+			Grid<Real>* pPhi = mpPlParams->getGridReal( mNameGridReal );
+			FlagGrid*   pFlags = mpPlParams->getGridInt( "flags" );
+			Grid<Real>* pDens = NULL;
+			if(mpPlParams->haveGridReal( mNameDens )) {
+				pDens = mpPlParams->getGridReal( mNameDens );
+			}
+
+			bool firstInit = (mTargetVol==-1.);
+			Real volume = 0.;
+			const Real dx = mpPlParams->getDeltaX();
+			const Real cubeVol = dx * dx * (gDim==3 ? dx : 1.);
+
+			// make sure to prevent divisions by zero!
+			const Real densThresh = 0.1; // 1e-4;
+
+			FOR_IJK_GRID(pPhi) {
+				Real p = (*pPhi)(i,j,k);
+				int flag = pFlags->getGlobal(i,j,k);
+				if( fgIsObstacle( flag ) ) {
+					p = 0.5;
+				}
+
+				Real *pVal = NULL;
+				if(pDens) {
+					pVal = &pDens->getGlobal(i,j,k);
+					(*pVal) = densThresh;
+				}
+
+				if(p>-1000. && p<0.5) {
+					Real vol = 0.;
+					if(p<-0.5) vol = 1. ;
+					else       vol = (0.5-p);
+					volume += vol * cubeVol;
+
+					if(pDens) {
+						// clamp small values
+						if(vol < densThresh) vol = densThresh;
+						(*pVal) = vol;
+					}
+				} else {
+				}
+
+				if(pDens) {
+					if(fgIsObstacle(flag))
+						(*pVal) = 1.; 
+					//CLAMP((*pVal), (Real)0.00001, (Real)1.);
+				}
+			}
+
+			// targetVolume < -1 means correction off, -1=auto init
+			const Real targetVolume = mTargetVol;
+			Real corr = 0.;
+
+			if(targetVolume>=0.) {
+				Real corrKP = mKP * 2.3/(25.*dt);
+				Real corrKL = mKL * (corrKP * corrKP)/16.;
+
+				Real corrX = (volume-targetVolume)/targetVolume;
+
+				mCorrY += corrX *dt;
+				corr = (1./(corrX+1.)) * (-corrKP*corrX - corrKL*mCorrY);
+			}
+			
+			mpPlParams->setDivergenceCorrection(corr);
+
+			if(firstInit) {
+				mTargetVol = volume;
+				debMsg("spComputeVolumeCorrection","Current volume = "<<mTargetVol<<", used as init! "<<corr);
+			} else { 
+				debMsg("spComputeVolumeCorrection","Current volume = "<<volume<<", target-volume = "<<mTargetVol<<", corr = "<<corr<<"   , mCorrY = "<<mCorrY);
+			}
+
+			return true;
+		};
+
+
+	protected:
+		// grid names to swap
+		std::string mPhi;
+		// accumulated corrX error
+		Real mCorrY, mTargetVol, mKP, mKL;
+};
+
+
+
+
+//*****************************************************************************
+
+bool swapGrids(SolverParams* params, std::string mGrid1, std::string mGrid2)
+{
+	if(0) debMsg("swapGrids","DEBUG: "<<params->printGridMaps() );
+
+	// distinguish data types
+	// replace pointers in maps, and then change
+	// names in grid classes too!
+	GridBase *g1=NULL, *g2=NULL;
+	if(params->haveGridInt(mGrid1) && 1) {
+		Grid<int>* tmp = params->getGridInt(mGrid1);
+		Grid<int>* grid2 = params->getGridInt(mGrid2);
+		params->setGridInt(mGrid1, grid2);
+		params->setGridInt(mGrid2, tmp);
+		g1 = tmp; g2 = grid2;
+
+		//grid2->setName(mGrid1);
+		//tmp->setName(mGrid2);
+	} else if(params->haveGridReal(mGrid1) && 1) {
+		Grid<Real>* tmp = params->getGridReal(mGrid1);
+		Grid<Real>* grid2 = params->getGridReal(mGrid2);
+		params->setGridReal(mGrid1, grid2);
+		params->setGridReal(mGrid2, tmp);
+		g1 = tmp; g2 = grid2;
+
+		//grid2->setName(mGrid1);
+		//tmp->setName(mGrid2);
+	} else if(params->haveGridVec3(mGrid1) && 1) {
+		Grid<Vec3>* tmp = params->getGridVec3(mGrid1);
+		Grid<Vec3>* grid2 = params->getGridVec3(mGrid2);
+		params->setGridVec3(mGrid1, grid2);
+		params->setGridVec3(mGrid2, tmp);
+		g1 = tmp; g2 = grid2;
+	} else { 
+		return false;
+	}
+
+	int tmp1 = g1->getDisplayFlags();
+	g1->setDisplayFlags( g2->getDisplayFlags() );
+	g2->setDisplayFlags( tmp1 );
+
+	g2->setName(mGrid1);
+	g1->setName(mGrid2);
+
+	if(0) debMsg("swapGrids","DEBUG: "<<params->printGridMaps() );
+	return true;
+}
+
+// interface for grid swap helper plugin
+// (only replaces replaces names)
+class spluginSwapGrids : public SolverPlugin {
+	public:
+		spluginSwapGrids() : SolverPlugin(),
+   				mGrid1("-unnamed1-"),
+   				mGrid2("-unnamed2-")
+			{ };
+		~spluginSwapGrids() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			int numNames =0;
+			const std::string* names = params.FindString("grids", &numNames);
+			if(numNames!=2) { 
+				errFatal("spluginSwapGrids::parseParams","Invalid names to swap!", SIMWORLD_PLUGINERROR);
+				return false;
+			}
+			mGrid1 = names[0];
+			mGrid2 = names[1];
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginSwapGrids","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginSwapGrids","step "<<dt);
+
+			// dont use anymore, swapGrids is now done in the other plugins automatically
+			//errFatal("spluginSwapGrids","WARNING - do not use swap plugin anymore, manually call swapgrids in other plugin, e.g. advection...", SIMWORLD_GENERICERROR);
+			debMsg("spluginSwapGrids","WARNING - do not use swap plugin anymore if possible");
+			//return false;
+
+			if(!swapGrids(mpPlParams, mGrid1, mGrid2) )
+				errFatal("spluginSwapGrids::performStep","Grids not found "<<mGrid1<<" "<<mGrid2 , SIMWORLD_GRIDERROR);
+
+			//mpPlParams->print GridMaps();
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid1, mGrid2;
+};
+
+// copy source grid to destination
+class spluginCopyGrid : public SolverPlugin {
+	public:
+		spluginCopyGrid() : SolverPlugin(),
+   				mSrc("-unnamed1-"),
+   				mDest("-unnamed2-")
+			{ };
+		~spluginCopyGrid() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mDest = params.FindOneString("dest", mDest );
+			mSrc = params.FindOneString("src", mSrc );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginCopyGrid","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginCopyGrid","step "<<dt);
+			if(mpPlParams->haveGridInt(mSrc) && 1) {
+				Grid<int>* dest = mpPlParams->getGridInt(mDest);
+				Grid<int>* src = mpPlParams->getGridInt(mSrc);
+				goCopyGrid<int>(dest, src);
+			} else if(mpPlParams->haveGridReal(mSrc) && 1) {
+				Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+				Grid<Real>* src = mpPlParams->getGridReal(mSrc);
+				goCopyGrid<Real>(dest, src);
+			} else if(mpPlParams->haveGridVec3(mSrc) && 1) {
+				Grid<Vec3>* dest = mpPlParams->getGridVec3(mDest);
+				Grid<Vec3>* src = mpPlParams->getGridVec3(mSrc);
+				goCopyGrid<Vec3>(dest, src);
+			}
+			return true;
+		};
+
+	protected:
+		std::string mSrc, mDest;
+};
+
+// add source grid to dest grid
+template<class Scalar>
+class goAddGrid : public GridOpBase {
+	public:
+		goAddGrid(Grid<Scalar> *gDst, Grid<Scalar> *gSrc) : GridOpBase() { 
+			mpDst = gDst;
+			mpSrc = gSrc;
+			applyOperatorToGridsWithoutFlags(this, mpDst);
+		};
+		~goAddGrid() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			setNullFlagPointer();
+		};
+		inline void operator() (int i, int j, int k) { 
+			gaDst.write(i,j,k) += gaSrc(i,j,k);
+		};
+		void reduce(goAddGrid &op) { };
+	protected:
+		Grid<Scalar> *mpDst;
+		Grid<Scalar> *mpSrc;
+		GridAccessor<Scalar,0> gaDst;
+		GridAccessor<Scalar,0> gaSrc;
+}; // goAddGrid */
+
+// copy source grid to destination
+class spluginAddGrid : public SolverPlugin {
+	public:
+		spluginAddGrid() : SolverPlugin(),
+   				mSrc("-unnamed1-"),
+   				mDest("-unnamed2-")
+			{ };
+		~spluginAddGrid() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mDest = params.FindOneString("dest", mDest );
+			mSrc = params.FindOneString("src", mSrc );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginAddGrid","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginAddGrid","step "<<dt);
+			if(mpPlParams->haveGridInt(mSrc) && 1) {
+				Grid<int>* dest = mpPlParams->getGridInt(mDest);
+				Grid<int>* src = mpPlParams->getGridInt(mSrc);
+				goAddGrid<int>(dest, src);
+			} else if(mpPlParams->haveGridReal(mSrc) && 1) {
+				Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+				Grid<Real>* src = mpPlParams->getGridReal(mSrc);
+				goAddGrid<Real>(dest, src);
+			} else if(mpPlParams->haveGridVec3(mSrc) && 1) {
+				Grid<Vec3>* dest = mpPlParams->getGridVec3(mDest);
+				Grid<Vec3>* src = mpPlParams->getGridVec3(mSrc);
+				goAddGrid<Vec3>(dest, src);
+			}
+			return true;
+		};
+
+	protected:
+		std::string mSrc, mDest;
+};
+
+// copy source grid to destination
+class spluginGridSave : public SolverPlugin {
+	public:
+		spluginGridSave() : SolverPlugin(),
+   				mDest("-unnamed-"),
+   				mFilename("-unnamed-") { };
+		~spluginGridSave() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mDest = params.FindOneString("grid", mDest );
+			mFilename = params.FindOneString("file", mFilename );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginGridSave","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginGridSave","step "<<dt);
+
+			std::ostringstream boutfilename;
+			boutfilename << mFilename; 
+			boutfilename << ".bobj.gz";
+
+			gzFile gzf;
+			gzf = gzopen(boutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+			if (!gzf) {
+				errMsg("spluginGridSave","Unable to open file '"<<boutfilename<<"' ");
+				return 0; 
+			}
+
+			if(mpPlParams->haveGridInt(mDest) && 1) {
+				//Grid<int>* dest = mpPlParams->getGridInt(mDest);
+				errFatal("spluginGridSave","Not yet implemented",SIMWORLD_GENERICERROR);
+			} else if(mpPlParams->haveGridReal(mDest) && 1) {
+				Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+				FOR_IJK_GRID(dest) {
+					float f= dest->getGlobal(i,j,k);
+					gzwrite(gzf, &f, sizeof(float)); 
+				}
+			} else if(mpPlParams->haveGridVec3(mDest) && 1) {
+				//Grid<Vec3>* dest = mpPlParams->getGridVec3(mDest);
+				errFatal("spluginGridSave","Not yet implemented",SIMWORLD_GENERICERROR);
+			}
+			gzclose( gzf );
+
+			debMsg("spluginGridSave","Read '"<<mFilename<<"' into '"<<mDest<<"' ");
+			return true;
+		};
+
+	protected:
+		std::string mDest, mFilename;
+};
+
+// copy source grid to destination
+class spluginGridLoad : public SolverPlugin {
+	public:
+		spluginGridLoad() : SolverPlugin(),
+   				mDest("-unnamed-"),
+   				mFilename("-unnamed-") { };
+		~spluginGridLoad() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mDest = params.FindOneString("grid", mDest );
+			mFilename = params.FindOneString("file", mFilename );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginGridLoad","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginGridLoad","step "<<dt);
+
+			std::ostringstream boutfilename;
+			boutfilename << mFilename; 
+			boutfilename << ".bobj.gz";
+
+			gzFile gzf;
+			gzf = gzopen(boutfilename.str().c_str(), "rb1"); // wb9 is slow for large meshes!
+			if (!gzf) {
+				errMsg("spluginGridLoad","Unable to open file '"<<boutfilename<<"' ");
+				return 0; 
+			}
+
+			if(mpPlParams->haveGridInt(mDest) && 1) {
+				//Grid<int>* dest = mpPlParams->getGridInt(mDest);
+				errFatal("spluginGridLoad","Not yet implemented",SIMWORLD_GENERICERROR);
+			} else if(mpPlParams->haveGridReal(mDest) && 1) {
+				Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+				FOR_IJK_GRID(dest) {
+					float f;
+					gzread(gzf, &f, sizeof(float)); 
+					dest->getGlobal(i,j,k) = f;
+				}
+			} else if(mpPlParams->haveGridVec3(mDest) && 1) {
+				//Grid<Vec3>* dest = mpPlParams->getGridVec3(mDest);
+				errFatal("spluginGridLoad","Not yet implemented",SIMWORLD_GENERICERROR);
+			}
+			gzclose( gzf );
+
+			debMsg("spluginGridLoad","Read '"<<mFilename<<"' into '"<<mDest<<"' ");
+			return true;
+		};
+
+	protected:
+		std::string mDest, mFilename;
+};
+
+
+// advance particles
+class spluginAdvanceParts : public SolverPlugin {
+	public:
+		spluginAdvanceParts() : SolverPlugin(),
+   				mVels("-unnamed1-") { };
+		~spluginAdvanceParts() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVels = params.FindOneString("gridname", mVels );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginAdvanceParts","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginAdvanceParts","step "<<dt); 
+			Grid<Vec3>* vels = mpPlParams->getGridVec3(mVels);
+			mpPlParams->getFluidSolver()->advanceParticles(dt, vels);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVels;
+};
+
+
+
+// find max in velocities, and adapt time step according
+// to cfl setting
+class spluginAdaptTimestep : public SolverPlugin {
+	public:
+		spluginAdaptTimestep() : SolverPlugin(),
+   				mVels("-unnamed1-") { };
+		~spluginAdaptTimestep() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVels = params.FindOneString("gridname", mVels );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginAdaptTimestep","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			Grid<Vec3>* vel = mpPlParams->getGridVec3(mVels);
+			goFindMinMax<Vec3> gomv = goFindMinMax<Vec3>( mpPlParams->getFluidSolver()->getGridFlags(), vel );
+
+			Real newDt = mpPlParams->mCflFactor / norm(gomv.mMaxVal);
+			if(newDt>mpPlParams->mMaxTimestep) newDt = mpPlParams->mMaxTimestep;
+			debMsg("spluginAdaptTimestep","step "<<dt<<" / "<<mpPlParams->mMaxTimestep<<", velsgrid:"<<mVels<<" max="<<norm(gomv.mMaxVal)<<" newdt="<<newDt); 
+
+			mpPlParams->setTimestep( newDt );
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVels;
+};
+
+
+//*****************************************************************************
+
+
+// compute the divergence of the source grid
+class GridOpDivergence : public GridOpBase {
+	public:
+		GridOpDivergence(Grid<Vec3>* pSrc, Grid<Real>* pDst, FlagGrid* flags)
+			: GridOpBase(), mpSrc(pSrc), mpDst(pDst)
+		{
+			mpFlags = flags;
+			applyOperatorToGrids( this );
+		}
+		
+		~GridOpDivergence() {};
+		
+		void buildCallList() {
+			gaSrc.gridAccInit(mpSrc, DDF::AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, DDF::AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		void resetVariables()
+		{
+			mCnt = 0;
+			mMaxAbs = mSumAbs = 0.0;
+		}
+
+		inline void operator() (int i, int j, int k) {
+			Real div = 0.0;
+			if (mpSrc->checkIndexValid(i+1,j,k)
+				&& mpSrc->checkIndexValid(i,j+1,k)
+#if DDF_DIMENSION==3
+				&& mpSrc->checkIndexValid(i,j,k+1)
+#endif
+				&& mpDst->checkIndexValid(i,j,k))
+			{
+				const Vec3& v0 = gaSrc(i, j, k);
+				div += gaSrc(i+1,j,k)[0] - v0[0];
+				div += gaSrc(i,j+1,k)[1] - v0[1];
+#if DDF_DIMENSION==3
+				div += gaSrc(i,j,k+1)[2] - v0[2];
+#endif
+				gaDst.write(i,j,k) = div; 
+				
+				Real divabs = fabs(div);
+				mSumAbs += divabs;
+				if (divabs > mMaxAbs)
+					mMaxAbs = divabs;
+				mCnt++;
+			} else
+				gaDst.write(i,j,k) = 0.0; 
+		}
+
+		void reduce(GridOpDivergence &op) {
+			mSumAbs += op.mSumAbs;
+			mCnt += op.mCnt;
+			if (op.mMaxAbs > mMaxAbs)
+				mMaxAbs = op.mMaxAbs;
+		}
+
+		Real getAbsAvg(void) const { return mSumAbs/float(mCnt); }
+		Real getAbsMax(void) const { return mMaxAbs; }
+
+	protected:
+		Grid<Vec3> *mpSrc;
+		Grid<Real> *mpDst;
+		
+		GridAccessor<Vec3,0> gaSrc;
+		GridAccessor<Real,0> gaDst;
+
+		Real mMaxAbs, mSumAbs;
+		int mCnt;
+}; // GridOpDivergence */
+
+
+class spluginDivergence : public SolverPlugin {
+	public:
+		spluginDivergence() : 
+			SolverPlugin(),
+   		mSrc("-unnamed1-"), mDest("-unnamed3-")
+				{ };
+		~spluginDivergence() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mSrc = params.FindOneString("src", mSrc );
+			mDest = params.FindOneString("dest", mDest );
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginDivergence","init");
+			return true;
+		};
+
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginDivergence","computing divergence of "<<mSrc<<" into "<<mDest); 
+			FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+
+			Grid<Vec3>* pSrc = mpPlParams->getGridVec3(mSrc);
+			Grid<Real>* pDest = mpPlParams->getGridReal(mDest);
+			GridOpDivergence godiv(pSrc, pDest, pFlags);
+			debMsg("spluginDivergence","abs avg="<<godiv.getAbsAvg()<<",abs max="<<godiv.getAbsMax());
+			return true;
+		};
+
+	protected:
+		// grid to print
+		std::string mSrc, mDest;
+};
+
+class spluginGetComponent : public SolverPlugin {
+	public:
+		spluginGetComponent() : SolverPlugin(),
+   				mSrc("-unnamed-"), mDest("-unnamed2-"),mode(0) { };
+		~spluginGetComponent() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mSrc = params.FindOneString("src", mSrc );
+			mDest = params.FindOneString("dest", mDest );
+			string mmod = params.FindOneString("index", "" );
+			if (mmod == "x") mode=0;
+			if (mmod == "y") mode=1;
+			if (mmod == "z") mode=2;
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+
+			Grid<Vec3>* src = mpPlParams->getGridVec3(mSrc);
+			Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+			if (mode==0) 
+				goCopyVec3ToScalar<Real,0>(dest,src);
+			else if (mode==1)
+				goCopyVec3ToScalar<Real,1>(dest,src);
+			else if (mode==2)
+				goCopyVec3ToScalar<Real,2>(dest,src);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mSrc,mDest;
+		int mode;
+};
+
+// copy one element of a vector to a scalar grid
+template<class Scalar,int NUM>
+class goGetVec3NormToScalar : public GridOpBase {
+	public:
+		goGetVec3NormToScalar(Grid<Scalar> *gDst, Grid<Vec3> *gSrc) : GridOpBase() { 
+			mpDst = gDst;
+			mpSrc = gSrc;
+			applyOperatorToGridsWithoutFlags(this, mpDst);
+		};
+		~goGetVec3NormToScalar() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			setNullFlagPointer();
+		};
+		inline void operator() (int i, int j, int k) { 
+			gaDst.write(i,j,k) = norm(gaSrc(i,j,k));
+		};
+		void reduce(goGetVec3NormToScalar &op) { };
+	protected:
+		Grid<Scalar> *mpDst;
+		Grid<Vec3>   *mpSrc;
+		GridAccessor<Scalar,0> gaDst;
+		GridAccessor<Vec3,0> gaSrc;
+}; // goGetVec3NormToScalar */
+
+class spluginGetNorm : public SolverPlugin {
+	public:
+		spluginGetNorm() : SolverPlugin(),
+   				mSrc("-unnamed-"), mDest("-unnamed2-"),mode(0) { };
+		~spluginGetNorm() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mSrc = params.FindOneString("src", mSrc );
+			mDest = params.FindOneString("dest", mDest );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginGetNorm","step "<<dt);
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+
+			Grid<Vec3>* src = mpPlParams->getGridVec3(mSrc);
+			Grid<Real>* dest = mpPlParams->getGridReal(mDest);
+			goGetVec3NormToScalar<Real,0>(dest,src);
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mSrc,mDest;
+		int mode;
+};
+
+// Obtain time-averaged field
+class spluginAverage : public SolverPlugin {
+	public:
+		spluginAverage() : SolverPlugin(), mSummed(0),mStrideCount(0) { };
+		~spluginAverage() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("gridname", "vel-curr");
+			mSumGrid = params.FindOneString("sumgrid", "");
+			mFrom = params.FindOneInt("from", 0);
+			mStride = params.FindOneInt("stride",1);
+			mPostQuit = params.FindOneInt("post-quit", 0) != 0;
+			mFrames = params.FindOneInt("frames", 100);
+			mStrideCount = mStride-1;
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		virtual void finish() {
+			if (mSummed == 0) return;
+			Grid<int>* flags = mpPlParams->getGridInt("flags");
+			if (mpPlParams->haveGridVec3(mGrid))
+				goScale<Vec3>(mpPlParams->getGridVec3(mSumGrid), flags, 1./(Real)mSummed);
+			else if (mpPlParams->haveGridReal(mGrid))
+				goScale<Real>(mpPlParams->getGridReal(mSumGrid), flags, 1./(Real)mSummed);
+			else
+				errMsg("spluginAverage","can't find grid " << mGrid << " or wrong type");
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			if (mFrom > 0) {
+				debMsg("spluginAverage","will start in " << mFrom << " frames");
+				--mFrom;
+			} else {
+				if (mSummed < mFrames) {
+					++mStrideCount;
+					if (mStrideCount == mStride) {
+						mStrideCount = 0;
+						debMsg("spluginAverage", "taking snapshot -- " << mSummed+1 << " frames recorded so far" ); 
+				
+						Grid<int>* flags = mpPlParams->getGridInt("flags");
+						if (mpPlParams->haveGridVec3(mGrid))
+							goSum<Vec3>(mpPlParams->getGridVec3(mSumGrid), mpPlParams->getGridVec3(mGrid), flags);
+						else if (mpPlParams->haveGridReal(mGrid))
+							goSum<Real>(mpPlParams->getGridReal(mSumGrid), mpPlParams->getGridReal(mGrid), flags);
+						else
+							errMsg("spluginAverage","can't find grid " << mGrid << " or wrong type");
+						mSummed++;			
+						if (mSummed == mFrames && mPostQuit)
+							mpPlParams->setQuit(true);
+					}
+				}
+			}
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid, mSumGrid;
+		int mSummed, mFrom, mFrames,mStride, mStrideCount;
+		bool mPostQuit;
+};
+
+// Dummy plugin
+class spluginDummy : public SolverPlugin {
+	public:
+		spluginDummy() : SolverPlugin() { };
+		~spluginDummy() { };
+
+		virtual bool parseParams(const ParamSet& params) { return true; }
+		virtual bool initPlugin() { return true; };
+
+		virtual bool performStep(Real dt) {	return true; };
+};
+
+
+//*****************************************************************************
+
+// solver plugin implementation
+SolverPlugin::SolverPlugin() :
+	mpPlParams(NULL), mName("-"), mTimeStart(-1.), mTimeStop(1.0e10),
+	mWasActive(false), mSingleTime(-1.), mInterval(-1.), mLastActive(0.)
+{
+};
+
+SolverPlugin::~SolverPlugin() {
+};
+
+void SolverPlugin::finish() {
+};
+
+// get parameters, e.g. grid names
+bool SolverPlugin::parseParams(const ParamSet& params) {
+	mTimeStart = params.FindOneFloat("plugin-start", mTimeStart );
+	mTimeStop = params.FindOneFloat("plugin-stop", mTimeStop );
+	mSingleTime = params.FindOneFloat("plugin-single-time", mSingleTime );
+	mInterval = params.FindOneFloat("plugin-interval", mInterval );
+	if(mTimeStop<mTimeStart) {
+		mTimeStop = mTimeStart = -1.;
+	}
+
+	if (mSingleTime>=0.) {
+		debMsg("SolverPlugin::parseParams","Single time active "<<mSingleTime);
+	} else {
+		if(mInterval>=0.) {
+			debMsg("SolverPlugin::parseParams","Interval active "<<mInterval); 
+			mLastActive = -mInterval;
+			if(mTimeStart!=-1.) {
+				mLastActive = mTimeStart-mInterval;
+			}
+		}
+	}
+
+	return true;
+} 
+
+// check for start & end time of plugin
+bool SolverPlugin::isCurrentlyActive(double t) {
+	// all timings off, return true by default
+	//if( mTimeStart<= -1. && mTimeStop>=1.0e10 && mSingleTime <= -1. ) { return true; }
+
+	// else: single time?
+	if(mSingleTime >= 0.) {
+		if(t >= mSingleTime && !mWasActive) {
+			mWasActive = true;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	
+	// else: times given & valid, check:
+	if(t < mTimeStart || t > mTimeStop) {
+		return false;
+	}
+
+	if(mInterval >= 0.) {
+		if(t > mLastActive+mInterval) {
+			mLastActive += mInterval;
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// create one of the standard hard coded plugins
+SolverPlugin* MakeStandardPlugin(std::string name) {
+	if(name.compare( "swap-grids")==0) {
+		return new spluginSwapGrids;
+	} else if(name.compare( "copy-grid")==0) {
+		return new spluginCopyGrid;
+	} else if(name.compare( "add-grid")==0) {
+		return new spluginAddGrid;
+	} else if(name.compare( "grid-load")==0) {
+		return new spluginGridLoad;
+	} else if(name.compare( "grid-save")==0) {
+		return new spluginGridSave;
+	} else if(name.compare( "advance-particles")==0) {
+		return new spluginAdvanceParts;
+	} else if(name.compare( "dummy")==0) {
+		return new spluginDummy;
+
+	} else if(name.compare( "add-forces")==0) {
+		// warning - copies, adds forces, and resets obstacle bcs!
+		return new spAddForces;
+
+	// new force plugins
+	} else if(name.compare( "add-force-simple")==0) {
+		return new spAddForceSimple;
+	} else if(name.compare( "add-gravity")==0) {
+		return new spAddForceGravity;
+	// TODO reset-obstacle-bcs
+	} else if(name.compare( "set-noslip-bcs")==0) {
+		return new spSetNoslipBcs;
+
+	} else if(name.compare( "compute-volume-correction")==0) {
+		return new spComputeVolumeCorrection;
+
+	} else if(name.compare( "adapt-timestep" )==0) {
+		return new spluginAdaptTimestep;
+
+	} else if(name.compare( "compute-divergence" )==0) {
+		return new spluginDivergence;
+	} else if(name.compare( "average" )==0) {
+		return new spluginAverage;
+	} else if(name.compare( string("get-component") )==0) {
+		return new spluginGetComponent;
+	} else if(name.compare( string("get-vec3-norm") )==0) {
+		return new spluginGetNorm;
+	}
+	
+	return NULL;
+}
+
+
+} // end namespace DDF 
+

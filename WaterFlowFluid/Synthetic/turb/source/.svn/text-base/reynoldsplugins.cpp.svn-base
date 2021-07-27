@@ -1,0 +1,305 @@
+/******************************************************************************
+ *
+ * DDF
+ * Turbulence modeling plugins
+ *
+ * Tobias Pfaff
+ * 
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "paramset.h"
+
+using namespace std;
+
+inline DDF::Real SQR(DDF::Real x) { return x*x; }
+// Constants for k-epsilon model by Launder and Sharma, 1974
+const DDF::Real TV_CMU = 0.09;
+const DDF::Real TV_E1 = 1.44;
+const DDF::Real TV_E2 = 1.92;
+const DDF::Real TV_SK = 1.0;
+const DDF::Real TV_SE = 1.3;
+
+namespace DDF { 
+
+extern void doSemiLagrangeReal(FlagGrid* flags, Grid<Vec3>* vec, Grid<Real>* src, Grid<Real>* dst, Real dt);
+
+class fsGradDiff : public GridOpBaseFlagbord<1> {
+	public:
+		fsGradDiff(FlagGrid *flags, Grid<Real> *src, Grid<Real> *dst, Grid<Real> *visc, Real scale) : 
+				GridOpBaseFlagbord<1>(), mpSrc(src), mpDst(dst), mpVisc(visc), mScale(scale) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsGradDiff() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			gaVisc.gridAccInit(mpVisc, AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k)
+		{ 
+			int flag = getFlagAcc()(i,j,k);
+			if(!fgIsFluid(flag)) {
+				gaDst.write(i,j,k) = 0.;
+				return;
+			}
+			#define getc(i,j,k) (!fgIsFluid(getFlagAcc()(i,j,k))?c0:gaVisc(i,j,k))
+			#define getv(i,j,k) (!fgIsFluid(getFlagAcc()(i,j,k))?v0:gaSrc(i,j,k))
+			Real v=0., v0=gaSrc(i,j,k), c0=gaVisc(i,j,k);  
+			
+			// evaluate C at first derivation			
+			v += (getv(i+1,j,k)-v0)*(getc(i+1,j,k)+c0) - (v0-getv(i-1,j,k))*(c0+getc(i-1,j,k));
+			v += (getv(i,j+1,k)-v0)*(getc(i,j+1,k)+c0) - (v0-getv(i,j-1,k))*(c0+getc(i,j-1,k));
+			v += (getv(i,j,k+1)-v0)*(getc(i,j,k+1)+c0) - (v0-getv(i,j,k-1))*(c0+getc(i,j,k-1));
+			v *= 0.5 * mScale; // note: might shift 0.5 premult to initialisiation. 
+			
+
+			/* // evaluate C at center only
+			v = -6. * v0 + getv(i+1,j,k) + getv(i-1,j,k) + getv(i,j+1,k) + getv(i,j-1,k) + getv(i,j,k+1) + getv(i,j,k-1);
+			v*= c0 * mScale;*/
+			
+			#undef getv
+			#undef getc
+
+			gaDst.write(i,j,k) = v0 + v; // for dx!=1 -> /=dx*dx
+		};
+		void reduce(fsGradDiff &op) { };
+
+	protected:
+		Grid<Real> *mpSrc, *mpDst, *mpVisc;
+		GridAccessor<Real,1> gaSrc,gaVisc;
+		GridAccessor<Real,0> gaDst;
+		Real mScale;
+}; 
+
+class fsCompProduction : public GridOpBaseFlagbord<1> {
+	public:
+		fsCompProduction(FlagGrid *flags, Grid<Vec3> *vel, Grid<Real> *dst, Grid<Real> *visc, Grid<Real> *strain) : 
+				GridOpBaseFlagbord<1>(), mpVel(vel), mpDst(dst), mpVisc(visc), mpStrain(strain) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsCompProduction() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaVel.gridAccInit(mpVel, AM_READ, gaCalls); 
+			gaVisc.gridAccInit(mpVisc, AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			if (mpStrain) gaStrain.gridAccInit(mpStrain, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k)
+		{ 
+			int flag = getFlagAcc()(i,j,k);
+			if(!fgIsFluid(flag)) {
+				gaDst.write(i,j,k) = 0.;
+				return;
+			}
+			#define getv(i,j,k) (!fgIsFluid(getFlagAcc()(i,j,k))?v0:gaVel(i,j,k))			
+			// prefetch
+			Vec3 v0=gaVel(i,j,k), v100 = getv(i+1,j,k), v010 = getv(i,j+1,k), v001 = getv(i,j,k+1);
+			Vec3 vm00 = getv(i-1,j,k), v0m0 = getv(i,j-1,k), v00m = getv(i,j,k-1);
+			Vec3 v110 = getv(i+1,j+1,k), v101 = getv(i+1,j,k+1), v011 = getv(i,j+1,k+1);
+
+			// calculate Sij^2
+			Real s2 = SQR(v100.x-v0.x) + SQR(v010.y-v0.y) + SQR(v001.z-v0.z); // diagonals
+			s2 += .03125 * SQR((v100.y+v010.x+v110.x+v110.y-vm00.y-v0m0.x-getv(i+1,j-1,k).x-getv(i-1,j+1,k).y)); // x/y
+			s2 += .03125 * SQR((v100.z+v001.x+v101.x+v101.z-vm00.z-v00m.x-getv(i+1,j,k-1).x-getv(i-1,j,k+1).z)); // x/z
+			s2 += .03125 * SQR((v010.z+v001.y+v011.y+v011.z-v0m0.z-v00m.y-getv(i,j+1,k-1).y-getv(i,j-1,k+1).z)); // y/z						
+			#undef getv
+
+			// production (2*Sij^2*nu_t)
+			gaDst.write(i,j,k) = 2. * s2 * gaVisc(i,j,k);
+			if (mpStrain) gaStrain.write(i,j,k) = sqrt(s2);
+		};
+		void reduce(fsCompProduction &op) { };
+
+	protected:
+		Grid<Vec3> *mpVel;
+		Grid<Real> *mpDst, *mpVisc, *mpStrain;
+		GridAccessor<Vec3,1> gaVel;
+		GridAccessor<Real,0> gaDst, gaVisc, gaStrain;
+		Real mScale;
+}; 
+
+class fsCompVisc : public GridOpBase {
+	public:
+		fsCompVisc(FlagGrid *flags, Grid<Real> *k, Grid<Real> *dst, Grid<Real> *epsilon) : 
+				GridOpBase(), mpK(k), mpEpsilon(epsilon), mpDst(dst) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsCompVisc() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaK.gridAccInit(mpK, AM_READ, gaCalls); 
+			gaEpsilon.gridAccInit(mpEpsilon, AM_READ, gaCalls); 
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k)
+		{ 
+			int flag = getFlagAcc()(i,j,k);
+			if(!fgIsFluid(flag)) {
+				gaDst.write(i,j,k) = 0.;
+				return;
+			}
+			// turbulent viscosity nu_t = C_mu * k^2/epsilon
+			gaDst.write(i,j,k) = TV_CMU * SQR(gaK(i,j,k)) / gaEpsilon(i,j,k);
+		};
+		void reduce(fsCompVisc &op) { };
+
+	protected:
+		Grid<Real> *mpK, *mpEpsilon, *mpDst;
+		GridAccessor<Real,1> gaK,gaEpsilon;
+		GridAccessor<Real,0> gaDst;
+}; 
+
+class fsKEpsSource : public GridOpBase {
+	public:
+		fsKEpsSource(FlagGrid *flags, Grid<Real> *ksrc, Grid<Real> *kdst, Grid<Real> *esrc, Grid<Real> *edst,  Grid<Real> *prod, Real dt) : 
+				GridOpBase(), mpKSrc(ksrc),mpKDst(kdst),mpESrc(esrc),mpEDst(edst),mpProd(prod),mDt(dt) { 
+			mpFlags = flags;
+			applyOperatorToGrids(this);
+		};
+		~fsKEpsSource() { }; 
+		void resetVariables() { };
+		void buildCallList() {
+			gaKSrc.gridAccInit(mpKSrc, AM_READ, gaCalls); 
+			gaESrc.gridAccInit(mpESrc, AM_READ, gaCalls); 
+			gaKDst.gridAccInit(mpKDst, AM_READWRITE, gaCalls); 
+			gaEDst.gridAccInit(mpEDst, AM_READWRITE, gaCalls); 
+			gaProd.gridAccInit(mpProd, AM_READ, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k)
+		{ 
+			int flag = getFlagAcc()(i,j,k);
+			if(!fgIsFluid(flag)) {
+				gaKDst.write(i,j,k) = 0.;
+				gaEDst.write(i,j,k) = 0.;
+				return;
+			}
+			// update K, Epsilon
+			Real ek = gaESrc(i,j,k) / gaKSrc(i,j,k);
+			gaKDst.write(i,j,k) += mDt * (gaProd(i,j,k) - gaESrc(i,j,k));
+			gaEDst.write(i,j,k) += mDt * ek * (TV_E1 * gaProd(i,j,k) - TV_E2 * gaESrc(i,j,k));			
+		};
+		void reduce(fsKEpsSource &op) { };
+
+	protected:
+		Grid<Real> *mpKSrc, *mpKDst, *mpESrc, *mpEDst, *mpProd;
+		GridAccessor<Real,0> gaKSrc, gaKDst, gaESrc, gaEDst, gaProd;
+		Real mDt;
+}; 
+
+
+// k-epsilon timestep
+class spKEpsilon : public SolverPlugin {
+	public:
+		spKEpsilon() : SolverPlugin() {};
+		~spKEpsilon() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGridK = params.FindOneString("k", "unnamed" );
+			mGridEpsilon = params.FindOneString("epsilon", "unnamed" );
+			mGridVel = params.FindOneString("vel", "vel-curr" );
+			mGridVisc = params.FindOneString("visc", "unnamed" );
+			mGridProd = params.FindOneString("prod", "unnamed" );
+			mGridTemp1 = params.FindOneString("temp1", "temp1" );
+			mGridTemp2 = params.FindOneString("temp2", "temp2" );
+			mGridStrain = params.FindOneString("strain", "" );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spKEpsilon"," dt="<<dt );
+			FlagGrid* flags = mpPlParams->getFluidSolver()->getGridFlags();
+			Grid<Vec3>* vel = mpPlParams->getGridVec3(mGridVel); 
+			Grid<Real>* k = mpPlParams->getGridReal(mGridK); 
+			Grid<Real>* epsilon = mpPlParams->getGridReal(mGridEpsilon); 
+			Grid<Real>* visc = mpPlParams->getGridReal(mGridVisc); 
+			Grid<Real>* prod = mpPlParams->getGridReal(mGridProd); 
+			Grid<Real>* ktemp = mpPlParams->getGridReal(mGridTemp1); 
+			Grid<Real>* epstemp = mpPlParams->getGridReal(mGridTemp2); 
+			Grid<Real>* strain = mGridStrain.empty() ? NULL : mpPlParams->getGridReal(mGridStrain); 
+			
+			// advect k-epsilon values
+			doSemiLagrangeReal (flags, vel, k, ktemp, dt);
+			doSemiLagrangeReal (flags, vel, epsilon, epstemp, dt);
+			
+			// compute intermediate fields
+			fsCompVisc(flags, ktemp, visc, epstemp);
+			fsCompProduction(flags, vel, prod, visc, strain);
+			
+			// gradient diffusion steps
+			fsGradDiff(flags, ktemp, k, visc, dt/TV_SK);
+			fsGradDiff(flags, epstemp, epsilon, visc, dt/TV_SE);
+			
+			// skip gradient diffusion
+			//goCopyGrid<Real>(k,ktemp);
+			//goCopyGrid<Real>(epsilon,epstemp);
+
+			// add source terms
+			fsKEpsSource(flags, ktemp, k, epstemp, epsilon, prod, dt);
+			return true;
+		};
+
+	protected:
+		std::string mGridK, mGridEpsilon, mGridVel, mGridVisc, mGridProd, mGridTemp1, mGridTemp2, mGridStrain;
+};
+
+// gradient diffusion operator
+// computes [scale * div ( const * grad ( grid ) ) ]
+class spGradDiff : public SolverPlugin {
+	public:
+		spGradDiff() : SolverPlugin() {};
+		~spGradDiff() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGridSrc = params.FindOneString("grid", "unnamed" );
+			mGridTemp = params.FindOneString("temp", "real-temp" );
+			mGridVisc = params.FindOneString("visc-grid", "unnamed" );
+			mScale = params.FindOneFloat("scale", 1. );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spGradDiff"," dt="<<dt << " grid : " << mGridSrc  );
+			Grid<Real>* src = mpPlParams->getGridReal(mGridSrc); 
+			Grid<Real>* tmp = mpPlParams->getGridReal(mGridTemp); 
+			Grid<Real>* visc = mpPlParams->getGridReal(mGridVisc); 
+			fsGradDiff(mpPlParams->getFluidSolver()->getGridFlags(), src,tmp,visc, mScale);
+			swapGrids(mpPlParams, mGridSrc, mGridTemp);			
+			return true;
+		};
+
+	protected:
+		std::string mGridSrc, mGridTemp, mGridVisc;
+		Real mScale;
+};
+
+
+
+SolverPlugin* MakeReynoldsPlugin(std::string name)
+{
+	if(name.compare( string("diffuse-gradient") )==0)
+		return new spGradDiff;
+	if(name.compare( string("k-epsilon") )==0)
+		return new spKEpsilon;
+	return NULL;
+}
+
+}

@@ -1,0 +1,878 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2008 Nils Thuerey
+ *
+ * Temp file for test plugins
+ *
+ *****************************************************************************/
+
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+#include "randomstream.h" 
+
+#include "pointsurface.h" 
+#include "ExpeKdTree.h"
+
+// surface point location
+// pos -> grid pos, round downwards, thus (0..1] is cell 0
+// display in glutGui adds 0.5dx to account for this
+
+namespace DDF { 
+
+
+class spPointsInit : public SolverPlugin {
+	public:
+		spPointsInit() : SolverPlugin(), 
+				mHIFac(1.), mMaxIter(5), mSigmaR( 1. ), mSigmaN( 1. ),
+				mPhiGrid("phi-curr"), mAddRandomPoints(0) 
+			{ };
+		~spPointsInit() { 
+			FluidSolver* solver = mpPlParams->getFluidSolver();
+			if(solver->mpPointSet) {
+				debMsg("spPointsInit","Removing point set vector");
+				//vector<SurfacePoint> *sp = (vector<SurfacePoint> *)solver->mpPointSet;
+				SurfacePointSet *sps = (SurfacePointSet *)solver->mpPointSet;
+				delete sps;
+			}
+		}; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mPhiGrid = params.FindOneString("phi-grid", mPhiGrid );
+			mAddRandomPoints = params.FindOneInt("add-random-points", mAddRandomPoints );
+
+			mHIFac = params.FindOneFloat("h-i-fac", mHIFac );
+			mMaxIter = params.FindOneInt("max-iter", mMaxIter );
+			mSigmaR = params.FindOneFloat("sigma-r", mSigmaR );
+			mSigmaN = params.FindOneFloat("sigma-n", mSigmaN );
+
+			return true; 
+		}
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			FluidSolver* solver = mpPlParams->getFluidSolver();
+			Grid<Real>* phi = solver->getParams()->getGridReal(mPhiGrid);
+			const Real dx =  solver->getParams()->getDeltaX();
+
+			if(!solver->mpPointSet) {
+				SurfacePointSet *sps = new SurfacePointSet();
+				vector<SurfacePoint> *p = sps->p();
+
+				FOR_IJK_GRID_BND(phi, 1) {
+					// grid cell position
+					Vec3 x = Vec3(
+							(Real)i / (Real)phi->getSizeX(), 
+							(Real)j / (Real)phi->getSizeY(), 
+							(Real)k / (Real)phi->getSizeZ() );
+					//debMsg("spPointsInit","at "<<PRINT_IJK<<" phi "<<phi->get(i,j,k) );
+					if(gDim==2) x[2] = 0.;
+
+					// unused , centered points...
+					if (0 && (phi->get(i,j,k) < 0.6) &&
+						  (phi->get(i,j,k) >-0.6) ) {
+
+						Vec3 n = Vec3(0.,0.,0.);
+						if (i>=1 && i<=phi->getSizeX()-2) n[0] = phi->get(i+1,j,k) - phi->get(i-1,j,k);
+						if (j>=1 && j<=phi->getSizeY()-2) n[1] = phi->get(i,j+1,k) - phi->get(i,j-1,k);
+						if (k>=1 && k<=phi->getSizeZ()-2) n[2] = phi->get(i,j,k+1) - phi->get(i,j,k-1);
+						if(gDim==2) n[2] = 0.;
+						normalize(n);
+
+						p->push_back( SurfacePoint( x, n)  );
+					}
+
+					// create points on cube faces
+					Vec3 n = Vec3(0.,0.,0.);
+					if ( SIGNUM(phi->get(i-1,j,k)) != SIGNUM(phi->get(i,j,k)) ) { 
+						if ((i>=1 && i<=phi->getSizeX()-2) )           n[0] = (phi->get(i+0,j,k) - phi->get(i-1,j,k))*1.0;
+						if ((j>=1 && j<=phi->getSizeY()-2) )           n[1] = (phi->get(i,j+1,k) - phi->get(i,j-1,k))*0.5;
+						if ((k>=1 && k<=phi->getSizeZ()-2) && gDim==3) n[2] = (phi->get(i,j,k+1) - phi->get(i,j,k-1))*0.5;
+						normalize(n);
+
+						p->push_back( SurfacePoint( x-Vec3(0.5*dx,0,0), n)  );
+					}
+					if ( SIGNUM(phi->get(i,j-1,k)) != SIGNUM(phi->get(i,j,k)) ) { 
+						if ((i>=1 && i<=phi->getSizeX()-2) )           n[0] = (phi->get(i+1,j,k) - phi->get(i-1,j,k))*0.5;
+						if ((j>=1 && j<=phi->getSizeY()-2) )           n[1] = (phi->get(i,j+0,k) - phi->get(i,j-1,k))*1.0;
+						if ((k>=1 && k<=phi->getSizeZ()-2) && gDim==3) n[2] = (phi->get(i,j,k+1) - phi->get(i,j,k-1))*0.5;
+						normalize(n);
+
+						p->push_back( SurfacePoint( x-Vec3(0,0.5*dx,0), n)  );
+					}
+					if (gDim==3 && ( SIGNUM(phi->get(i,j,k-1)) != SIGNUM(phi->get(i,j,k)) )) { 
+						if ((i>=1 && i<=phi->getSizeX()-2) )           n[0] = (phi->get(i+1,j,k) - phi->get(i-1,j,k))*0.5;
+						if ((j>=1 && j<=phi->getSizeY()-2) )           n[1] = (phi->get(i,j+1,k) - phi->get(i,j-1,k))*0.5;
+						if ((k>=1 && k<=phi->getSizeZ()-2) && gDim==3) n[2] = (phi->get(i,j,k+0) - phi->get(i,j,k-1))*1.0;
+						normalize(n); 
+						p->push_back( SurfacePoint( x-Vec3(0,0,0.5*dx), n)  );
+					}
+
+				}
+
+				debMsg("spPointsInit","Created "<<sps->p()->size() <<" points ");
+				solver->mpPointSet = sps;
+
+				// adding more, randomly sampled points
+				if(mAddRandomPoints > 0) {
+					RandomStream mRand(942);
+					vector<SurfacePoint> *sp = sps->p();
+					sps->rebuildKdtree();
+
+					// TODO use real settings?
+					// for now, set to use kernel width of 2dx, with defaults
+					sps->setParams(2., sps->mMaxIter, sps->mSigmaR, sps->mSigmaN, dx );
+
+					vector<Vec3> newPos; // new positions for points
+					vector<Vec3> newNor;
+
+					// parse all points... SLOW!
+					for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+						const Vec3 xorg = (*sp)[nbi].getPos();
+						const Vec3 xorgNorm = (*sp)[nbi].getNormal();
+						for (int j=0; j<mAddRandomPoints; j++) {
+							Vec3 rand = Vec3( mRand.getReal()-0.5, mRand.getReal()-0.5, mRand.getReal()-0.5 );
+							if(gDim==2) rand[2] = 0.;
+							Vec3 x = xorg + rand * dx * 1.0;
+							Vec3 n = xorgNorm;
+
+							//Real f; Vec3 gradF;
+							//sps->projectPoint( x,  f,gradF );
+							//x = x- f*gradF; n = getNormalized( gradF );
+
+							newPos.push_back( x );
+							newNor.push_back( n );
+						}
+					}
+
+					// insert...
+					for (int nbi=0; nbi<(int)newPos.size(); nbi++) {
+						sp->push_back( SurfacePoint( newPos[nbi], newNor[nbi] ) );
+					}
+
+					// project all points onto original surface
+					for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+						Vec3 xorg = (*sp)[nbi].getPos();
+						Real f; Vec3 gradF;
+						sps->projectPoint( xorg,  f,gradF );
+						(*sp)[nbi].setPos( xorg - f*gradF );
+					}
+
+				} // add more
+				debMsg("spPointsInit","Added random points, new size "<<sps->p()->size() <<" ");
+			}
+
+			// set SPS params, now the set has to exist!
+			SurfacePointSet *sps = (SurfacePointSet *)solver->mpPointSet;
+			sps->setParams(mHIFac, mMaxIter, mSigmaR, mSigmaN, dx );
+
+			return true;
+		};
+
+		// warning - these params exist twice...
+		// are subsequently set for SurfacePointSet object, as soon as it exists...
+		Real mHIFac;
+		int mMaxIter;
+		Real mSigmaR, mSigmaN; 
+
+	protected:
+		std::string mPhiGrid;
+		int mAddRandomPoints;
+};
+
+
+class spPointsAdvect : public SolverPlugin {
+	public:
+		spPointsAdvect() : SolverPlugin(), 
+				mVelGrid("vel-curr") { };
+		~spPointsAdvect() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mVelGrid = params.FindOneString("vel-grid", mVelGrid );
+			return true; 
+		}
+		virtual bool initPlugin() { return true; };
+
+		inline Vec3 getGridVel(FluidSolver* solver, Grid<Vec3>* vel, Vec3 srcpos, Vec3 dim, Real dx) {
+			Vec3 pVel(0.);
+			nVec3i index = vec2I( SurfacePoint::calcGridPos( srcpos, dim ) ); 
+
+			// check if velocity position is valid
+			if( (vel->checkIndexValid(index[0]-1,index[1]-1,index[2]-1)) &&
+			 	 (vel->checkIndexValid(index[0]+1,index[1]+1,index[2]+1)) ) {
+				// interpolate from grid
+				pVel = solver->interpolateVelocity(srcpos, vel, dx); 
+				if (gDim==2) pVel[2] = 0.;
+				pVel *= dx;
+			}
+			return pVel;
+		}
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			FluidSolver* solver = mpPlParams->getFluidSolver(); 
+			SurfacePointSet *sps = (SurfacePointSet *)solver->mpPointSet;
+			if (!sps) errFatal("spPointsComputeSDF","No point set!", SIMWORLD_GENERICERROR);
+			vector<SurfacePoint> *sp = sps->p();
+
+			Grid<Vec3>* vel = solver->getParams()->getGridVec3(mVelGrid);
+
+			const bool doNormalAdv = true;
+			const Vec3 dim = vec2R( vel->getSize() );
+			const Real dx =  solver->getParams()->getDeltaX();
+
+			// TODO, add higher order methods
+			for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+				const Vec3 orgPos = (*sp)[nbi].getPos();
+
+				Vec3 pVel = getGridVel(solver, vel, orgPos, dim,dx); 
+				(*sp)[nbi].advance(pVel, dt); 
+
+				// advect normal
+				if(doNormalAdv) {
+					const Vec3 pn = orgPos + (*sp)[nbi].getNormal() * dx; 
+					Vec3 pnVel = getGridVel(solver, vel, pn, dim, dx); 
+
+					Vec3 dst = pn + pnVel * dt;
+					Vec3 nn = dst - (*sp)[nbi].getPos();
+					normalize(nn);
+
+					//debMsg("Nadv","pos"<<orgPos<<" n"<<(*sp)[nbi].getNormal()<<" pn"<<pn<<" dst"<<dst<<" nn"<<nn);
+					(*sp)[nbi].setNormal( nn );
+				} 
+
+			}
+
+			// rebuild kdtree for new positions
+			sps->rebuildKdtree();
+
+			debMsg("spPointsAdvect","Advected "<<sp->size()<<" normals:"<<doNormalAdv);
+			return true;
+		};
+
+	protected:
+		std::string mVelGrid;
+};
+
+
+// constants for signed distance field
+const Real CONST_untouched = -1e14;
+const Real CONST_surface   = 1e14;
+const Real CONST_surfaceP  = CONST_surfaceP * 10.;
+
+class spPointsComputeSDF : public SolverPlugin {
+	public:
+		spPointsComputeSDF() : SolverPlugin(), 
+				mPhiGrid("phi-dest"),
+				mRemoveInner(0), mFloodFill(0), mDoMultipleIterations(0),
+				//mMinDist(0.1), mMaxDist(1.),
+				mRand(748)
+		{ };
+		~spPointsComputeSDF() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mPhiGrid = params.FindOneString("phi-grid", mPhiGrid );
+
+			//mMinDist = params.FindOneFloat("min-dist", mMinDist );
+			//mMaxDist = params.FindOneFloat("max-dist", mMaxDist );
+
+			mRemoveInner = params.FindOneInt("remove-inner", mRemoveInner );
+			mFloodFill = params.FindOneInt("flood-fill", mFloodFill );
+			mDoMultipleIterations = params.FindOneInt("do-multiple-iterations", mDoMultipleIterations );
+			//mTestFlag = params.FindOneInt("test-flag", mTestFlag );
+			return true; 
+		}
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt);
+
+	protected:
+		std::string mPhiGrid;
+		int mRemoveInner, mFloodFill, mDoMultipleIterations;
+		//int mTestFlag; // switch on/off various test parts...
+
+		//Real mMinDist, mMaxDist;
+
+		// random numbers for jittering
+		RandomStream mRand;
+};
+
+
+bool spPointsComputeSDF::performStep(Real dt) {
+	debMsg("spPointsComputeSDF","Computing surface... RemoveInner="<<mRemoveInner<<" FloodFill="<<mFloodFill
+			<<" DoMultipleIterations="<<mDoMultipleIterations);
+	FluidSolver* solver = mpPlParams->getFluidSolver();
+	FlagGrid* flags = solver->getParams()->getGridInt("flags");
+	Grid<Real>* phi = solver->getParams()->getGridReal(mPhiGrid);
+	SurfacePointSet *sps = (SurfacePointSet *)solver->mpPointSet;
+	if (!sps) errFatal("spPointsComputeSDF","No point set!", SIMWORLD_GENERICERROR);
+	vector<SurfacePoint> *sp = sps->p();
+	Expe::KdTree *kdtree = sps->getKdTree();
+
+	const Vec3 gridSize = vec2R( phi->getSize() );
+	const Real dx =  solver->getParams()->getDeltaX();
+	const Real gridScaleFactor = -1./dx;
+
+
+	// reset
+	FOR_IJK_GRID(phi) {
+		Real &phiValue = phi->get(i,j,k); 
+		phiValue = CONST_untouched;
+	}
+
+	// parse all points, mark surface cells
+	int BORD=(int)(sps->mHIFac)+1;
+	if(BORD<2) BORD = 2;
+	for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+		//std::cerr<<"spPointsComputeSDF-pos"<< (*sp)[nbi].getPos() <<"\n";
+		nVec3i xi = (*sp)[nbi].calcGridPosInt(gridSize);
+		if(!phi->checkIndexValid(xi[0],xi[1],xi[2])) {
+			//errFatal("spPointsComputeSDF","Invalid point pos !? "<< (*sp)[nbi].getPos() ,SIMWORLD_GENERICERROR);
+			sps->addDelPoint(nbi);
+			continue;
+		}
+
+		// prevent double markings...
+		if(phi->get(xi[0],xi[1],xi[2]) == CONST_surfaceP) 
+			continue;
+
+		//if(gDim==2) xi[2] = solver->get2dKstart();
+		phi->get(xi[0],xi[1],xi[2]) = CONST_surfaceP;
+
+		for(int si=-BORD; si<=BORD; si++) 
+			for(int sj=-BORD; sj<=BORD; sj++) 
+				for(int sk=-BORD; sk<=BORD; sk++) {
+					if(phi->checkIndexValid(xi[0]+si,xi[1]+sj,xi[2]+sk))
+						phi->get(xi[0]+si,xi[1]+sj,xi[2]+sk) = CONST_surface;
+				}
+	}
+	//return true;
+
+	int surfCnt = 0;
+	FOR_IJK_GRID(phi) {
+		if (phi->get(i,j,k) < CONST_surface) continue;
+		surfCnt++;
+
+		// grid cell position
+		Vec3 x = Vec3(
+					(0.0 + (Real)i) / (Real)phi->getSizeX(), 
+					(0.0 + (Real)j) / (Real)phi->getSizeY(), 
+					(0.0 + (Real)k) / (Real)phi->getSizeZ() );
+		if(gDim==2) x[2] = 0.;
+		const Vec3 x_org = x;
+
+		Real &phiValue = phi->get(i,j,k); 
+		if(sps->debugImls) debMsg("\n-RIMLS","at "<<PRINT_IJK<<" x="<<x  ); // debug output
+
+		// TODO add real convergence crit!
+
+		// start point projection
+		bool noPointsNear = false;
+		Real f;
+		Vec3 gradF;
+
+		// use f value from first iterations, or do multiple ones?
+		if (mDoMultipleIterations == 0) {
+			sps->projectPoint(x,f,gradF, &noPointsNear);
+			phiValue = f * gridScaleFactor;
+		} else {
+			Real sign = 1.; 
+			int iter2 = 0;
+			sps->projectPointIter( x,  f,gradF, &noPointsNear, &sign, &iter2);
+
+			// set distance between two points
+			phiValue = norm(x_org -x) * gridScaleFactor * sign;
+			if(0 || sps->debugImls) debMsg("RIMLS","at "<<PRINT_IJK<<" val="<<phiValue<<" iter2="<<iter2);
+		}
+
+		// mark points without neighbors as uninitialized
+		//if(noPointsNear) phiValue = CONST_untouched;
+	}
+
+	// remove values away from interface , can only correct smaller errors...
+	if (mFloodFill == 2) {
+		debMsg("RIMLS","FloodFill, voting ");
+		vector<nVec3i> sources;
+		FOR_IJK_GRID_BND(phi, 1) {
+			Real phiValue = phi->get(i,j,k); 
+			if (phiValue == CONST_untouched) continue;
+			// dont deal with interface values
+			if(phiValue>-1. && phiValue<1.) continue;
+
+			Real sign = 1.;
+			if(phiValue < 0.) sign = -1.;
+			//Real signInv = sign * -1.;
+
+			int outnb = 0;
+			if(sign>0.) {
+				if  (phi->get(i+1,j,k) < -1.) outnb++;
+				if  (phi->get(i-1,j,k) < -1.) outnb++;
+				if  (phi->get(i,j+1,k) < -1.) outnb++;
+				if  (phi->get(i,j-1,k) < -1.) outnb++;
+				if ((phi->get(i,j,k+1) < -1.) && (gDim==3)) outnb++;
+				if ((phi->get(i,j,k-1) < -1.) && (gDim==3)) outnb++;
+			} else {
+				if  (phi->get(i+1,j,k) >  1.) outnb++;
+				if  (phi->get(i-1,j,k) >  1.) outnb++;
+				if  (phi->get(i,j+1,k) >  1.) outnb++;
+				if  (phi->get(i,j-1,k) >  1.) outnb++;
+				if ((phi->get(i,j,k+1) >  1.) && (gDim==3)) outnb++;
+				if ((phi->get(i,j,k-1) >  1.) && (gDim==3)) outnb++;
+			}
+
+			// voting, we're outside...
+			if(outnb> 2) phi->get(i,j,k) = -2. * sign;
+		}
+	} // voting
+	// flood fill (queue)  , only inwards!
+	if (mFloodFill >= 1) {
+		debMsg("RIMLS","FloodFill ");
+		vector<nVec3i> sources;
+		FOR_IJK_GRID_BND(phi, 1) {
+			Real phiValue = phi->get(i,j,k); 
+			if (phiValue<0.) phiValue -= 1.;
+			else             phiValue += 1.;
+
+			// fill outer & inner
+			//if (phiValue != CONST_untouched) 
+
+			// fill only inner regions
+			if (phiValue != CONST_untouched && phiValue>0.) 
+			{
+				if  (phi->get(i+1,j,k) == CONST_untouched) sources.push_back( nVec3i(i+1,j,k) );
+				if  (phi->get(i-1,j,k) == CONST_untouched) sources.push_back( nVec3i(i-1,j,k) );
+				if  (phi->get(i,j+1,k) == CONST_untouched) sources.push_back( nVec3i(i,j+1,k) );
+				if  (phi->get(i,j-1,k) == CONST_untouched) sources.push_back( nVec3i(i,j-1,k) );
+				if ((phi->get(i,j,k+1) == CONST_untouched) && (gDim==3)) sources.push_back( nVec3i(i,j,k+1) );
+				if ((phi->get(i,j,k-1) == CONST_untouched) && (gDim==3)) sources.push_back( nVec3i(i,j,k-1) );
+
+				while (sources.size()>0) {
+					const int ni = sources[sources.size()-1][0];
+					const int nj = sources[sources.size()-1][1];
+					const int nk = sources[sources.size()-1][2];
+					sources.pop_back();
+					phi->get(ni,nj,nk) = phiValue;
+
+					if(phi->checkIndexValidWithBounds(ni,nj,nk, 1)) {
+						if  (phi->get(ni+1,nj,  nk  ) == CONST_untouched) sources.push_back( nVec3i(ni+1,nj,  nk) );
+						if  (phi->get(ni-1,nj,  nk  ) == CONST_untouched) sources.push_back( nVec3i(ni-1,nj,  nk) );
+						if  (phi->get(ni,  nj+1,nk  ) == CONST_untouched) sources.push_back( nVec3i(ni,  nj+1,nk) );
+						if  (phi->get(ni,  nj-1,nk  ) == CONST_untouched) sources.push_back( nVec3i(ni,  nj-1,nk) );
+						if ((phi->get(ni,  nj,  nk+1) == CONST_untouched) && (gDim==3)) sources.push_back( nVec3i(ni,nj,nk+1) );
+						if ((phi->get(ni,  nj,  nk-1) == CONST_untouched) && (gDim==3)) sources.push_back( nVec3i(ni,nj,nk-1) );
+					}
+				}
+			}
+		}
+	} // flood fill
+	debMsg("spPointsComputeSDF","Surface computed, "<<surfCnt<<" surface cells ");
+
+
+
+	if (mRemoveInner) {
+		debMsg("RIMLS","RemoveInner ");
+		Grid<Real>* tmp = solver->getParams()->getGridReal("tmp3");
+		FOR_IJK_GRID(tmp) {
+			tmp->get(i,j,k) = SIGNUM(phi->get(i,j,k)); 
+		}	
+
+		FOR_IJK_GRID_BND(phi, 1) {
+			Real &p = phi->get(i,j,k);
+			//debMsg("Phivals","at "<<PRINT_IJK <<" "<< (tmp->get(i+1,j,k)) <<" "<< (tmp->get(i-1,j,k)) <<" "<< (tmp->get(i,j+1,k)) <<" "<< (tmp->get(i,j-1,k)) <<" "<< (tmp->get(i,j,k+1)) <<" "<< (tmp->get(i,j,k-1)) <<" " );
+			if( 
+					(tmp->get(i,j,k) == tmp->get(i+1,j,k) ) &&
+					(tmp->get(i,j,k) == tmp->get(i-1,j,k) ) &&
+					(tmp->get(i,j,k) == tmp->get(i,j+1,k) ) &&
+					(tmp->get(i,j,k) == tmp->get(i,j-1,k) ) &&
+					( (gDim==2) || (
+						(tmp->get(i,j,k) == tmp->get(i,j,k+1) ) &&
+						(tmp->get(i,j,k) == tmp->get(i,j,k-1) ) )) ) {
+				if (p < -sps->h_i) {
+					p = -2.;
+				}
+			}
+		}	
+
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			const Vec3 pos = (*sp)[nbi].getPos();
+			Vec3 gpos = (*sp)[nbi].calcGridPos(gridSize); 
+			Real phival = phi->getInterpolated( gpos );
+
+			if ( phival <= -2. ) {
+				sps->addDelPoint(nbi);
+			}
+		} 
+		debMsg("spPointsComputeSDF","Inner points removed: "<<sps->getRemoveCount());
+	}
+	
+	debMsg("RIMLS","Stats points:"<<sp->size() <<"\n");
+	return true;
+};
+
+class spPointsResample : public SolverPlugin {
+	public:
+		spPointsResample() : SolverPlugin(), 
+				mPhiGrid("phi-dest"),
+				//mRemoveInner(0), mFloodFill(0), mDoMultipleIterations(0),
+				mTestFlag(0), mMinDist(0.1), mMaxDist(1.),
+				mRand(748)
+		{ };
+		~spPointsResample() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mPhiGrid = params.FindOneString("phi-grid", mPhiGrid );
+
+			mMinDist = params.FindOneFloat("min-dist", mMinDist );
+			mMaxDist = params.FindOneFloat("max-dist", mMaxDist );
+
+			mTestFlag = params.FindOneInt("test-flag", mTestFlag );
+			return true; 
+		}
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt);
+
+	protected:
+		std::string mPhiGrid;
+		//int mRemoveInner, mFloodFill, mDoMultipleIterations;
+		int mTestFlag; // switch on/off various test parts...
+
+		Real mMinDist, mMaxDist;
+
+		// random numbers for jittering
+		RandomStream mRand;
+};
+
+bool spPointsResample::performStep(Real dt) {
+	//debMsg("spPointsResample","Computing surface... RemoveInner="<<mRemoveInner<<" FloodFill="<<mFloodFill <<" DoMultipleIterations="<<mDoMultipleIterations);
+	FluidSolver* solver = mpPlParams->getFluidSolver();
+	FlagGrid* flags = solver->getParams()->getGridInt("flags");
+	Grid<Real>* phi = solver->getParams()->getGridReal(mPhiGrid);
+	SurfacePointSet *sps = (SurfacePointSet *)solver->mpPointSet;
+	if (!sps) errFatal("spPointsResample","No point set!", SIMWORLD_GENERICERROR);
+	vector<SurfacePoint> *sp = sps->p();
+	Expe::KdTree *kdtree = sps->getKdTree();
+
+	const Vec3 gridSize = vec2R( phi->getSize() );
+	const Real dx =  solver->getParams()->getDeltaX();
+	const Real gridScaleFactor = -1./dx;
+
+	Grid<Real>* delGrid = solver->getParams()->getGridReal("tmp3"); 
+
+	// delete points with gradient
+	if(mTestFlag & 1) { 
+		debMsg("RIMLS","DeleteByGrad ");
+
+		// reset grid
+		FOR_IJK_GRID(delGrid) { 
+			delGrid->get(i,j,k) = 0.;
+		}	
+
+		//int removeCnt = 0;
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			Vec3 x = (*sp)[nbi].getPos();
+			Vec3 gridp = (*sp)[nbi].calcGridPos(gridSize);
+
+			Real f= 0.; 
+			Vec3 gradF= Vec3(0.);
+			sps->projectPoint(x,f,gradF); 
+
+			if ( norm(gradF) < 0.5 ) {
+				sps->addDelPoint(nbi);
+				delGrid->get(vec2I(gridp)) += 0.5;
+			}
+		}
+
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			//Vec3 currPos = (*sp)[nbi].getPos(); 
+			Vec3 gridp = (*sp)[nbi].calcGridPos( gridSize );
+
+			if(delGrid->get( vec2I(gridp) ) > 0.) {
+				sps->addDelPoint(nbi);
+			}
+		} 
+	} // del grad
+
+	// resample
+	if(mTestFlag & 4) {
+		debMsg("RIMLS","Resampling ");
+		// TODO check, what's a good number here?
+		//kdtree->setMaxNofNeighbors(5);
+		kdtree->setMaxNofNeighborsDefault();
+
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			if(sps->checkDelPoint(nbi)) continue;
+
+			const Vec3 currPos = (*sp)[nbi].getPos(); 
+			const Vec3 currNormal = (*sp)[nbi].getNormal(); 
+			const Vec3 gridp = (*sp)[nbi].calcGridPos( gridSize );
+			// setup local tangent direction
+			const Vec3 currLeft = cross(currNormal, Vec3(0.,0.,-1.) );
+
+			// find nb's
+			kdtree->doQueryBall(currPos, sps->h_i * 2.); // larger ball
+			//kdtree->doQueryK(currPos);
+			// TODO remove isolated points? use ball query?
+			const Expe::KdTree::NeighborList& nl = *(kdtree->getNeighborList()); 
+			// only find nearest one...
+
+			const Real maxDist = sps->h_i * mMaxDist;
+			const Real minDist = sps->h_i * mMinDist;
+			if( 3. * minDist >= maxDist) 
+				errFatal("RIMLS","Invalid min/max dist settings 3x"<<minDist<<" has to be less than "<<maxDist, SIMWORLD_GENERICERROR );
+			//debMsg("at"," max "<<maxDist<<" min "<<minDist );
+
+			int haveLeft = 0;
+			int haveRight = 0;
+			Real minDistLeft= 1e10, minDistRight = 1e10, minDelDist = 1e10;
+			//haveRight = haveLeft = 1; // add points off
+			int delIndex = -1;
+			for (int kdIter=0;kdIter<(int)kdtree->getNofFoundNeighbors();kdIter++) {
+				const int neighborIndex = nl[kdIter].index;
+				if(neighborIndex==nbi) continue;
+				const Vec3 nbPos = (*sp)[neighborIndex].getPos(); 
+				const Vec3 dpx = (nbPos-currPos);
+				const Real dist = norm( dpx );
+
+				//debMsg("at","pos="<<currPos<<" dist="<<dist<<" dot="<<dot(dpx, currNormal) );
+				if ( dot(dpx, currLeft) > 0. ) {
+					if( minDistRight > dist ) {
+						haveRight++;
+						minDistRight = dist; 
+					}
+				} else {
+					if( minDistLeft > dist ) {
+						haveLeft++; 
+						minDistLeft = dist;
+					}
+				}
+
+				// delete too close points, insert middle
+				if(1 && dist < minDist ) {
+					// check dot of normals? TODO check
+					if(dist < minDelDist) {
+						minDelDist = dist;
+						delIndex = neighborIndex;
+					}
+				}
+			}
+			//debMsg("at","pos="<<currPos<<" nbs"<<kdtree->getNofFoundNeighbors()<<" left"<<haveLeft<<" right"<<haveRight<<" "<< " dleft"<<minDistLeft<<" dright"<<minDistRight );
+
+			// TODO check flags against obstacles etc.?
+			// do actual point modificaations
+			if(1) {
+				if(delIndex>=0) {
+					sps->addDelPoint(nbi);
+					sps->addDelPoint(delIndex);
+
+					// insert midpoint...
+					Vec3 pnew_pos = Vec3( (currPos+ (*sp)[delIndex].getPos() ) * 0.5 );
+					Vec3 pnew_normal =  (*sp)[nbi].getNormal(); 
+					pnew_normal += (*sp)[delIndex].getNormal(); 
+					normalize( pnew_normal );
+
+					sps->addNewPoint( SurfacePoint( pnew_pos, pnew_normal) );
+					//debMsg("TTT","d1 "<<nbi<<" "<<delIndex<<" DELE!!!!! at "<<pnew.getPos());
+				} else {
+					if(haveLeft && minDistLeft > maxDist) {
+						Vec3 pnew_pos = Vec3( currPos - currLeft * 0.33 * minDistLeft );  
+						Real f; Vec3 gradF;
+						sps->projectPointIter( pnew_pos,  f,gradF); 
+
+						sps->addNewPoint( SurfacePoint( pnew_pos, currNormal) );
+						//debMsg("TTT","n2 "<<nbi<<" "<<" NEW  at "<< pnew.getPos());
+					} 
+					if(haveRight && minDistRight > maxDist) {
+						Vec3 pnew_pos = Vec3( currPos + currLeft * 0.33 * minDistRight );  
+						Real f; Vec3 gradF;
+						sps->projectPointIter( pnew_pos,  f,gradF); 
+
+						sps->addNewPoint( SurfacePoint( pnew_pos, currNormal) );
+						//debMsg("TTT","n3 "<<nbi<<" "<<" NEW  at "<< pnew.getPos());
+					} 
+				}
+			}
+
+		} // nbi
+
+		kdtree->setMaxNofNeighbors(256); // default?
+	}
+
+
+	// correct point pos & normals
+	if(mTestFlag & 2) { 
+		debMsg("RIMLS","ProjectPointPos ");
+		// corrected point positions
+		vector<Vec3> newPos;
+		newPos.resize( sp->size() );
+		vector<Vec3> newNor;
+		newNor.resize( sp->size() );
+
+		// parse all points... SLOW!
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			Vec3 x = (*sp)[nbi].getPos();
+
+			if(0) { // jitter
+				Vec3 rand = Vec3( mRand.getReal()-0.5, mRand.getReal()-0.5, mRand.getReal()-0.5 );
+				if(gDim==2) rand[2] = 0.;
+				x += rand * dx;
+			}
+
+			Vec3 normN;
+			Real f; Vec3 gradF;
+			sps->projectPointIter( x,  f,gradF); 
+			//sps->projectPoint( x,  f,gradF);   x -= f*gradF;
+
+			newPos[nbi] = x;
+		}
+
+
+		// smooth normals
+		const Real old_mHIFac = sps->mHIFac;
+		sps->setParams(2. * old_mHIFac, sps->mMaxIter, sps->mSigmaR, sps->mSigmaN, dx );
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			Vec3 x = (*sp)[nbi].getPos();
+
+			// approx normals
+			Real f; Vec3 gradF;
+			sps->projectPoint( x,  f,gradF); 
+			newNor[nbi] = getNormalized( gradF );
+
+			// mollify normal
+			/* Vec3 newn = (*sp)[nbi].getNormal();
+			sps->projectNormal(x,newn,f,gradF); 
+			normalize( newn );
+			newNor[nbi] = newn; // */ 
+		}
+		sps->setParams(old_mHIFac, sps->mMaxIter, sps->mSigmaR, sps->mSigmaN, dx );
+
+		for (int nbi=0; nbi<(int)sp->size(); nbi++) {
+			//(*sp)[nbi].setPos( newPos[nbi] );
+			(*sp)[nbi].setNormal( newNor[nbi] );
+
+			// OLD ... test compuing normal from phi grid
+			//Vec3 newNorm = Vec3(0.);
+			//const Real d = 0.2;
+			//newNorm[0] = phi->getInterpolated( gridp + Vec3(d,0.,0.) ) - phi->getInterpolated( gridp - Vec3(d,0.,0.) );
+			//newNorm[1] = phi->getInterpolated( gridp + Vec3(0.,d,0.) ) - phi->getInterpolated( gridp - Vec3(0.,d,0.) );
+			//newNorm[2] = phi->getInterpolated( gridp + Vec3(0.,0.,d) ) - phi->getInterpolated( gridp - Vec3(0.,0.,d) );
+			//if(gDim==2) newNorm[2] = 0.;
+			//Real n = normalize(newNorm);
+		}
+		// recompute kdtree done by advection...
+	}
+
+	// update list add & delete 
+	sps->handleInsertDeletes();
+
+	debMsg("RIMLS","Stats points:"<<sp->size() <<"\n");
+	return true;
+};
+
+
+// dampen velocity near obstacles in region
+class spDampenBndVelocity : public SolverPlugin {
+	public:
+		spDampenBndVelocity() : SolverPlugin(), mVelSrc("-unnamed1-"), 
+			mDamping(0.), mStart(0.), mEnd(1.) { };
+		~spDampenBndVelocity() { };
+		virtual bool initPlugin() { return true; };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVelSrc = params.FindOneString("grid", mVelSrc );
+			mDamping = params.FindOneVector("damping", mDamping );
+			mStart = params.FindOneVector("start", mStart );
+			mEnd = params.FindOneVector("end", mEnd );
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			Grid<Vec3>* velsrc = mpPlParams->getGridVec3(mVelSrc);
+
+			const Vec3 grav = getNormalized( mpPlParams->getFluidSolver()->getGravity() );
+			Vec3 f = mDamping *dt* mpPlParams->getDeltaX();
+
+			nVec3i gsize = velsrc->getSize();
+			nVec3i gstart = nVec3i( gsize[0] * mStart[0],  gsize[1] * mStart[1],  gsize[2] * mStart[2] );
+			nVec3i gend   = nVec3i( gsize[0] * mEnd  [0],  gsize[1] * mEnd  [1],  gsize[2] * mEnd  [2] );
+			// check sanity, BND=1
+			for (int i=0; i<3; i++) {
+				if( gstart[i] < 1 ) gstart[i] = 1;
+				if( gend  [i] > gsize[i]-2 ) gend[i]   = gsize[i]-2;
+			}
+			// 2d plane
+			if( gDim==2 ){
+				gstart[2] = gPatchSize/2;
+				gend[2] = gstart[2]+1;
+			}
+
+			debMsg("spDampenBndVelocity","step "<<dt<<" velsgrid:"<<mVelSrc<<", "<<gstart<<" to "<<gend<<", f="<<f);
+			// NOTE - right now dampens everywhere, not near obs!
+			for (int i=gstart[0]; i<gend[0]; i++) {
+				for (int j=gstart[1]; j<gend[1]; j++) {
+					for (int k=gstart[2]; k<gend[2]; k++) {
+						// modify with length along gravity
+						Real gravlen = -dot(velsrc->get(i,j,k) , grav);
+						// keep a minimum damping strength of 0.1
+						if(gravlen<0.1) gravlen = 0.1;
+						//velsrc->get(i,j,k) *= f;
+
+						// scale each component by inverse of f
+						//Vec3 &v = velsrc->get(i,j,k);
+						Vec3 fcVc;
+						for (int c=0; c<3; c++) { 
+							Real fac = MIN( f[c]*gravlen, Real(1.)); 
+							//fac = MAX( f[c], Real(1.));  // debug
+							fcVc = (1. - fac); 
+						}
+
+						//if(gravlen>0.) debMsg("g2g"," at "<<PRINT_IJK<<" "<<gravlen<<", "<<fcVc);
+						velsrc->get(i,j,k) *= fcVc;
+					}
+				}
+			}
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelSrc;
+		Vec3 mDamping, mStart, mEnd;
+};
+
+//*****************************************************************************
+// ...
+
+SolverPlugin* MakeTestPlugin(std::string name) {
+	
+	if(name.compare( "testTMPTMPNN1" )==0) {
+		return NULL;
+
+	} else if(name.compare( "points-init" )==0) {
+		return new spPointsInit;
+
+	} else if(name.compare( "points-advect" )==0) {
+		return new spPointsAdvect;
+
+	} else if(name.compare( "points-compute-sdf" )==0) {
+		return new spPointsComputeSDF;
+
+	} else if(name.compare( "points-resample" )==0) {
+		return new spPointsResample;
+
+	} else if(name.compare( "velocity-dampen-near-obs" )==0) {
+		return new spDampenBndVelocity;
+
+	} else if(name.compare( "testTMPTMPNN2" )==0) {
+		return NULL;
+
+	} // */
+
+	return NULL;
+}
+
+} // end namespace DDF 
+

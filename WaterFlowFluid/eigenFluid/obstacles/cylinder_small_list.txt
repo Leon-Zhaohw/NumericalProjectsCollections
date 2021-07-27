@@ -1,0 +1,13 @@
+cylinder_static ./obstacles/cylinder_small/cylinder_small1.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small2.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small3.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small4.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small5.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small6.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small7.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small7_1.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small8.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small9.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small10.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small11.txt
+cylinder_static ./obstacles/cylinder_small/cylinder_small12.txt

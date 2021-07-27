@@ -1,0 +1,8 @@
+center 0.48 -0.6 0.52
+velocity 0 0.15 0
+period 5
+axis z
+center 0.48 0.52 -0.6
+velocity 0 0 0.15
+period -5
+axis y

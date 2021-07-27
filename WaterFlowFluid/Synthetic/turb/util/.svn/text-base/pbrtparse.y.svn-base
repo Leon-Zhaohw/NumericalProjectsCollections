@@ -1,0 +1,470 @@
+
+/*
+ * pbrt source code Copyright(c) 1998-2007 Matt Pharr and Greg Humphreys
+ *
+ * All Rights Reserved.
+ * For educational use only; commercial use expressly forbidden.
+ * NO WARRANTY, express or implied, for this software.
+ * (See file License.txt for complete license)
+ */
+
+// NT how to add new statements: 
+// 1) edit pbrtlex
+// 2) add handling to pbrtparse
+// 3) add function headers to parser.h
+// 4) implement functionin parser.cpp, or make appropriate calls
+// 5) additional functions (MakeXXX etc.) in dynload.cpp
+// - done
+
+
+%{
+#include "globals.h"
+#include "parser.h"
+#include "paramset.h"
+#include <stdarg.h>
+
+extern int yylex( void );
+int line_num = 0;
+string current_file;
+
+#define YYMAXDEPTH 100000000
+
+void yyerror( char *str ) {
+	errFatal("PARSE-SEVERE", "Parsing error: '" << str<<"' in line "<<line_num , SIMWORLD_ERRPARSE); 
+}
+
+
+int cur_paramlist_allocated = 0;
+int cur_paramlist_size = 0;
+const char **cur_paramlist_tokens = NULL;
+void **cur_paramlist_args = NULL;
+int *cur_paramlist_sizes = NULL;
+bool *cur_paramlist_texture_helper = NULL;
+
+#define CPS cur_paramlist_size
+#define CPT cur_paramlist_tokens
+#define CPA cur_paramlist_args
+#define CPTH cur_paramlist_texture_helper
+#define CPSZ cur_paramlist_sizes
+
+typedef struct ParamArray {
+	int element_size;
+	int allocated;
+	int nelems;
+	void *array;
+} ParamArray;
+
+ParamArray *cur_array = NULL;
+bool array_is_single_string = false;
+
+#define NA(r) ((float *) r->array)
+#define SA(r) ((const char **) r->array)
+
+void AddArrayElement( void *elem ) {
+	if (cur_array->nelems >= cur_array->allocated) {
+		cur_array->allocated = 2*cur_array->allocated + 1;
+		cur_array->array = realloc( cur_array->array,
+			cur_array->allocated*cur_array->element_size );
+	}
+	char *next = ((char *)cur_array->array) + cur_array->nelems *
+		cur_array->element_size;
+	memcpy( next, elem, cur_array->element_size );
+	cur_array->nelems++;
+}
+
+ParamArray *ArrayDup( ParamArray *ra )
+{
+	ParamArray *ret = new ParamArray;
+	ret->element_size = ra->element_size;
+	ret->allocated = ra->allocated;
+	ret->nelems = ra->nelems;
+	ret->array = malloc(ra->nelems * ra->element_size);
+	memcpy( ret->array, ra->array, ra->nelems * ra->element_size );
+	return ret;
+}
+
+void ArrayFree( ParamArray *ra )
+{
+	free(ra->array);
+	delete ra;
+}
+
+void FreeArgs()
+{
+	for (int i = 0; i < cur_paramlist_size; ++i)
+		delete[] ((char *)cur_paramlist_args[i]);
+}
+
+static bool VerifyArrayLength( ParamArray *arr, int required,
+	const char *command ) {
+	if (arr->nelems != required) {
+		//Parse rror( "%s requires a(n) %d element array!", command, required);
+		errFatal("PARSE-ERROR","at "<<command<<" requires "<<required<<" arguments!", SIMWORLD_ERRPARSE);
+		return false;
+	}
+	return true;
+}
+
+enum { PARAM_TYPE_INT, PARAM_TYPE_BOOL, PARAM_TYPE_FLOAT, 
+	PARAM_TYPE_VECTOR, PARAM_TYPE_STRING };
+
+static void InitParamSet(ParamSet &ps, int count, const char **tokens,
+	void **args, int *sizes, bool *texture_helper);
+
+static bool lookupType(const char *token, int *type, string &name);
+
+#define YYPRINT(file, type, value)  \
+{ \
+	if ((type) == ID || (type) == STRING) \
+		fprintf ((file), " %s", (value).string); \
+	else if ((type) == NUM) \
+		fprintf ((file), " %f", (value).num); \
+}
+%}
+
+%union {
+char string[1024];
+float num; 
+ParamArray *ribarray;
+}
+
+%token <string> STRING ID
+%token <num> NUM
+%token LBRACK RBRACK
+
+%token SOLVERBEGIN SOLVEREND INIT_BEGIN INIT_END
+%token WORLDBEGIN WORLDEND
+
+%token GRID SOLVERPARAMS GLUTGUI_PARAMS FLUIDSOLVER REFERENCESOLVER SOLVERPLUGIN
+
+%token HIGH_PRECEDENCE NOISEFIELD
+
+%type<ribarray> array num_array string_array
+%type<ribarray> real_num_array real_string_array
+
+
+
+%%
+start: ri_stmt_list
+{
+};
+
+array_init: %prec HIGH_PRECEDENCE
+{
+	if (cur_array) ArrayFree( cur_array );
+	cur_array = new ParamArray;
+	cur_array->allocated = 0;
+	cur_array->nelems = 0;
+	cur_array->array = NULL;
+	array_is_single_string = false;
+};
+
+string_array_init: %prec HIGH_PRECEDENCE
+{
+	cur_array->element_size = sizeof( const char * );
+};
+
+num_array_init: %prec HIGH_PRECEDENCE
+{
+	cur_array->element_size = sizeof( float );
+};
+
+array: string_array
+{
+	$$ = $1;
+}
+| num_array
+{
+	$$ = $1;
+};
+
+string_array: real_string_array
+{
+	$$ = $1;
+}
+| single_element_string_array
+{
+	$$ = ArrayDup(cur_array);
+	array_is_single_string = true;
+};
+
+real_string_array: array_init LBRACK string_list RBRACK
+{
+	$$ = ArrayDup(cur_array);
+};
+
+single_element_string_array: array_init string_list_entry
+{
+};
+
+string_list: string_list string_list_entry
+{
+}
+| string_list_entry
+{
+};
+
+string_list_entry: string_array_init STRING
+{
+	char *to_add = strdup($2);
+	AddArrayElement( &to_add );
+};
+
+num_array: real_num_array
+{
+	$$ = $1;
+}
+| single_element_num_array
+{
+	$$ = ArrayDup(cur_array);
+};
+
+real_num_array: array_init LBRACK num_list RBRACK
+{
+	$$ = ArrayDup(cur_array);
+};
+
+single_element_num_array: array_init num_list_entry
+{
+};
+
+num_list: num_list num_list_entry
+{
+}
+| num_list_entry
+{
+};
+
+num_list_entry: num_array_init NUM
+{
+	float to_add = $2;
+	AddArrayElement( &to_add );
+};
+
+paramlist: paramlist_init paramlist_contents
+{
+};
+
+paramlist_init: %prec HIGH_PRECEDENCE
+{
+	cur_paramlist_size = 0;
+};
+
+paramlist_contents: paramlist_entry paramlist_contents
+{
+}
+|
+{
+};
+
+paramlist_entry: STRING array
+{
+	void *arg = new char[ $2->nelems * $2->element_size ];
+	memcpy(arg, $2->array, $2->nelems * $2->element_size);
+	if (cur_paramlist_size >= cur_paramlist_allocated) {
+		cur_paramlist_allocated = 2*cur_paramlist_allocated + 1;
+		cur_paramlist_tokens = (const char **) realloc(cur_paramlist_tokens, cur_paramlist_allocated*sizeof(const char *) );
+		cur_paramlist_args = (void * *) realloc( cur_paramlist_args, cur_paramlist_allocated*sizeof(void *) );
+		cur_paramlist_sizes = (int *) realloc( cur_paramlist_sizes, cur_paramlist_allocated*sizeof(int) );
+		cur_paramlist_texture_helper = (bool *) realloc( cur_paramlist_texture_helper, cur_paramlist_allocated*sizeof(bool) );
+	}
+	cur_paramlist_tokens[cur_paramlist_size] = $1;
+	cur_paramlist_sizes[cur_paramlist_size] = $2->nelems;
+	cur_paramlist_texture_helper[cur_paramlist_size] = array_is_single_string;
+	cur_paramlist_args[cur_paramlist_size++] = arg;
+	ArrayFree( $2 );
+};
+
+ri_stmt_list: ri_stmt_list ri_stmt
+{
+}
+| ri_stmt
+{
+};
+
+ri_stmt:
+INIT_BEGIN
+{
+	ddfInitBlockBegin();
+}
+| INIT_END
+{
+	ddfInitBlockEnd();
+}
+| SOLVERBEGIN
+{
+	ddfSolverBlockBegin();
+}
+| SOLVEREND
+{
+	ddfSolverBlockEnd();
+}
+| SOLVERPARAMS STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParseSolverParams($2, params);
+	FreeArgs();
+}
+| GLUTGUI_PARAMS STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParseGlutGuiParams($2, params);
+	FreeArgs();
+}
+| NOISEFIELD STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParseNoiseField($2, params);
+	FreeArgs();
+}
+| FLUIDSOLVER STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParseSolver($2, params);
+	FreeArgs();
+}
+| REFERENCESOLVER STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfReferenceSolver($2, params);
+	FreeArgs();
+}
+| SOLVERPLUGIN STRING paramlist
+{
+	// init global parameters
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParsePlugin($2, params);
+	FreeArgs();
+}
+| GRID STRING paramlist
+{
+	// allocate new named grid
+	ParamSet params;
+	InitParamSet(params, CPS, CPT, CPA, CPSZ, CPTH);
+	ddfParseGrid($2, params);
+	FreeArgs();
+}
+| WORLDBEGIN
+{
+	pbrtWorldBegin();
+}
+| WORLDEND
+{
+	pbrtWorldEnd();
+};
+%%
+
+
+static void InitParamSet(ParamSet &ps, int count, const char **tokens,
+		void **args, int *sizes, bool *texture_helper) {
+	ps.Clear();
+	for (int i = 0; i < count; ++i) {
+		int type;
+		string name;
+		if (lookupType(tokens[i], &type, name)) {
+			void *data = args[i];
+			int nItems = sizes[i];
+			if (type == PARAM_TYPE_INT) {
+				// parser doesn't handle ints, so convert from floats here....
+				int nAlloc = sizes[i];
+				int *idata = new int[nAlloc];
+				float *fdata = (float *)data;
+				for (int j = 0; j < nAlloc; ++j)
+					idata[j] = int(fdata[j]);
+				ps.AddInt(name, idata, nItems);
+				delete[] idata;
+			}
+			else if (type == PARAM_TYPE_BOOL) {
+				// treat as ints
+				// parser doesn't handle ints, so convert from floats here....
+				int nAlloc = sizes[i];
+				bool *bdata = new bool[nAlloc];
+				float *fdata = (float *)data;
+				for (int j = 0; j < nAlloc; ++j)
+					bdata[j] = int(fdata[j]) != 0;
+				ps.AddBool(name, bdata, nItems);
+				delete[] bdata;
+
+				/* //pbrt org: strings -> bools
+				int nAlloc = sizes[i];
+				bool *bdata = new bool[nAlloc];
+				for (int j = 0; j < nAlloc; ++j) {
+					// can happen?
+					if(data == NULL) continue; 
+
+					string s(*((const char **)data));
+					if (s == "true") bdata[j] = true;
+					else if (s == "false") bdata[j] = false;
+					else {
+						errFatal("PARSE-WARN","Value \""<< s.c_str()<<"\" unknown for boolean parameter \""<<tokens[i] <<"\"." "Using \"false\"." , SIMWORLD_ERRPARSE);
+						bdata[j] = false;
+					}
+				}
+				ps.AddBool(name, bdata, nItems);
+				delete[] bdata; // */
+			}
+			else if (type == PARAM_TYPE_FLOAT) {
+				ps.AddFloat(name, (float *)data, nItems);
+			} else if (type == PARAM_TYPE_VECTOR) {
+				float *f  = (float*)data;
+				// manually convert - precision of vectors might be double...
+				DDF::Vec3 vec = DDF::Vec3(f[0], f[1], f[2]);
+				ps.AddVector(name, &vec, nItems / 3);
+			} else if (type == PARAM_TYPE_STRING) {
+				string *strings = new string[nItems];
+				for (int j = 0; j < nItems; ++j)
+					strings[j] = string(*((const char **)data+j));
+				ps.AddString(name, strings, nItems);
+				delete[] strings;
+			}
+		} else {
+			errFatal("PARSE-WARN","Type of parameter \""<< tokens[i]  <<"\" is unknown" , SIMWORLD_ERRPARSE);
+		}
+	}
+}
+
+static bool lookupType(const char *token, int *type, string &name) {
+	//Assert(token != NULL); // debug
+
+	*type = 0;
+	const char *strp = token;
+	while (*strp && isspace(*strp))
+		++strp;
+	if (!*strp) {
+		errFatal("PARSE-ERROR", "Parameter \""<< token <<"\" doesn't have a type declaration?!" , SIMWORLD_ERRPARSE);
+		return false;
+	}
+	#define TRY_DECODING_TYPE(name, mask) \
+		if (strncmp(name, strp, strlen(name)) == 0) { \
+			*type = mask; strp += strlen(name); \
+		}
+	     TRY_DECODING_TYPE("float",    PARAM_TYPE_FLOAT)
+	else TRY_DECODING_TYPE("real",     PARAM_TYPE_FLOAT)
+	else TRY_DECODING_TYPE("integer",  PARAM_TYPE_INT)
+	else TRY_DECODING_TYPE("int",      PARAM_TYPE_INT)
+	else TRY_DECODING_TYPE("bool",     PARAM_TYPE_BOOL)
+	else TRY_DECODING_TYPE("vector",   PARAM_TYPE_VECTOR)
+	else TRY_DECODING_TYPE("vec3",     PARAM_TYPE_VECTOR)
+	else TRY_DECODING_TYPE("string",   PARAM_TYPE_STRING)
+	else {
+		errFatal("PARSE-ERROR", "Unable to decode type for token \""<< token <<"\"" , SIMWORLD_ERRPARSE);
+		return false;
+	}
+	while (*strp && isspace(*strp))
+		++strp;
+	name = string(strp);
+
+	return true;
+}
+

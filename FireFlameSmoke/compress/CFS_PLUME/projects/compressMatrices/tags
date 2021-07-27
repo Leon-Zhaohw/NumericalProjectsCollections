@@ -1,0 +1,16 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.8	//
+CC	Makefile	/^CC         = g++$/;"	m
+CFLAGS	Makefile	/^CFLAGS     = ${CFLAGS_COMMON} -I..\/..\/src\/cubature -I..\/..\/src\/Eigen\/ -I..\/..\/src\/compression$/;"	m
+EXECUTABLE	Makefile	/^EXECUTABLE = ..\/..\/bin\/compressMatrices$/;"	m
+LDFLAGS	Makefile	/^LDFLAGS    = ${LDFLAGS_COMMON}$/;"	m
+OBJECTS	Makefile	/^OBJECTS    = $(SOURCES:.cpp=.o)$/;"	m
+PreprocessEncoder	compressMatrices.cpp	/^void PreprocessEncoder(COMPRESSION_DATA* data0, COMPRESSION_DATA* data1, COMPRESSION_DATA* data2, int maxIterations, const char* filename)$/;"	f
+PreprocessSingularValues	compressMatrices.cpp	/^void PreprocessSingularValues(const char* filename, double threshold)$/;"	f
+SOURCES	Makefile	/^SOURCES    = compressMatrices.cpp \\$/;"	m
+fileExists	compressMatrices.cpp	/^bool fileExists(const string& filename)$/;"	f
+main	compressMatrices.cpp	/^int main(int argc, char* argv[]) {$/;"	f

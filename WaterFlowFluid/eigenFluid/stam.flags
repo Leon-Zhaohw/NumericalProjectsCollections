@@ -1,0 +1,31 @@
+#Resolution of the grid.
+--xRes=256
+--yRes=256
+
+#fluid parameters.
+--dt=0.1
+--buoyancy=0.005
+--added_smoke_density=1.0
+
+# Parameters for the source of the smoke
+--source_smoke_xpos=64
+--source_smoke_ypos=128
+--source_smoke_width=4
+--source_smoke_height=10
+
+#control parameters.
+--total_frame=7000
+--add_density=false
+
+#Boundary settings.
+--wall_left=true
+--wall_right=false
+--wall_top=true
+--wall_bottom=true
+
+#particles
+--total_num_particles=1000
+--particle_length_factor=0.01
+
+#MISC
+--logtostderr

@@ -1,0 +1,49 @@
+LookAt .5  .7  1.1   0.5 0 0.2   0 1 0
+Camera "perspective" "float fov" [40.0]
+Sampler "bestcandidate" "integer pixelsamples" [1]
+Film "image" "integer xresolution" [400] "integer yresolution" [300] "string filename" ["render_sta.exr"]
+
+VolumeIntegrator "single" "float stepsize" [.001]
+
+WorldBegin
+
+#LightSource "point" "point from" [-5 2 -0.5] "color I" [1020 520 520]
+LightSource "point" "point from" [3 4 0] "color I" [4200 3000 3000] 
+
+# scene
+
+AttributeBegin
+	Translate 0.25 0.24 0.2625
+	Material "matte" "color Kd" [0.1 0.015 0]
+	Shape "sphere" "float radius" [0.1]
+AttributeEnd
+
+Material "matte" "color Kd" [0.1 0.015 0]	 
+Shape "trianglemesh" "integer indices" [0 4 6 0 6 2 1 3 7 1 7 5 0 1 5 0 5 4 2 6 7 2 7 3 0 2 3 0 3 1 4 5 7 4 7 6 ]
+"point P" [0.2 0 0.225 0.3 0 0.225 0.2 0.24 0.225 0.3 0.24 0.225 0.2 0 0.3 0.3 0 0.3 0.2 0.24 0.3 0.3 0.24 0.3 ]
+
+Shape "trianglemesh" "integer indices" [0 4 6 0 6 2 1 3 7 1 7 5 0 1 5 0 5 4 2 6 7 2 7 3 0 2 3 0 3 1 4 5 7 4 7 6 ]
+"point P" [0.3 0 0.4875 0.5 0 0.4875 0.3 0.12 0.4875 0.5 0.12 0.4875 0.3 0 0.675 0.5 0 0.675 0.3 0.12 0.675 0.5 0.12 0.675 ]
+
+Shape "trianglemesh" "integer indices" [0 4 6 0 6 2 1 3 7 1 7 5 0 1 5 0 5 4 2 6 7 2 7 3 0 2 3 0 3 1 4 5 7 4 7 6 ]
+"point P" [0.6 0 0.225 0.65 0 0.225 0.6 0.16 0.225 0.65 0.16 0.225 0.6 0 0.375 0.65 0 0.375 0.6 0.16 0.375 0.65 0.16 0.375 ]
+ 
+
+AttributeBegin
+	Include "volume_sta.pbrt"
+	"color sigma_a" [100 100 100] 
+	"color sigma_s" [80 80 80]
+AttributeEnd
+
+# floor
+Material "matte" "color Kd" [0.0 0.015 0.10] # blue bg
+Translate 0  0.01 0
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+	"point P" [-50 0.0 -50  50 0.0 -50  50 0.0 50  -50 0.0 50]
+
+# black background
+Material "matte" "color Kd" [0 0 0]
+Shape "trianglemesh" "integer indices" [0 1 2 2 3 0]
+"point P" [ -500 -100 100  500 -100 100   500 100 100  -500 100 100 ]
+
+WorldEnd

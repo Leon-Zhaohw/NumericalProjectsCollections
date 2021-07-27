@@ -1,0 +1,1428 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2008 Nils Thuerey 
+ *
+ * Free surface plugins
+ *
+ *****************************************************************************/
+
+// lsdebug
+#include <fstream>
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+
+
+double globAvgCurvLs = 0.; // DEBUG
+
+namespace DDF { 
+
+
+class spluginSetFreesurfBcs : public SolverPlugin {
+	public:
+		spluginSetFreesurfBcs() : SolverPlugin(),
+   				mVels("-unnamed1-") { };
+		~spluginSetFreesurfBcs() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mVels = params.FindOneString("gridname", mVels );
+			return true;
+		};
+		virtual bool initPlugin() {
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginSetFreesurfBcs","step "<<dt<<" "<<mVels);
+			Grid<Vec3>* vel = mpPlParams->getGridVec3(mVels);
+
+			// set velocities at empty cell boundaries
+			// for the free surface (and e.g. fast marching)
+			//const int twodKs = mpPlParams->getFluidSolver()->get2dKstart();
+			//const int twodKe = mpPlParams->getFluidSolver()->get2dKend();
+			//const nVec3i gridInitDim = mpPlParams->getFluidSolver()->getGridInitDim();
+
+			FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+			//FOR_IJK(twodKs,twodKe,  1,gridInitDim[1]-1,   1,gridInitDim[0]-1) {
+			FOR_IJK_GRID_BND(pFlags, 1) {
+
+				// empty cells at positive side of fluid interface
+				// cells - init from fluid
+				if (fgIsFluid(pFlags->getGlobal(i,j,k) )) {
+					if( (fgIsEmpty(pFlags->getGlobal(i+1,j,k) )) ){
+						vel->getGlobal(i+1,j,k)[0] = vel->getGlobal(i,j,k)[0];
+					}
+					if( (fgIsEmpty(pFlags->getGlobal(i,j+1,k) )) ){
+						vel->getGlobal(i,j+1,k)[1] = vel->getGlobal(i,j,k)[1];
+					}
+					if( (fgIsEmpty(pFlags->getGlobal(i,j,k+1) )) ){
+						vel->getGlobal(i,j,k+1)[2] = vel->getGlobal(i,j,k)[2];
+					}
+				} // */
+
+				// "left" sides of fluid - fluid cells neighboring
+				// empty cells along neg. dir, get velocities from fluid 
+				if (fgIsFluid(pFlags->getGlobal(i,j,k) )) {
+					if( (fgIsEmpty(pFlags->getGlobal(i-1,j,k) )) 
+					 && (fgIsFluid(pFlags->getGlobal(i+1,j,k) )) ) {
+						vel->getGlobal(i,j,k)[0] = vel->getGlobal(i+1,j,k)[0];
+					}
+					if( (fgIsEmpty(pFlags->getGlobal(i,j-1,k) )) 
+					 && (fgIsFluid(pFlags->getGlobal(i,j+1,k) )) ) {
+						vel->getGlobal(i,j,k)[1] = vel->getGlobal(i,j+1,k)[1];
+					}
+					if( (fgIsEmpty(pFlags->getGlobal(i,j,k-1) )) 
+					 && (fgIsFluid(pFlags->getGlobal(i,j,k+1) )) ) {
+						vel->getGlobal(i,j,k)[2] = vel->getGlobal(i,j,k+1)[2];
+					}
+				}// */
+			} 
+
+			return true;
+		};
+
+	protected:
+		std::string mVels;
+};
+
+
+// initialize a solver from another solver in the world
+// in regular intervals (mostly set free surface position)
+// used for surface learning tests
+class spluginInitFrom : public SolverPlugin {
+	public:
+		spluginInitFrom() : SolverPlugin(),
+   				mName("-unnamed1-"), mErrName("-unnamed2-"), mFileoutName(""), 
+					mInitSimTime(-1.), mInterval(-1.), mLastInitTime(-100.) { };
+		~spluginInitFrom() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mName = params.FindOneString("name", mName );
+			mErrName = params.FindOneString("error-comp", mErrName );
+			mInterval = params.FindOneFloat("interval", mInterval );
+			mFileoutName = params.FindOneString("err-func-outfile", mFileoutName);
+
+			if (mFileoutName.length() > 0) { 
+				std::fstream df;
+				df.open(mFileoutName.c_str(), std::ios::trunc | std::ios::out);
+				// reset...
+				df.close();
+			}
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spluginInitFrom","init");
+			mInitSimTime = 0.;
+			return true;
+		};
+
+		virtual bool performStep(Real org_dt);
+	protected:
+		// name of solver to init from
+		std::string mName;
+		// name of the error comparison grid
+		std::string mErrName;
+		// output file for erro function
+		std::string mFileoutName;
+
+		Real mInitSimTime; 
+		// interval
+		Real mInterval; 
+		Real mLastInitTime; 
+};
+
+
+// check for INVALIDTIME
+#define isInvalid(x) ((x)<=-1000.) 
+#define INIT_SRC_VARS \
+			int si = stepFac*i;\
+			int sj = stepFac*j;\
+			int sk = stepFac*k;\
+			if(gDim==2) { sk = srcSolver->get2dKstart(); }
+	/* end INIT_SRC_VARS */
+
+// perform the actual re-initialization from the source solver
+static Real gMinX1=1e5, gMaxX1=-1e5;
+static Real gMinX2=1e5, gMaxX2=-1e5;
+bool spluginInitFrom::performStep(Real org_dt) {
+
+	Real dt = org_dt * mpPlParams->getDeltaX(); 
+	debMsg("spluginInitFrom","dt="<<dt<<" name:"<<mName<<"; initSimTime="<<
+			mInitSimTime<<", last="<<mLastInitTime<<", interval="<<mInterval ); 
+
+	const char* nameCurrVel = "vel-curr";
+	const char* nameFlags = "flags";
+	const char* namePhi = "phi-curr";
+
+	// err func output
+	std::fstream fout;
+	bool foutOpen = false;
+	if (mFileoutName.length() > 0) { 
+		fout.open(mFileoutName.c_str(), std::ios::app | std::ios::out);
+		foutOpen = true;
+	}
+
+	FluidSolver* srcSolver = ddfWorldFindSolver(mName);
+	if(!srcSolver) {
+		errMsg("spluginInitFrom","Source solver '"<<mName<<"' not found!");
+		return false;
+	}
+	Grid<Vec3>* dstvel = mpPlParams->getGridVec3(nameCurrVel);
+	Grid<Vec3>* srcvel = srcSolver->getParams()->getGridVec3(nameCurrVel);
+	Grid<int>* dstflags = mpPlParams->getGridInt(nameFlags);
+	Grid<int>* srcflags = srcSolver->getParams()->getGridInt(nameFlags);
+	Grid<Real>* dstphi = mpPlParams->getGridReal(namePhi);
+	Grid<Real>* srcphi = srcSolver->getParams()->getGridReal(namePhi);
+	//LevelSet* srcls = srcSolver->getLevelSet();
+	//LevelSet* dstls = mpPlParams->getFluidSolver()->getLevelSet();
+
+	//const nVec3i grs = mpPlParams->getFluidSolver()->getGridInitDim();
+	const nVec3i grs = srcphi->getSize();
+	int ks = 1;
+	int ke = grs[2]-1;
+	if(gDim==2) {
+		ks = mpPlParams->getFluidSolver()->get2dKstart();
+		ke = ks+1;
+	}
+	int stepFac = srcSolver->getParams()->mStepFactor;
+	Real lsScaleFac = 1. / (Real)stepFac;
+
+
+	/*
+	Real minCurv =  10000.;
+	Real maxCurv = -10000.;
+	if(mErrName.length()>0) {
+		Grid<Real>* errVal = mpPlParams->getGridReal(mErrName);
+
+		// compute over whole array
+		FOR_IJK(ks,ke,  1,grs[1]-1,   1,grs[0]-1) { 
+		//FOR_IJK(ks-(gDim==3?1:0),ke-(gDim==3?1:0),  0,grs[1]-0,   0,grs[0]-0) { 
+			int flag = dstflags->getGlobal(i,j,k);
+			errVal->getGlobal(i,j,k) = -1.;
+
+			// curvature test
+			Real curv = -1.;
+			if(ABS(dstls->phi(i,j,k))<=2.) {
+				curv = dstls->computeCurvature(i,j,k);
+				if(curv>maxCurv) maxCurv = curv;
+				if(curv<minCurv) minCurv = curv;
+			}
+			//errVal->getGlobal(i,j,k) = curv; continue;
+
+			//if( (fgIsObstacle(flag)) || (fgIsEmpty(flag)) ) { continue; }
+			if(!fgIsFluid(flag)) continue;
+
+			// compute error...
+			INIT_SRC_VARS;
+
+			Real errPhi = 0.;
+			Real phiSrc = srcls->phi(si,sj,sk);
+			Real phiDst = dstls->phi(i,j,k);
+			if( (!isInvalid(phiSrc)) && (!isInvalid(phiDst)) ) {
+				phiSrc *= lsScaleFac;
+				errPhi = ABS(phiSrc-phiDst);
+				//debMsg("ERR"," at "<<PRINT_IJK<<" "<<errPhi );
+			} else {
+				// shouldnt happen that they really differ...
+			}
+
+			// vel err
+			Real errVel = norm(dstvel->getGlobal(i,j,k) - srcvel->getGlobal(si, sj, sk));
+
+			const Real errWeight = 0.5;
+			const Real errFinal = errVel * errWeight + errPhi*(1.-errWeight); 
+			//errVal->getGlobal(i,j,k) = errFinal;
+
+			// check if interface cell
+			bool isInterface = false;
+			if((fgIsEmpty(dstflags->getGlobal(i+1,j ,k ))) ||
+				(fgIsEmpty(dstflags->getGlobal(i-1,j ,k ))) ||
+				(fgIsEmpty(dstflags->getGlobal(i ,j+1,k ))) ||
+				(fgIsEmpty(dstflags->getGlobal(i ,j-1,k ))) ||
+				(fgIsEmpty(dstflags->getGlobal(i ,j ,k+1))) ||
+				(fgIsEmpty(dstflags->getGlobal(i ,j ,k-1))) ) {
+			  isInterface = true;
+			}
+
+			//if(foutOpen) { fout << 0<<" 1:"<<i<<" 2:"<<j  <<std::endl; }
+
+			// store actual value
+			if(errFinal>0.1)
+			if(isInterface && curv>-1.) {
+			  const Real x1 = curv;
+			  const Real x2 = norm( dstvel->getGlobal(i,j,k) );
+			  if(x1>gMaxX1) gMaxX1=x1;
+			  if(x1<gMinX1) gMinX1=x1;
+			  if(x2>gMaxX2) gMaxX2=x2;
+			  if(x2<gMinX2) gMinX2=x2;
+			  //const Real y = errFinal;
+			  const Real y = (errFinal>0.5? -1:1);
+			  // write to file...
+			  if(foutOpen) {
+				 //fout << x1<<" "<<x2<<" "<<y  <<std::endl;
+				 fout << y<<" 1:"<<x1<<" 2:"<<x2  <<std::endl; // libsvm
+			  }
+			  errVal->getGlobal(i,j,k) = errFinal;
+			  //errVal->getGlobal(i,j,k) = curv;
+			}
+		}
+	}
+	debMsg("errCUrvature","x1 min="<<gMinX1<<" max="<<gMaxX1 );
+	debMsg("errCUrvature","x2 min="<<gMinX2<<" max="<<gMaxX2 );
+	// */
+
+	// copy levelset values in intervals
+	mInitSimTime += dt;
+	if(mInterval>0. && 
+			  (mInitSimTime-mLastInitTime >mInterval) ) {
+		myTime_t reinittstart = getTime(); 
+		mLastInitTime = mInitSimTime;
+
+		FOR_IJK(ks,ke,  1,grs[1]-1,   1,grs[0]-1) { 
+			if(fgIsObstacle(dstflags->getGlobal(i,j,k))) continue;
+			INIT_SRC_VARS;
+
+			dstvel->getGlobal(i,j,k) = srcvel->getGlobal(si, sj, sk);
+			dstflags->getGlobal(i,j,k) = srcflags->getGlobal(si, sj, sk);
+
+			//Real val = srcls->phi(si,sj,sk);
+			Real val = srcphi->getGlobal(si,sj,sk);
+			if(!isInvalid(val)) val *= lsScaleFac; 
+			//dstls->phi(i,j,k) = val;
+			dstphi->getGlobal(i,j,k) = val;
+			//debMsg("spluginInitFrom","at "<<PRINT_IJK<<" to "<< dstvel->getGlobal(i,j,k) <<" from "<< PRINT_VEC(si,sj,sk) );
+		}
+
+		myTime_t reinittend = getTime(); 
+		debMsg("spluginInitFrom","took "<< getTimeString(reinittend-reinittstart)<<" ");
+	}
+
+	if(foutOpen) {
+		fout.close();
+	}
+// */
+	return true;
+};
+
+
+// when phi-corr grid is given, the near IF values are corrected once
+// while trying to move the interface as little as possible
+class spluginReinitMarching : public SolverPlugin {
+	public:
+		spluginReinitMarching() : SolverPlugin(), mMaxTime(4.), 
+			mPhiGrid("phi-curr"), mPhiCorr(""),	mValTransport(1) { };
+		~spluginReinitMarching() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mMaxTime = params.FindOneFloat("max-time", mMaxTime );
+			mPhiGrid = params.FindOneString("phi", mPhiGrid );
+			mPhiCorr = params.FindOneString("phi-corr", mPhiCorr );
+			mValTransport = params.FindOneInt("val-transp", mValTransport);
+			return true; 
+		};
+		virtual bool initPlugin() { return true; }; 
+		virtual bool performStep(Real dt) {
+			if(!mpPlParams->getFluidSolver()->getLevelSet()) {
+				debMsg("spluginReinitMarching","No level set found!");
+				return false;
+			}
+			Grid<Real> *phiAr = mpPlParams->getGridReal(mPhiGrid);
+			FlagGrid *fmFlags = mpPlParams->getGridInt("fm-flags");
+			FlagGrid *fluidFlags = mpPlParams->getGridInt("flags");
+
+			if(mPhiCorr.length() > 0) {
+				Grid<Real>* tmp = mpPlParams->getGridReal( mPhiCorr );
+				const Real maxDist = sqrt( (Real)gDim );
+				debMsg("spluginReinitMarching","Correcting near interface values");
+				FOR_IJK_GRID(phiAr) {
+					Real &val = phiAr->get(i,j,k); 
+
+					Real targetVal = 0., targetCnt = 0.;
+					for (int nbCnt=0; nbCnt< 2*gDim ; nbCnt++) {
+						const int ni = i+nbX[nbCnt], nj = j+nbY[nbCnt], nk = k+nbZ[nbCnt];
+						if(!phiAr->checkIndexValid(ni,nj,nk)) continue;
+						Real &nbval = phiAr->get(ni,nj,nk); 
+
+						// TODO, check near obstacle values?
+						if(nbval * val < 0.) { 
+							// compute position of 0 isolevel
+							Real dst = 0.;
+							dst = (val) / (val - nbval);
+							if(val < 0.)  dst *= -1.;
+
+							targetVal += dst;
+							// debMsg("P at "," "<<PRINT_IJK<<" "<<nbCnt<<" tv "<<(dst) ); // DEBUG
+							targetCnt += 1.;
+						}
+					}
+
+					tmp->get(i,j,k) = val;
+					if (targetCnt > 0.) {
+						tmp->get(i,j,k) = targetVal / targetCnt;
+						// debMsg("F at ","      my "<< val <<" "<<PRINT_IJK<<" "<<targetCnt<<" tv "<< tmp->get(i,j,k)); // DEBUG
+					}
+				}
+				// copy back
+				FOR_IJK_GRID(phiAr) { phiAr->get(i,j,k) = tmp->get(i,j,k); }
+			}
+
+			mpPlParams->getFluidSolver()->getLevelSet()->reinitMarching(mMaxTime, phiAr, 
+					fmFlags, fluidFlags, mValTransport>0);
+
+			return true;
+		}; 
+	protected:
+		Real mMaxTime;
+		std::string mPhiGrid, mPhiCorr;
+		int mValTransport;
+};
+
+class spluginReinitFI : public SolverPlugin {
+	public:
+		spluginReinitFI() : SolverPlugin(), mMaxTime(4.), mPhiGrid("phi-curr"), mValTransport(1) { };
+		~spluginReinitFI() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mMaxTime = params.FindOneFloat("max-time", mMaxTime );
+			mPhiGrid = params.FindOneString("phi", mPhiGrid );
+			mValTransport = params.FindOneInt("val-transp", mValTransport);
+			return true; 
+		};
+		virtual bool initPlugin() { return true; }; 
+		virtual bool performStep(Real dt) {
+			if(!mpPlParams->getFluidSolver()->getLevelSet()) {
+				debMsg("spluginReinitFI","No level set found!");
+				return false;
+			}
+			Grid<Real> *phiAr = mpPlParams->getGridReal(mPhiGrid);
+			FlagGrid *fiFlags = mpPlParams->getGridInt("fi-flags");
+
+			mpPlParams->getFluidSolver()->getLevelSet()->reinitFI(mMaxTime, phiAr, fiFlags, mValTransport>0);
+			return true;
+		}; 
+	protected:
+		Real mMaxTime;
+		std::string mPhiGrid;
+		int mValTransport;
+};
+
+class spluginReinitFS : public SolverPlugin {
+	public:
+		spluginReinitFS() : SolverPlugin(), mPhiGrid("phi-curr"), mValTransport(1) { };
+		~spluginReinitFS() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			mPhiGrid = params.FindOneString("phi", mPhiGrid );
+			mValTransport = params.FindOneInt("val-transp", mValTransport);
+			return true; 
+		};
+		virtual bool initPlugin() { return true; }; 
+		virtual bool performStep(Real dt) {
+			if(!mpPlParams->getFluidSolver()->getLevelSet()) {
+				debMsg("spluginReinitFS","No level set found!");
+				return false;
+			}
+			Grid<Real> *phiAr = mpPlParams->getGridReal(mPhiGrid);
+			FlagGrid *fsFlags = mpPlParams->getGridInt("fs-flags");
+
+			mpPlParams->getFluidSolver()->getLevelSet()->reinitFS(phiAr, fsFlags, mValTransport>0);
+			return true;
+		}; 
+	protected:
+		std::string mPhiGrid;
+		int mValTransport;
+};
+
+class spluginInitFlagsFromLevelset : public SolverPlugin {
+	public:
+		spluginInitFlagsFromLevelset() : SolverPlugin(), mCorrectLs(0) { };
+		~spluginInitFlagsFromLevelset() { }; 
+		virtual bool parseParams(const ParamSet& params) { 
+			// if >0, the levelset values in obstacles are corrected
+			// necessary for levelset without advection, which usually takes
+			// care of this
+			mCorrectLs = params.FindOneInt("correct-ls", mCorrectLs);
+			return true; };
+		virtual bool initPlugin() { return true; }; 
+		virtual bool performStep(Real dt) { 
+			mpPlParams->getFluidSolver()->reinitFlagsFromLevelset(mCorrectLs);
+			return true;
+		}; 
+		int mCorrectLs;
+};
+
+class spReseedLSParticles : public SolverPlugin {
+	public:
+		spReseedLSParticles() : SolverPlugin(), mNameFlags("flags"),
+   				mNamePhi("phi-curr"), mReseedInterval(1), mStepCnt(0) { };
+		~spReseedLSParticles() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mReseedInterval = params.FindOneInt("interval", mReseedInterval);
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spReseedLSParticles","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			mStepCnt++;
+
+			if (mStepCnt % mReseedInterval == 0) {
+				debMsg("spReseedLSParticles","Reseeding...");
+				FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+				Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+
+				mpPlParams->getFluidSolver()->getLevelSet()->plsReseed(pPhi, pFlags);
+			} else
+				debMsg("spReseedLSParticles","Reseeding skipped due to interval.");
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNamePhi;
+
+		int mReseedInterval;
+		int mStepCnt; // dont use fluid solver one, might be distorted by substep debug
+};
+
+class spResampleLSParticles : public SolverPlugin {
+	public:
+		spResampleLSParticles() : SolverPlugin(), mNameFlags("flags"),
+   				mNamePhi("phi-curr"), mNameDiv("vel-div"), mResampleInterval(1), mStepCnt(0) 
+				{ };
+		~spResampleLSParticles() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mNameDiv = params.FindOneString("div",mNameDiv);
+			mResampleInterval = params.FindOneInt("interval", mResampleInterval);
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spResampleLSParticles","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			mStepCnt++;
+
+			if (mStepCnt % mResampleInterval == 0) {
+				debMsg("spResampleLSParticles","Resampling...");
+				FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+				Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+				Grid<Real>* pDiv = NULL;
+				if(mpPlParams->haveGridReal(mNameDiv)) pDiv = mpPlParams->getGridReal(mNameDiv);
+
+				mpPlParams->getFluidSolver()->getLevelSet()->plsResample(pPhi, pDiv, pFlags);
+			} else
+				debMsg("spResampleLSParticles","Resampling skipped due to interval.");
+
+			debMsg("spResampleLSParticles","PLS Stats, particles: "<< 
+					mpPlParams->getFluidSolver()->getLevelSet()->getParticles().size()<< " escaped list: "<<
+					mpPlParams->getFluidSolver()->getLevelSet()->getEscapedParticles().size()<<" " ); // */
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNamePhi, mNameDiv;
+
+		int mResampleInterval;
+		int mStepCnt; // dont use fluid solver one, might be distorted by substep debug
+};
+
+class spRemoveAtSinks : public SolverPlugin {
+	public:
+		spRemoveAtSinks() : SolverPlugin(), mNameDiv("vel-div") 
+			{ };
+		~spRemoveAtSinks() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameDiv = params.FindOneString("div",mNameDiv);
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spRemoveAtSinks","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			//debMsg("spRemoveAtSinks","Resampling...");
+			Grid<Real>* pDiv = mpPlParams->getGridReal(mNameDiv);
+
+			int cnt = mpPlParams->getFluidSolver()->getLevelSet()->plsRemoveAtSinks(pDiv);
+			
+			debMsg("spRemoveAtSinks","Particles removed: "<<cnt);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameDiv;
+};
+
+class spRemoveEscaped : public SolverPlugin {
+	public:
+		spRemoveEscaped() : SolverPlugin(), mNamePhi("phi-curr"), mNameTemp("tmp"), 
+			mGenEscaped(0.), mGenBubbles(false), mGenSkipBorder(0) { };
+		~spRemoveEscaped() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mNameTemp = params.FindOneString("temp-grid",mNameTemp);
+			mGenEscaped = params.FindOneFloat("generate-escaped",mGenEscaped);
+			mGenBubbles = (0<params.FindOneInt("generate-bubbles",mGenBubbles));
+			// don't generate particles in the #cells of the border of the domain?
+			mGenSkipBorder = params.FindOneInt("generate-skip-border",mGenSkipBorder);
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			//debMsg("spRemoveEscaped","Resampling...");
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+			Grid<Vec3>* pVel = mpPlParams->getFluidSolver()->getGridCurrVel();
+			Grid<Real>* pTemp = mpPlParams->getGridReal(mNameTemp);
+			const Real dx = mpPlParams->getDeltaX();
+
+			int cnt = mpPlParams->getFluidSolver()->getLevelSet()->plsRemoveEscaped(
+					pPhi, pVel, pTemp, dx, mGenEscaped, mGenBubbles, mGenSkipBorder);
+			
+			debMsg("spRemoveEscaped","Particles removed: "<<cnt);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNamePhi, mNameTemp;
+		Real mGenEscaped;
+		bool mGenBubbles;
+		int mGenSkipBorder;
+};
+
+
+class spAdvectLSParticles : public SolverPlugin {
+	public:
+		spAdvectLSParticles() : SolverPlugin(), mNameFlags("flags"),
+   				mNameVel("vel-curr") { };
+		~spAdvectLSParticles() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNameVel = params.FindOneString("vel",mNameVel);
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spAdvectLSParticles","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAdvectLSParticles","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Vec3>* pVel = mpPlParams->getGridVec3(mNameVel);
+
+			mpPlParams->getFluidSolver()->getLevelSet()->plsAdvect(pVel, pFlags, dt);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNameVel;
+};
+
+class spPlsAdvectEscaped : public SolverPlugin {
+	public:
+		spPlsAdvectEscaped() : SolverPlugin(), 
+			mNameFlags("flags"), mNamePhi("phi-curr"), mFoamLifetime(-1.) { };
+		~spPlsAdvectEscaped() { };
+		virtual bool initPlugin() { return true; };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mFoamLifetime = params.FindOneFloat("foam-lifetime",mFoamLifetime);
+			return true;
+		};
+
+		virtual bool performStep(Real dt) {
+			debMsg("spPlsAdvectEscaped","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+
+			const Real dx = mpPlParams->getDeltaX();
+			Grid<Vec3>* pVel = mpPlParams->getFluidSolver()->getGridCurrVel();
+			Vec3 grav = mpPlParams->getFluidSolver()->getGravity() * dx;
+
+			mpPlParams->getFluidSolver()->getLevelSet()->setFoamLifetime(mFoamLifetime);
+			mpPlParams->getFluidSolver()->getLevelSet()->plsAdvectEscaped(pPhi, pFlags, pVel, dx, dt, grav);
+			return true;
+		};
+
+	protected:
+		std::string mNameFlags, mNamePhi;
+		Real mFoamLifetime;
+};
+
+class spCorrectPls : public SolverPlugin {
+	public:
+		spCorrectPls() : SolverPlugin(), mNameFlags("flags"),
+   				mNamePhi("phi-curr") {
+			mNameTemp[0] = std::string("phi-old");
+			mNameTemp[1] = std::string("tmp");
+		};
+		~spCorrectPls() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			int numNames =0;
+			const std::string* names = params.FindString("tmpgrids", &numNames);
+			if(numNames!=2) { 
+				errFatal("spCorrectPls::parseParams","Must specify two temporary grids", SIMWORLD_PLUGINERROR);
+				return false;
+			}
+			mNameTemp[0] = names[0];
+			mNameTemp[1] = names[1];
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spCorrectPls","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spCorrectPls","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* gPhi = mpPlParams->getGridReal(mNamePhi);
+			Grid<Real>* gPhiPlus = mpPlParams->getGridReal(mNameTemp[0]);
+			Grid<Real>* gPhiMinus = mpPlParams->getGridReal(mNameTemp[1]);
+
+			mpPlParams->getFluidSolver()->getLevelSet()->plsCorrect(gPhi, gPhiPlus, gPhiMinus, pFlags);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNamePhi, mNameTemp[2];
+};
+
+class spAdjustRadii : public SolverPlugin {
+	public:
+		spAdjustRadii() : SolverPlugin(), 
+			mNamePhi("phi-curr"), mNameFlags("flags"), mGenEscaped(0.)
+			{ };
+		~spAdjustRadii() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			// better use spRemoveEscaped-generate-escaped
+			mGenEscaped = params.FindOneFloat("generate-escaped",mGenEscaped);
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spAdjustRadii","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spAdjustRadii","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+
+			// for escaped p's
+			Grid<Vec3>* pVel = mpPlParams->getFluidSolver()->getGridCurrVel();
+			const Real dx = mpPlParams->getDeltaX();
+			Vec3 grav = mpPlParams->getFluidSolver()->getGravity() * dx;
+
+			mpPlParams->getFluidSolver()->getLevelSet()->plsAdjustRadii(
+					pPhi, pVel, dx, dt, grav, mGenEscaped);
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNamePhi, mNameFlags;
+		Real mGenEscaped;
+};
+
+
+class spPlsReinitFlagsBruteForce : public SolverPlugin {
+	public:
+		spPlsReinitFlagsBruteForce() : SolverPlugin(), 
+			mNameFlags("flags"), mNamePhi("phi-curr") { };
+		~spPlsReinitFlagsBruteForce() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spPlsReinitFlagsBruteForce","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+
+			const Real dx = mpPlParams->getDeltaX();
+			Grid<Vec3>* pVel = mpPlParams->getFluidSolver()->getGridCurrVel();
+			Vec3 grav = mpPlParams->getFluidSolver()->getGravity() * dx;
+
+			mpPlParams->getFluidSolver()->getLevelSet()->plsReinitFlagsBruteForce(pPhi, pFlags, pVel, dx, dt, grav);
+			return true;
+		};
+
+	protected:
+		std::string mNameFlags, mNamePhi;
+};
+
+
+template<> void Grid<LevelSetParticle*>::setDummyZero() { mZero = NULL; } 
+class spPlsApproxDensity : public SolverPlugin {
+	public:
+		spPlsApproxDensity() : SolverPlugin(), mNameFlags("flags"),
+   				mNamePhi("phi-curr"), mNameDens("density") { 
+			mpPartGrid = NULL;
+		};
+		~spPlsApproxDensity() { 
+			delete mpPartGrid;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mNameDens = params.FindOneString("density",mNameDens);
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spPlsApproxDensity","Computing");
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+			Grid<Real>* pDens = mpPlParams->getGridReal(mNameDens);
+
+			if(!mpPartGrid) {
+				nVec3i gridsize = pFlags->getSize();
+				mpPartGrid = new Grid<LevelSetParticle*>;
+				mpPartGrid->initGridMem(gridsize[0], gridsize[1], gridsize[2]);
+				mpPartGrid->setName("pls-particleLists");
+
+				FOR_IJK_GRID(mpPartGrid) {
+					mpPartGrid->getGlobal(i,j,k) = NULL;
+				}
+
+//continue here...
+			}
+			errFatal("spPlsApproxDensity","NYI! use spPhiApproxDensity for now...", SIMWORLD_GENERICERROR);
+
+			//mpPlParams->getFluidSolver()->getLevelSet()->plsResample(pPhi, pDiv, pFlags);
+
+			FOR_IJK_GRID(pDens) {
+				// simple 0,1
+				pDens->getGlobal(i,j,k) = 0.;
+				if(pPhi->getGlobal(i,j,k) > 0.) {
+					pDens->getGlobal(i,j,k) = 1.;
+				}
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNamePhi, mNameDens;
+		Grid<LevelSetParticle*> *mpPartGrid;
+};
+
+class spPhiApproxDensity : public SolverPlugin {
+	public:
+		spPhiApproxDensity() : SolverPlugin(), mNameFlags("flags"),
+   				mNamePhi("phi-curr"), mNameDens("density") { };
+		~spPhiApproxDensity() { };
+		virtual bool initPlugin() { return true; };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			mNameFlags = params.FindOneString("flags",mNameFlags);
+			mNamePhi = params.FindOneString("phi",mNamePhi);
+			mNameDens = params.FindOneString("density",mNameDens);
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spPhiApproxDensity","Computing");
+			FlagGrid*   pFlags   = mpPlParams->getGridInt(mNameFlags);
+			Grid<Real>* pPhi = mpPlParams->getGridReal(mNamePhi);
+			Grid<Real>* pDens = mpPlParams->getGridReal(mNameDens);
+
+			// set density from level set values
+			FOR_IJK_GRID(pDens) {
+
+				// simple 0,1
+				/*pDens->getGlobal(i,j,k) = 0.;
+				if(pPhi->getGlobal(i,j,k) > 0.) {
+					pDens->getGlobal(i,j,k) = 1.;
+				}
+				// */
+
+				// bridson, p97, vol fract is
+				// ca. 1/2 - 1/2 clamp[-1,1] (4*phi/dx)
+				Real d = pPhi->getGlobal(i,j,k) * 4;
+				CLAMP(d, (Real)-1., (Real)1. );
+				pDens->getGlobal(i,j,k) = 0.5 - 0.5*d;
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid access
+		std::string mNameFlags, mNamePhi, mNameDens;
+};
+
+
+
+//*****************************************************************************
+// get number of cells of each type 
+class goCountCellTypes : public GridOpBase{
+	public:
+		goCountCellTypes(FlagGrid *Flags) : GridOpBase() {
+			mpFlags = Flags;
+			applyOperatorToGrids( this );
+		};
+		~goCountCellTypes() {};
+		virtual void resetVariables() {
+			mEmptyCnt = mFluidCnt = mObstacleCnt = mUnknownCnt = 0;
+		}
+		void buildCallList() {
+			setFlags(mpFlags);
+		};
+
+		inline void operator() (int i, int j, int k) {
+			int flag = gaFlags(i,j,k);
+			switch (flag) {
+				case FEMPTY: mEmptyCnt++; break;
+				case FFLUID: mFluidCnt++; break;
+				case FOBSTACLE: mObstacleCnt++; break;
+				default: mUnknownCnt++; break;
+			}
+		}
+
+		void reduce(goCountCellTypes &op) {
+			mEmptyCnt += op.mEmptyCnt;
+			mFluidCnt += op.mFluidCnt;
+			mObstacleCnt += op.mObstacleCnt;
+			mUnknownCnt += op.mUnknownCnt;
+		}
+
+		int getEmptyCnt(void) const { return mEmptyCnt; }
+		int getFluidCnt(void) const { return mFluidCnt; }
+		int getObstacleCnt(void) const { return mObstacleCnt; }
+		int getUnknownCnt(void) const { return mUnknownCnt; }
+
+		string toString() {
+			std::ostringstream out;
+			out <<"empty="<<mEmptyCnt<<",fluid="<<mFluidCnt
+				<<",obstacle="<<mObstacleCnt<<",unknown="<<mUnknownCnt;
+			return out.str();
+		}
+	protected:
+		int mEmptyCnt, mFluidCnt, mObstacleCnt, mUnknownCnt;
+}; // goCountCellTypes
+
+// ToDo: this currently simply counts the number of fluid cells
+//   in the flag grid. A fancier version would use the level set
+//   to compute the amount of fluid in each interface cell.
+// Something along this direction is now done in 
+class spComputeFluidVolume : public SolverPlugin {
+	public:
+		spComputeFluidVolume(): SolverPlugin(),
+			mStatFilename("fluid_volume_stats.txt")
+			{ };
+		~spComputeFluidVolume() { };
+
+		// init plugin, return failure
+		virtual bool parseParams(const ParamSet& params) {
+			return true;
+		};
+		virtual bool initPlugin() {
+			debMsg("spComputeFluidVolume","init");
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spComputeFluidVolume","step "<<dt);
+			FlagGrid*   pFlags   = mpPlParams->getGridInt("flags");
+			goCountCellTypes cells(pFlags);
+			int fluidcells = cells.getFluidCnt();
+			std::cout << "Number of fluid cells: " << fluidcells << std::endl;
+			mStats.push_back(fluidcells);
+			writeOutStats();
+			return true;
+		};
+
+	protected:
+		void writeOutStats(void)
+		{
+			FILE* fp = fopen(mStatFilename, "wt");
+			if (fp) {
+				std::list<int>::const_iterator it, it_end = mStats.end();
+				for (it = mStats.begin(); it != it_end; it++) {
+					fprintf(fp, "%d\n", *it);
+				}
+				fclose(fp);
+			}
+		}
+
+	protected:
+		const char* mStatFilename;
+
+		static std::list<int> mStats;
+};
+std::list<int> spComputeFluidVolume::mStats;
+
+
+
+//*****************************************************************************
+
+// compute gradient of signed distance field
+static void computeGradient(Grid<Real> &phiAr, Grid<Vec3> &vecTmp) 
+{ 
+	FOR_IJK_GRID_BND(&phiAr, 1) {
+		Real phiCurr = phiAr(i,j,k);
+		// only in band around interface
+		if(1 || (phiCurr>-4. && phiCurr<4.)) {
+			Vec3& tmpCurr = vecTmp(i,j,k);
+			tmpCurr[0] = phiAr(i+1, j,k) - phiAr(i-1, j,k);
+			tmpCurr[1] = phiAr(i,j+1, k) - phiAr(i, j-1,k);
+			tmpCurr[2] = phiAr(i,j, k+1) - phiAr(i,j, k-1);
+		}
+	}
+}
+static void normalizeGradients(Grid<Vec3> &vecTmp) 
+{ 
+	FOR_IJK_GRID_BND(&vecTmp, 1) {
+		Vec3& tmpCurr = vecTmp(i,j,k);
+
+		// skip values in not "fast-marched" regions
+		if(tmpCurr[0] > 1e5) { tmpCurr = Vec3(0.); continue; }
+		if(tmpCurr[1] > 1e5) { tmpCurr = Vec3(0.); continue; }
+		if(tmpCurr[2] > 1e5) { tmpCurr = Vec3(0.); continue; }
+
+		normalize(tmpCurr); // ... tmpCurr /= tmpCurr.
+	}
+}
+
+
+// helper function to check neighbors
+static inline bool hasEmptyNb(FlagGrid* flags, int i,int j, int k) {
+	if(   (fgIsEmpty( flags->getGlobal(i+1,j,k) )) ||
+			(fgIsEmpty( flags->getGlobal(i-1,j,k) )) ||
+			(fgIsEmpty( flags->getGlobal(i,j+1,k) )) ||
+			(fgIsEmpty( flags->getGlobal(i,j-1,k) )) ||
+			(fgIsEmpty( flags->getGlobal(i,j,k+1) )) ||
+			(fgIsEmpty( flags->getGlobal(i,j,k-1) )) 
+	  ) {
+		return true;
+	}
+	return false;
+}
+
+static inline bool isInterfaceFluid(FlagGrid* flags, int i,int j, int k) {
+	if(! fgIsFluid( flags->get(i,j,k) )) return false;
+
+	if(   (fgIsEmpty( flags->get(i+1,j,k) )) ||
+			(fgIsEmpty( flags->get(i-1,j,k) )) ||
+			(fgIsEmpty( flags->get(i,j+1,k) )) ||
+			(fgIsEmpty( flags->get(i,j-1,k) )) ||
+			(fgIsEmpty( flags->get(i,j,k+1) )) ||
+			(fgIsEmpty( flags->get(i,j,k-1) )) 
+	  ) {
+		return true;
+	}
+	return false;
+}
+
+// compute derivatives of normals to get curvature magnitude
+static void computeNormalDerivatives(Real strength, FlagGrid* flags, Real dx,Real extent, 
+		Grid<Real> &phiAr, Grid<Vec3> &vecTmp, Grid<Real>* pStPerCellCorr = NULL, Grid<Real> *pCurvature = NULL)
+{ 
+	Real totalSt = 0., totalStCnt = 0.;
+	const Real dxFac = 0.5/dx;
+	FOR_IJK_GRID_BND(&phiAr, 1) {
+		Real curvature = 0.;
+
+		// only compute in narrow band...
+		// extent parameters controls band: if<=0 compute everywhere, else in band with extent width
+		if ( extent>0. && (phiAr(i,j,k) > extent || phiAr(i,j,k) < -extent)) continue;
+
+		Real dnx =  (vecTmp(i+1,j,k)[0] - vecTmp(i-1,j,k)[0]) * dxFac;
+		if(dnx> -1e5 && dnx<1e5) curvature += dnx;
+
+		Real dny =  (vecTmp(i,j+1,k)[1] - vecTmp(i,j-1,k)[1]) * dxFac;
+		if(dny> -1e5 && dny<1e5) curvature += dny;
+
+		Real dnz =  (vecTmp(i,j,k+1)[2] - vecTmp(i,j,k-1)[2]) * dxFac;
+		if(dnz> -1e5 && dnz<1e5) curvature += dnz;
+
+		// store RHS st correction
+		// added when computing the RHs for the CG steps
+		if( isInterfaceFluid(flags,i,j,k) ) {
+				if(pStPerCellCorr) {
+					// no scaling of "st" by dx or dt seems necessary, taken care of by poisson solve step
+					const Real st = strength * curvature;  
+
+					// take into account number of neighbors across interface
+					for(int nbCnt=0; nbCnt< 2 * gDim; nbCnt++) {
+						const int ni = i+nbX[nbCnt], nj = j+nbY[nbCnt], nk = k+nbZ[nbCnt];
+						if (fgIsEmpty( flags->getGlobal(ni,nj,nk) )) {
+							pStPerCellCorr->get(i,j,k) += st;
+						}
+					}
+					totalSt += pStPerCellCorr->get(i,j,k);
+				}
+				totalStCnt += 1.;
+		}
+
+		// debugging, store original curvature
+		if (pCurvature) {
+			pCurvature->get(i,j,k) = curvature;
+		}
+	} // main, ijk
+
+	// surface tension correction step, make total zero divergence
+	// seems unnecessary, and only introduces drift  ...
+}
+
+// compute derivatives of normals to get curvature magnitude
+static Real subtractAverageCurvature(FlagGrid* flags, Grid<Real> &phiAr, Grid<Vec3> &vecTmp,
+	Grid<Real> &curv)
+{ 
+	Real avgCurv = 0., avgCnt = 0.;
+
+	FOR_IJK_GRID(&curv) {
+		if( isInterfaceFluid(flags,i,j,k) ) {
+			// TODO , weight be fill-fraction?
+			avgCurv += curv(i,j,k);
+			avgCnt += 1.;
+		}
+	}
+
+	if( avgCnt>0.) {
+		avgCurv /= avgCnt;
+		globAvgCurvLs = avgCurv;
+		//debMsg("C_VS_LSC","avg_curv_ls  = "<< avgCurv);
+
+		FOR_IJK_GRID(&curv) {
+			// note, subtraction would only be necessary in band...
+			curv(i,j,k) -= avgCurv;
+		}
+	}
+	return avgCurv;
+}
+
+class spLsCurvature : public SolverPlugin {
+	public:
+		spLsCurvature() : SolverPlugin(), 
+			mPhiGrid("phi-curr"), mVecTmp("-vec-tmp-"), 
+			mStPerCellCor(""), mDebugCurvature(""), mStrength(1.)
+				{ };
+		~spLsCurvature() { }; 
+
+		virtual bool parseParams(const ParamSet& params) { 
+			mPhiGrid = params.FindOneString("phi", mPhiGrid );
+			// store per cell divergence/RHS correction for pressure solve (optional)
+			mStPerCellCor = params.FindOneString("st-per-cell-corr", mStPerCellCor );
+			//  debugging output, write curvature to grid
+			mDebugCurvature = params.FindOneString("grid-curvature", mDebugCurvature );
+
+			mVecTmp = params.FindOneString("vec-tmp", mVecTmp );
+			mStrength = params.FindOneFloat("strength", mStrength );
+			return true; 
+		};
+		virtual bool initPlugin() { return true; }; 
+
+		virtual bool performStep(Real dt) {
+			if(!mpPlParams->getFluidSolver()->getLevelSet()) {
+				debMsg("spLsCurvature","No level set found!");
+				return false;
+			}
+
+//check: COM vel's swapped when re-assigning component IDs?
+//waveeq: total heights preserved to zero with scaling by area
+
+			// get grids...
+			Grid<Real> *p_phiAr = mpPlParams->getGridReal(mPhiGrid);
+			Grid<Vec3> &vecTmp = *mpPlParams->getGridVec3(mVecTmp);
+			FlagGrid *flags = mpPlParams->getGridInt("flags");
+			Grid<Real> &phiAr = *p_phiAr; // convenience handle
+			
+			Grid<Real>* pStPerCellCorr = NULL, *pDebugCurvature = NULL; 
+			if( mStPerCellCor.length()>0 ) {
+				pStPerCellCorr = mpPlParams->getGridReal( mStPerCellCor );
+				debMsg("spLsCurvature","Using per cell ST-correction grid '"<<mStPerCellCor<<"' ");
+			}
+			if( mDebugCurvature.length()>0 ) {
+				pDebugCurvature = mpPlParams->getGridReal( mDebugCurvature );
+			}
+			const Real dx = mpPlParams->getDeltaX();
+			const Real invDxSqr = 1./(dx*dx);
+
+
+			// reset
+			FOR_IJK_GRID(&phiAr) {
+				vecTmp(i,j,k) = Vec3(0.); // Vec3(1e10);
+				if(pStPerCellCorr) pStPerCellCorr->get(i,j,k) = 0.;
+			}
+
+			// compute actual curvature via gradient
+			computeGradient(phiAr, vecTmp);
+			normalizeGradients(vecTmp);
+			// use default extent of 4
+			computeNormalDerivatives(mStrength, flags, dx, 4., phiAr, vecTmp, pStPerCellCorr, pDebugCurvature);
+			return true;
+		}; 
+	protected:
+		std::string mPhiGrid, mCurvGrid, mVecTmp; 
+		std::string mStPerCellCor, mDebugCurvature;
+		int mValTransport;
+		Real mStrength;
+};
+
+
+
+// mean curv flow based surface tension forces ala Sussman & Ohta
+// changes & simplifications:
+// separated components are not identified for avg curv
+// avg curvature is not extrapolated , computed curvature is used everywhere
+class spLsMeanCurvFlow : public spLsCurvature {
+	public:
+		spLsMeanCurvFlow() : spLsCurvature(), mBoundSkip(0), mRealTmp("-unn-") { };
+		~spLsMeanCurvFlow() { }; 
+
+		virtual bool parseParams(const ParamSet& params) { 
+			mBoundSkip = params.FindOneInt("boundary-skip", mBoundSkip );
+			mRealTmp = params.FindOneString("real-tmp", mRealTmp );
+			return spLsCurvature::parseParams(params);
+		};
+		virtual bool initPlugin() { return true; }; 
+
+		virtual bool performStep(Real org_dt) {
+			if(!mpPlParams->getFluidSolver()->getLevelSet()) {
+				debMsg("spLsMeanCurvFlow","No level set found!");
+				return false;
+			}
+			const Real dx = mpPlParams->getDeltaX();
+			const Real invDxSqr = 1./(dx*dx);
+			const Real st_dt = org_dt * dx;
+
+			// get grids...
+			FlagGrid *flags = mpPlParams->getGridInt("flags");
+			FlagGrid *fmflags = mpPlParams->getGridInt("fm-flags");
+			Grid<Real> &phiAr = *mpPlParams->getGridReal(mPhiGrid);
+			Grid<Vec3> &vecTmp = *mpPlParams->getGridVec3(mVecTmp); 
+			Grid<Real> &tmp = *mpPlParams->getGridReal(mRealTmp); 
+			Grid<Real>* pStPerCellCorr = NULL, *pDebugCurvature = NULL; 
+
+			// require grids...
+
+			if( mStPerCellCor.length()>0 ) {
+				pStPerCellCorr = mpPlParams->getGridReal( mStPerCellCor );
+				debMsg("spLsMeanCurvFlow","Using per cell ST-correction grid '"<<mStPerCellCor<<"' ");
+			} else {
+				errFatal("spLsMeanCurvFlow","Requires mStPerCellCor", SIMWORLD_GENERICERROR);
+				return false;
+			}
+
+			if( mDebugCurvature.length()>0 ) {
+				pDebugCurvature = mpPlParams->getGridReal( mDebugCurvature );
+			} else {
+				errFatal("spLsMeanCurvFlow","Requires mDebugCurvature", SIMWORLD_GENERICERROR);
+				return false;
+			}
+
+			//debMsg("spLsMeanCurvFlow","Sussman params:  mStrength="<<mStrength);
+			Real target_subStepStrength = 0.5; // goal strength , before curvature-to-0-1-normalization
+			target_subStepStrength = 0.01; // goal strength, after curv normalization
+			// TODO , determine max/min curvature, determine speed from that?
+
+			// wanted ST strength less than single step? set to 1, reduce
+			const int stIterations = (int)(mStrength / target_subStepStrength) + 1;
+			Real subStepStrength = mStrength / (Real)stIterations;
+
+			debMsg("spLsMeanCurvFlow","MCFParams:  stIterations="<<stIterations<<" dt="<<st_dt<<" subStepStrength="<<subStepStrength );
+
+			// reset & copy
+			FOR_IJK_GRID(&phiAr) {
+				tmp(i,j,k) = phiAr(i,j,k);
+				vecTmp(i,j,k) = Vec3(0.); // Vec3(1e10);
+				if(pStPerCellCorr) pStPerCellCorr->get(i,j,k) = 0.;
+				if(pDebugCurvature) pDebugCurvature->get(i,j,k) = 0.;
+			}
+
+			const int standardExtensionWidth = 4;
+			// check wheterh saferExtensionWidth could be reduced? check for access to not initialized points below?
+			const int saferExtensionWidth = 10;
+			// compute flow with substeps
+			for(int iter=0; iter<stIterations; iter++ ) {
+
+				// variables setup
+				//  last iteration, check whether to extrapolate levelset all the way...
+				// NOTE - for thin features that disappear, this might still be not enough, in this case it will be capped to max
+				int extWidth = standardExtensionWidth;
+				// (stIterations / 2) + 2 is a safe bet for curvature motion, but 
+				// topology changes might cause large splits etc.! better extrpolate far in last step...
+				const int finalExtensionWidth = (stIterations / 2) + 2;
+				if( (iter>=stIterations-1) && (finalExtensionWidth > standardExtensionWidth)) {
+					extWidth = finalExtensionWidth;
+				}
+				if(iter>=stIterations-1) {
+					extWidth = saferExtensionWidth;
+				}
+				Real ndExtent = (Real)standardExtensionWidth - 1.0;
+				//if (iter>=stIterations-1) { ndExtent = -1.; }
+
+				computeGradient(tmp, vecTmp);
+				normalizeGradients(vecTmp); 
+				// note, dont use mStrength here, but fixed strength := 1
+				// here, we dont yet have to init pStPerCellCorr, this is done later on from phi-tmp
+				computeNormalDerivatives(1., flags, dx,ndExtent, tmp, vecTmp, NULL, pDebugCurvature);
+
+				// todo compute avg, subtract
+				Real avgc = subtractAverageCurvature(flags, tmp, vecTmp, *pDebugCurvature);
+				debMsg("C_VS_LSCs2","avg curv "<<iter<<" = "<< avgc<<" str="<<subStepStrength);
+
+				// "advect" distance field with mean curvature
+				FOR_IJK_GRID(&tmp) {
+					tmp(i,j,k) += subStepStrength * pDebugCurvature->get(i,j,k);
+				}
+
+
+				bool correctOuterLayer = false;
+				if(1) mpPlParams->getFluidSolver()->getLevelSet()->reinitMarching(
+						extWidth, &tmp, fmflags, flags, false, correctOuterLayer);
+			}
+
+			// compute surface tension force
+			// first, reset
+			FOR_IJK_GRID(&tmp) { pStPerCellCorr->get(i,j,k) = 0.; }
+
+			// mBoundSkip gives no of cells to skip for adding ST forces at outer domain boundary
+			Real downScale = 0.01; // should be const
+			//downScale = 1.; // NEWT
+			FOR_IJK_GRID_BND(&tmp, mBoundSkip) {
+
+				if( isInterfaceFluid(flags,i,j,k) ) {
+					const Real st = downScale * (tmp(i,j,k) - phiAr(i,j,k)) / st_dt; // ORG
+
+					// take into account number of neighbors across interface
+					for(int nbCnt=0; nbCnt<2*gDim; nbCnt++) {
+						const int ni = i+nbX[nbCnt], nj = j+nbY[nbCnt], nk = k+nbZ[nbCnt];
+						// add pressure jump effect to RHS
+						if (fgIsEmpty( flags->getGlobal(ni,nj,nk) )) {
+							pStPerCellCorr->get(i,j,k) += st;
+						}
+					}
+
+				} // cell flag check
+			}
+
+			return true;
+		}; 
+
+	protected:
+		int mBoundSkip;
+		std::string mRealTmp;
+};
+
+
+//*****************************************************************************
+
+
+SolverPlugin* MakeFreeSurfacePlugin(std::string name) {
+	//if(!isStandardPluginName(name)) return NULL;
+
+	if(name.compare( string("set-freesurf-bcs") )==0) {
+		return new spluginSetFreesurfBcs;
+
+	} else if(name.compare(string("init-from-solver") )==0) {
+		return new spluginInitFrom;
+	} else if(name.compare(string("reinit-fast-marching") )==0) {
+		return new spluginReinitMarching;
+	} else if(name.compare( string("reinit-flags-from-levelset") )==0) {
+		return new spluginInitFlagsFromLevelset;
+	} else if(name.compare(string("reinit-levelset-fi") )==0) {
+		return new spluginReinitFI;
+	} else if(name.compare(string("reinit-levelset-fs") )==0) {
+		return new spluginReinitFS;
+
+	} else if(name.compare(string("levelset-compute-curvature") )==0) {
+		return new spLsCurvature;
+	} else if(name.compare(string("levelset-mean-curvature-flow") )==0) {
+		return new spLsMeanCurvFlow;
+
+	} else if(name.compare(string("pls-reseed") )==0) {
+		return new spReseedLSParticles;
+	} else if(name.compare(string("pls-resample"))==0) {
+		return new spResampleLSParticles;
+	} else if(name.compare(string("pls-remove-sinks"))==0) {
+		return new spRemoveAtSinks;
+	} else if(name.compare(string("pls-remove-escaped"))==0) {
+		return new spRemoveEscaped;
+	} else if(name.compare(string("pls-advect"))==0) {
+		return new spAdvectLSParticles;
+	} else if(name.compare( string("pls-correct") )==0) {
+		return new spCorrectPls;
+	} else if(name.compare( string("pls-adjust-radii") )==0) {
+		return new spAdjustRadii;
+	} else if(name.compare( string("pls-advect-escaped") )==0) {
+		return new spPlsAdvectEscaped;
+
+	} else if(name.compare( string("pls-reinit-flags-brute-force") )==0) {
+		return new spPlsReinitFlagsBruteForce; // testing stuff
+
+	} else if (name.compare(string("pls-approximate-density") )==0) {
+		return new spPlsApproxDensity;
+	} else if (name.compare(string("phi-approximate-density") )==0) {
+		return new spPhiApproxDensity;
+
+	} else if (name.compare(string("compute-fluid-volume") )==0) {
+		return new spComputeFluidVolume;
+	}
+	return NULL;
+}
+
+
+} // end namespace DDF 
+
+

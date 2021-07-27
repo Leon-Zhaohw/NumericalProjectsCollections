@@ -1,0 +1,2295 @@
+/******************************************************************************
+ *
+ * DDF - fluid simulator
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * Glut GUI
+ *
+ *****************************************************************************/
+
+#include <list>
+
+#include "globals.h"
+#include "vectorbase.h"
+#include "solverparams.h"
+#include "paramset.h"
+
+#include "fluidsolver.h"
+#include "particles.h"
+#include "boundbox.h"
+#include "levelset.h"
+#include "isosurface.h"
+#include "vortexpart.h"
+#include "imageio.h"
+
+#include "randomstream.h"
+#if DDF_MESHSURFACE==1
+#if DDF_DIMENSION==3
+#define DDF_MESHSURFACE_3D
+#include "meshsurface.h"
+#else
+#include "meshsurface2d.h"
+#endif
+#endif
+
+#include "pointsurface.h"
+using DDF::SurfacePoint;
+
+#include "opengl_includes.h"
+#if HAVE_PNGLIB==1
+#ifdef WIN32
+#include "png.h"
+#else
+#include <png.h>
+#endif
+#endif // HAVE_PNGLIB
+
+#if DDF_GLUTGUI==1
+#include "GLFontRenderer.h"
+#endif // DDF_GLUTGUI==1
+
+
+
+
+// solver object from main
+DDF::FluidSolver *gpGlutFsolver = NULL;
+
+// scalar grid to display "string showgrid" param in config file
+std::string gPhiRefName = std::string("phi-ref");
+// velocity grid to display "string showvel" param
+std::string gShowVelgridName = std::string("vel-curr");
+// name of real grid to show
+std::string gShowRealgridName = std::string("pressure");
+
+// scale display of velocities with "float vel-scale" parameter for glut gui
+static float gScaleVelocityDisplay = 1.;  // = g Vec3 Divider
+// scale real values in grids for display, store one value per grid
+std::map<std::string,float> gScaleRealDisplay;
+
+// draw velocities at center instead of faces?
+static bool gDrawCenteredVels = false;
+static bool gVelocityMAC = true;
+static bool gFinalizationDone = false;
+// draw lines for grid (only for dims <= 128)
+static bool gDrawLines = true;
+// draw isosurface of some scalar field?
+static int gDrawIsoSurface = 0;
+static std::string gIsoSurfaceGrid = std::string("phi-curr");
+static DDF::IsoSurface *gIsoSurface = NULL;
+static float            gIsoAlpha = 0.35;
+
+// toggle flag bit string display for probing on/off
+static bool gProbeShowFlags = false;
+
+// display info under mouse from probePhiValue
+static std::string gProbeGridString;
+// highlight selected point
+static size_t gProbePointIndex = 0;
+
+// show real values in empty cells?
+const bool gHideEmptyValues = true;
+
+
+// random numbers for jittering
+DDF::RandomStream glutRand(123);
+
+
+
+/******************************************************************************/
+namespace DDF { 
+
+
+
+
+std::string gLastPluginSubstepName = std::string("");
+
+// set by parser externally, read here...
+ParamSet gGlutGuiParams;
+
+#if DDF_GLUTGUI==1
+
+// font rendering
+static GLFontRenderer fontRender;
+
+#if DDF_DIMENSION==2
+Vec3 gViewTrafo(0., 0., -0.01);
+#else
+Vec3 gViewTrafo(0., 0., -0.5);
+#endif
+Vec3 gViewRot(0., 0., 0.);
+
+int gPickCellMode = 0;
+
+bool gDrawVortexParticles = true;
+bool gDrawParticles = false;
+int gDrawLsParticles = 4; // 1=normal | 2=escaped
+//bool gDrawPhiRef = false;
+bool gDrawVel = false;
+
+// mesh dusplay, surface mesh debug draw modes:
+// 0=off,  1=draw mesh, 
+//         2=lines, 3=points, 
+//         4=draw without grid, 5=no grid + wave offsets
+int gDrawSurfaceMesh = 1;
+GLuint gMeshTexture = -1; 
+// additional mesh drawing styles...
+static int gMeshDrawLines = 0;
+// mesh debugging flags
+static int gMeshDrawDebugFlags = 0;
+// name of mesh to use
+std::string gGuiMeshName = std::string("mesh");
+int gGuiMeshCounter = 0;
+
+// time stepping
+bool gStep = false;
+bool gPause = true;
+// movement speeds
+const float gMoveSpeed = 0.002;
+const float gRotSpeed  = 0.2;
+
+// region of interest
+BboxVeci gGlutRoi;
+int gRoiPlane = 2;
+// minimal and maximal values for grid info in GUI
+Real gRealgridMin = 0., gRealgridmMax = 0.;
+Vec3 gVecgridMin = Vec3(0.), gVecgridMax = Vec3(0.);
+
+Real gGlutProject = 0.; // if > 0. , project is on (used as scaling factor)
+bool gGlobalVPart = true;
+SimpleImage *gpProjImg = NULL;
+
+// mesh surface tracking display functions
+void fsDrawMesh(SurfaceMesh *mesh); 
+// debug output for test solver
+void drawSimpleGrid();
+// draw point surface debugging
+void drawSurfacePoints(void);
+
+// helper functions in guihelpers.cpp
+void glutgSelectNextSolver();
+void glutgSelectNextFloatArray();
+void glutgSelectNextVec3Array();
+void glutgSelectNextFloatArrayO();
+void initFloatArrayDisplay();
+void glutgSelectNextMesh();
+
+// load a file as a texture // type 0 = 256x256 RGB .RAW file // type 1 = ppm file (guihelpers.cpp)
+GLuint LoadTexture(int type, const char * filename, int wrap );
+
+void handle_display();
+
+// image output
+static int gNextPNGNumber = 0;
+static int gFrameCounter = 0;
+static bool gWritePNG = false;
+
+// mouse motion
+static int g_mouseBut = -1;
+static int g_specialKey = -1;
+static int g_lastMouseX=-1, g_lastMouseY=-1;
+
+/******************************************************************************/
+
+void initGlutRoi(Real planeFac) { 
+	nVec3i grsize = gpGlutFsolver->getGridFlags()->getSize();
+
+	// roi checks are "inclusive" of boundaries, so reduce by one...
+	grsize += nVec3i(-1);
+	grsize[gRoiPlane] = (grsize[gRoiPlane] * planeFac);
+
+	nVec3i grsizeMin(0);
+	grsizeMin[gRoiPlane] = grsize[gRoiPlane];
+	gGlutRoi = BboxVeci( grsizeMin, grsize ); 
+
+	if (0) debMsg("initGlutRoi","roi = "<<gGlutRoi.toString()<<" plane="<<gRoiPlane ); // debug
+}
+
+inline void initGlutRoiRect(nVec3f &p0,nVec3f &p1,nVec3f &p2,nVec3f &p3, nVec3i off, Real mDX,nVec3f pOffset) {
+	switch( gRoiPlane ) {
+		case 2:
+			p0 = nVec3f((off[0]+0)*mDX, (off[1]+0)*mDX, (off[2]+0)*mDX)+pOffset;
+			p1 = nVec3f((off[0]+1)*mDX, (off[1]+0)*mDX, (off[2]+0)*mDX)+pOffset;
+			p2 = nVec3f((off[0]+1)*mDX, (off[1]+1)*mDX, (off[2]+0)*mDX)+pOffset;
+			p3 = nVec3f((off[0]+0)*mDX, (off[1]+1)*mDX, (off[2]+0)*mDX)+pOffset;
+			break;
+		case 1:
+			p0 = nVec3f((off[0]+0)*mDX, (off[1])*mDX, (off[2]+0)*mDX)+pOffset;
+			p1 = nVec3f((off[0]+1)*mDX, (off[1])*mDX, (off[2]+0)*mDX)+pOffset;
+			p2 = nVec3f((off[0]+1)*mDX, (off[1])*mDX, (off[2]+1)*mDX)+pOffset;
+			p3 = nVec3f((off[0]+0)*mDX, (off[1])*mDX, (off[2]+1)*mDX)+pOffset;
+			break;
+		case 0:
+			p0 = nVec3f((off[0])*mDX, (off[1]+0)*mDX, (off[2]+0)*mDX)+pOffset;
+			p1 = nVec3f((off[0])*mDX, (off[1]+1)*mDX, (off[2]+0)*mDX)+pOffset;
+			p2 = nVec3f((off[0])*mDX, (off[1]+1)*mDX, (off[2]+1)*mDX)+pOffset;
+			p3 = nVec3f((off[0])*mDX, (off[1]+0)*mDX, (off[2]+1)*mDX)+pOffset;
+			break;
+	}
+}
+
+//void drawParticles(FluidSolver* solver) 
+void drawParticles(std::vector<DDF::Particle> *parts)
+{
+	glBegin(GL_POINTS);
+	glColor3f(0.8, 0.8, 0.8);
+
+	for (size_t i=0; i<parts->size(); i++) {
+		Vec3 pos = (*parts)[i].getPPos();
+		//if (gDim == 2) pos[2] = twodPos;
+		glVertex3f(pos[0],pos[1],pos[2]);
+		//debMsg("parts","i"<<i<<"/"<<parts->size()  <<"at "<<pos );
+	}
+
+	glEnd();
+}
+
+void drawVortexParticles(VorticitySystem::VList& parts)
+{
+	if (gpGlutFsolver->getVorticitySys()->getParticles().size() == 0) return;
+	
+	Real dx = gpGlutFsolver->getParams()->getDeltaX();
+	int a = gGlutRoi.getStart()[gRoiPlane];
+	int b = gGlutRoi.getEnd()[gRoiPlane];
+	
+	for (VorticitySystem::VList::const_iterator it = parts.begin(); it != parts.end(); ++it)
+	{
+		if (((*it)->getFlags() & VortexParticle::FInertial) == 0)
+			glColor3f(1., 1., 0.);
+		else
+			glColor3f(0.,1.,1.);
+	
+		Vec3 pos = (*it)->getPos() +.5;
+		glPointSize((*it)->getRadius()*1.5);
+			
+		if (gDim == 2)
+			pos[2] = 0.0;
+		else {
+			//pos[2] -= 0.5; // z offset to account for centered phi value
+			if (!gGlobalVPart && (pos[2]<a-0.5	||pos[2]>b+0.5))
+				continue;
+		}
+		pos *= dx;
+		glBegin(GL_POINTS);glVertex3f(pos[0],pos[1],pos[2]);glEnd();	
+	}
+	
+#if DEBUG_VORTEXPATH==1
+	glEnable(GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBegin(GL_LINES);
+	for (std::list<LineElement>::const_iterator it = gVortexPath.begin(); it != gVortexPath.end();++it)
+	{
+		Vec3 p1 = it->p0 + .5, p2 = it->p1 + .5;
+		if (gDim == 2)
+			p2[2] = p1[2] = 0.0;
+		else {
+			int a2 = gGlutRoi.getStart()[gRoiPlane];
+			int b2 = gGlutRoi.getEnd()[gRoiPlane];
+			if (!gGlobalVPart && (p1[2]<a2-0.5	||p1[2]>b2+0.5 || p2[2]<a2-0.5	||p2[2]>b2+0.5))
+				continue;
+		}
+		const Real intensity = 0.7;
+		glColor4f(intensity*it->r,intensity*it->g,intensity*it->b,it->a);
+		glVertex3f(dx*p1[0],dx*p1[1],dx*p1[2]);
+		glVertex3f(dx*p2[0],dx*p2[1],dx*p2[2]);		
+	}
+	glEnd();	
+	glDisable(GL_BLEND);	
+#endif
+	
+}
+
+void drawLsParticles(int drawLsp, const std::list<DDF::LevelSetParticle>& parts, const std::list<DDF::EscapedParticle>& eparts)
+{
+	Real dx = gpGlutFsolver->getParams()->getDeltaX();
+	const Real pAlpha = 0.5;
+	glEnable(GL_BLEND);
+
+	if(drawLsp&1) {
+		std::list<LevelSetParticle>::const_iterator it, it_end;
+
+		glPointSize(1.0f);
+		glBegin(GL_POINTS);
+		for (it=parts.begin(), it_end = parts.end(); it!=it_end; ++it)
+		{
+			const LevelSetParticle& p = *it;
+			Vec3 pos = p.getPos();
+			Real r = p.getRadius();
+			//if (r>=0.) continue; // hide outer
+			//if (r<=0.) continue; // hide inner
+
+			// draw only inside particles? , if gDrawLsParticles is on
+			// if(p.getRadius()>0.) continue;
+			
+			if (gDim == 2)
+				pos[2] = 0.0;
+			else {
+				pos[2] -= 0.5; // z offset to account for centered phi value
+				// display only particles on current plane
+				int a = gGlutRoi.getStart()[gRoiPlane];
+				int b = gGlutRoi.getEnd()[gRoiPlane];
+				if ((pos[2]<gGlutRoi.getStart()[gRoiPlane])
+					||(pos[2]>gGlutRoi.getStart()[gRoiPlane]+0.5))
+					continue;
+			}
+			pos *= dx;
+			if (r>0) {
+				glColor4f(1.0f, 1.0f, 0.0f, pAlpha);
+			} else {
+				glColor4f(0.0f, 1.0f, 1.0f, pAlpha);
+			}
+			glVertex3f(pos[0],pos[1],pos[2]);
+		}
+		glEnd();
+	}
+
+	if(drawLsp&2) { // draw escaped particles
+		glPointSize(4.5f);
+		glBegin(GL_POINTS);
+
+		std::list<EscapedParticle>::const_iterator it, it_end;
+		for (it=eparts.begin(), it_end = eparts.end(); it!=it_end; ++it)
+		{
+			const EscapedParticle& p = *it;
+			Vec3 pos = p.getPos();
+			//if(p.getAge()<2) continue; // filter short ones
+
+			if (gDim == 2)
+				pos[2] = 0.0;
+			else {
+				pos[2] -= 0.5; // z offset to account for centered phi value
+
+				int a = gGlutRoi.getStart()[gRoiPlane];
+				int b = gGlutRoi.getEnd()[gRoiPlane];
+				if ((pos[2]<gGlutRoi.getStart()[gRoiPlane])
+					||(pos[2]>gGlutRoi.getStart()[gRoiPlane]+0.5)) { 
+					// skip particles not in ROI
+					//continue;
+				}
+			}
+			pos *= dx;
+			Real r = p.getRadius();
+			int t = p.getType();
+			if(t==1) {
+				glColor4f(1.0f, 0.9f, 0.9f, pAlpha); //0.8f);
+			} else {
+				glColor4f(0.5f, 0.8f, 0.9f, pAlpha); //0.8f);
+			}
+
+			glVertex3f(pos[0],pos[1],pos[2]);
+			//debMsg("LevelSet::plsRemoveEscaped", "drawing "<<pos<<" "<<t);
+		}
+
+		glEnd();
+	}
+
+	glDisable(GL_BLEND);
+
+#if 0
+	glLineWidth(1.0);
+	glBegin(GL_LINES);
+	for (it=parts.begin(), it_end = parts.end(); it!=it_end; ++it)
+	{
+		const LevelSetParticle& p = *it;
+		Real r = p.getRadius();
+		//if (fabs(r) < 0.5) {
+			Vec3 pos = p.getPos() * dx;
+			if (gDim == 2) pos[2] = 0.0;
+			
+			if (r>0)
+				glColor4f(0.5f, 0.5f, 0.0f, pAlpha);
+			else
+				glColor4f(0.0f, 0.5f, 0.5f, pAlpha);
+
+			glVertex3f(pos[0]-r*dx, pos[1], pos[2]);
+			glVertex3f(pos[0]+r*dx, pos[1], pos[2]);
+			glVertex3f(pos[0], pos[1]-r*dx, pos[2]);
+			glVertex3f(pos[0], pos[1]+r*dx, pos[2]);
+		//}
+	}
+	glEnd();
+#endif
+}
+
+// draw grid obstacles and compute min/max pressure
+class fsDrawGridLines : public GridOpBase {
+	public:
+		fsDrawGridLines(FlagGrid *flags, BboxVeci roi) : 
+			GridOpBase() { 
+			mpFlags = flags;
+			mRoi = roi;
+			mDX = 1. / (Real)(mpFlags->getMaxSize());
+			pOffset = nVec3f(0., 0., -.00001);
+			glBegin(GL_LINES);
+			applyOperatorToGridsSimple(this);
+			glEnd();
+		};
+		~fsDrawGridLines() { }; 
+		void resetVariables() { };
+		void reduce(fsDrawGridLines &op) { };
+
+		void buildCallList() {
+			setFlags(mpFlags);
+		};
+		inline void operator() (int i, int j, int k) { 
+			nVec3i off = nVec3i(i,j,k);
+			if (!mRoi.contains(off)) return; // if (gDim==3 && off[2]!=mRoi) return;
+			if (gDim==2) off[2] = 0;
+			nVec3f p0,p1,p2,p3; initGlutRoiRect(p0,p1,p2,p3,off,mDX,pOffset);
+			glColor3f(0.2,0.2,0.2);
+			glVertex3fv(&p0[0]); glVertex3fv(&p1[0]);
+			glVertex3fv(&p1[0]); glVertex3fv(&p2[0]);
+			glVertex3fv(&p2[0]); glVertex3fv(&p3[0]);
+			glVertex3fv(&p3[0]); glVertex3fv(&p0[0]);
+		};
+	protected:
+		nVec3f pOffset; // drawing offset
+		BboxVeci mRoi; // display a single slice in 3d
+		Real mDX;
+}; // fsDrawGridLines */
+
+// draw grid obstacles and compute min/max pressure
+// which scalar field to show in fsDrawObstacles drawTypes:
+// 0 = eg pressure (w min/max)
+// 1 = levelset (if active)
+// 2 = error function
+class fsDrawObstacles : public GridOpBase {
+	public:
+		fsDrawObstacles(FlagGrid *flags, 
+				Grid<Real> *srcGrid, Grid<Real> *err, 
+				Real minp, Real maxp, BboxVeci roi, int drawtype) : 
+			GridOpBase(), mpSrc(srcGrid),mpErr(err), mDrawType(0) { 
+
+			mpFlags = flags;
+			mRoi = roi;
+			mDX = 1. / (Real)(mpSrc->getMaxSize());
+			mMinP = minp; 
+			mMaxP = maxp;
+			mFirstPInit = false;
+			pOffset = nVec3f(0., 0., -.00001);
+			mDrawType = drawtype;
+
+			//mProjMult = gGlutProject / gScaleRealDisplay  * mDX;
+			mValScale = gScaleRealDisplay[gShowRealgridName];
+			mProjMult = gGlutProject / mValScale * mDX;
+
+			SolverParams* prms = gpGlutFsolver->getParams();
+			//mpPhi = mpPhiRef = NULL;
+			//if (prms->haveGridReal("phi-curr")) mpPhi = prms->getGridReal("phi-curr");
+			if (prms->haveGridReal(gPhiRefName))
+				mpPhiRef = prms->getGridReal(gPhiRefName);
+
+			mHideEmpty = gHideEmptyValues;
+			if(mpSrc->getDisplayFlags() & 2) mHideEmpty = false;
+
+			glBegin(GL_QUADS);
+			applyOperatorToGridsSimple(this);
+			glEnd();
+			//minp = mMinP; maxp = mMaxP;
+		};
+		~fsDrawObstacles() { }; 
+		void resetVariables() { };
+		void reduce(fsDrawObstacles &op) { };
+
+		void buildCallList() {
+			gaSrc.gridAccInit(mpSrc, AM_READ, gaCalls); 
+			if (mpErr) {
+				gaErr.gridAccInit(mpErr, AM_READ, gaCalls); 
+			}
+			setFlags(mpFlags);
+		};
+		inline void operator() (int i, int j, int k) { 
+			const int currFlag = getFlagAcc()(i,j,k);
+			nVec3i gridPos = nVec3i(i,j,k);
+
+			if (!mRoi.contains(gridPos)) return; 
+			if (gDim==2) gridPos[2] = 0;
+			nVec3f p0,p1,p2,p3; 
+			initGlutRoiRect(p0,p1,p2,p3,gridPos,mDX,pOffset);
+						
+			if (mDrawType==0) { 
+				if (mHideEmpty && fgIsObstacle(currFlag)) {
+					// obstacle
+					glColor3f(0.15,0.15,0.15);
+				} else if (1 && fgIsOutflow(currFlag)) {
+					glColor3f(0.3,0.0,0.0);
+				} else if (mHideEmpty && fgIsEmpty(currFlag)) {
+					// empty cells
+					glColor3f(0.,0.2,0.); // */
+				} else {
+					Real ps = 0.;
+
+					// override with projection
+					if(gGlutProject>0. && gpProjImg) {
+						int a1,a2;
+						gpProjImg->getPlaneAxes(gRoiPlane, a1,a2);
+						ps = (*gpProjImg)(gridPos[a1],gridPos[a2])[0] * mProjMult;
+
+						//if((*gpProjImg)(i,j)>0.) debMsg("fsDrawObstacles","at "<<PRINT_IJK<<"; "<<gridPos<<" = "<< ps <<" "<<gGlutProject);
+					} else { 
+						// default, show field value
+						//ps = 0.75*(press-mMinP)/(mMaxP-mMinP);
+						const Real val = gaSrc(i,j,k);
+						ps = val / mValScale ;
+						//debMsg("fsDrawObstacles","at "<<PRINT_IJK<<" = "<< press <<" "<<mMinP<<" "<<mMaxP);
+					}
+
+					if (fgIsInflow(currFlag)) {
+						glColor3f(ps, ps, 0.3);
+					/*} else if ((currFlag & FDENSITYSOURCE) != 0) {
+						glColor3f(ps, 0.3, ps);*/
+					} else {
+						if (ps>0)
+							glColor3f(ps,0.,0.);
+						else
+							glColor3f(0.,0.,fabs(ps));
+					}
+				}
+			} else if (mDrawType==1) { 
+				// level set display
+				//Real v = gpPhiAr->getValue(gridPos[0],gridPos[1],gridPos[2]);
+				if (gDim==2) gridPos[2] = gPatchSize/2;
+
+				//Grid<Real>* phiGrid = gDrawPhiRef ? mpPhiRef : mpPhi;
+				//if (phiGrid==NULL) errFatal("fsDrawObstacles","Invalid phi grid", SIMWORLD_PANIC);
+				//Real v = phiGrid->getGlobal(gridPos[0],gridPos[1],gridPos[2]);
+				Real v = gaSrc(i,j,k); 
+
+				const Real vScale = 1./5. * mValScale;
+				v *= vScale;
+				CLAMP(v, (Real)-1., (Real)1.); 
+
+				if (v>=0.) {
+					glColor3f(v,0.,0.5);
+				} else {
+					if (v<=-1000.) {
+						glColor3f(0., 0., 0.);  // invalid values
+					} else {
+						glColor3f(0.5, 1.+v, 0.);
+					}
+				}
+				//if (gDrawPhiRef && (gridPos[0]+gridPos[1]==0)) glColor3f(1.0f, 1.0f, 1.0f);
+			} else if (mDrawType == 2) {
+				/* a to b fades from blue to green, b to c from green to red */
+				/*const Real a = 0.01;
+				const Real b = 1.0;
+				const Real c = 20.0;*/
+				const Real a = 0.0001;
+				const Real b = 0.01;
+				const Real c = 1.0;
+				if (gDim==2) gridPos[2] = gPatchSize/2;
+				Real err = fabs(gaErr(i,j,k));
+				
+				if (err > b) {
+					Real val = (err-b)/(c-b);
+					glColor3f(val,1.0f-val,0.0f);
+				} else if (err > a) {
+					Real val = (err-a)/(b-a);
+					glColor3f(0.0f,val,1-val);
+				} else
+					glColor3f(0.0f, 0.0f, 0.0f);
+
+			} else {
+				return;
+			}
+
+			glVertex3fv(&p0[0]);
+			glVertex3fv(&p1[0]);
+			glVertex3fv(&p2[0]);
+			glVertex3fv(&p3[0]); 
+		};
+	protected:
+		nVec3f pOffset; // drawing offset
+		BboxVeci mRoi; 
+		Real mDX;
+		Real mMinP, mMaxP;
+		bool mFirstPInit;
+		Grid<Real> *mpSrc;
+		Grid<Real> *mpErr;
+		GridAccessor<Real,0> gaSrc;
+		GridAccessor<Real,0> gaErr;
+
+		Grid<Real> *mpPhi;
+		Grid<Real> *mpPhiRef;
+
+		//! what to display 0=grid, 1=levelset
+		int mDrawType;
+		int mHideEmpty;
+		// multiplier for projected displays, adapted to gridsize
+		Real mProjMult, mValScale;
+}; // fsDrawObstacles */
+
+// draw grid obstacles and compute min/max pressure
+class fsDrawCellIndex : public GridOpBase {
+	public:
+		fsDrawCellIndex(FlagGrid *flags, BboxVeci roi) : 
+				GridOpBase()
+		{ 
+			mpFlags = flags;
+			mDX = 1. / (Real)(flags->getMaxSize());
+			pOffset = nVec3f(0., 0., -.00001);
+			mRoi = roi;
+
+			glBegin(GL_QUADS);
+			applyOperatorToGridsSimple(this);
+			glEnd();
+			//minp = mMinP; maxp = mMaxP;
+		};
+		~fsDrawCellIndex() { }; 
+		void resetVariables() { };
+		void reduce(fsDrawCellIndex &op) { };
+
+		void buildCallList() {
+			setFlags(mpFlags);
+		};
+		inline void operator() (int i, int j, int k) { 
+			const int currFlag = getFlagAcc()(i,j,k);
+			nVec3i gridPos = /*getFlagAcc().getAccPatch()->mOffset + */nVec3i(i,j,k);
+			if (!mRoi.contains(gridPos)) return; 
+
+			if (gDim==2) gridPos[2] = 0;
+			nVec3f p0,p1,p2,p3; 
+			initGlutRoiRect(p0,p1,p2,p3,gridPos,mDX,pOffset);
+			
+			if (gDim==2) gridPos[2] = gPatchSize/2;
+
+			Vec3 col = Vec3(
+					gridPos[0]/(Real)mpFlags->getSizeX(), 
+					gridPos[1]/(Real)mpFlags->getSizeY(), 
+					gridPos[2]/(Real)mpFlags->getSizeZ() );
+			glColor3f(col[0],col[1],col[2]);
+			//debMsg("at "," "<<PRINT_IJK<<" "<<col); // DEBUG
+
+			glVertex3fv(&p0[0]);
+			glVertex3fv(&p1[0]);
+			glVertex3fv(&p2[0]);
+			glVertex3fv(&p3[0]); 
+		};
+	protected:
+		nVec3f pOffset; // drawing offset
+		BboxVeci mRoi; 
+		Real mDX;
+		//Grid<Real> *mpPhi;
+		//GridAccessor<Real,0> gaPhi;
+}; // fsDrawLevelset */
+
+
+
+// draw centered grid vels
+class fsDrawVels : public GridOpBase {
+	public:
+		fsDrawVels(FlagGrid *flags, Grid<Vec3> *vel, BboxVeci roi) : 
+			GridOpBase(), mpVel(vel) { 
+			mpFlags = flags;
+			mDX = 1. / (Real)(mpVel->getMaxSize());
+			mRoi = roi;
+
+			// switch off mac display for this grid, if flags|4 is set
+			//if( mpVel->getDisplayFlags() & 4) mMacValues = false;
+
+			glBegin(GL_LINES);
+			applyOperatorToGridsSimple(this);
+			glEnd();
+		};
+		~fsDrawVels() { }; 
+		void resetVariables() { };
+		void reduce(fsDrawVels &op) { };
+
+		void buildCallList() {
+			gaVel.gridAccInit(mpVel, AM_READ, gaCalls); 
+			setFlags(mpFlags);
+		};
+		inline void operator() (int i, int j, int k) { 
+			const int currFlag = getFlagAcc()(i,j,k);
+			const bool dxScale = true;
+			//if (!fgIsFluid(currFlag)) return;
+			//if (fgIsObstacle(currFlag)) return;
+
+			nVec3i off = nVec3i(i,j,k);
+			if (!mRoi.contains(off)) return;
+			if (gDim==2) off[2] = 0;
+
+			nVec3f p = nVec3f(off[0]*mDX, off[1]*mDX, off[2]*mDX);
+
+			if (gDrawCenteredVels) { // centered
+				nVec3f vOrg = vec2F( gaVel(i,j,k) );
+				nVec3f v = vOrg;
+				if(mpVel->checkIndexValid(i+1,j+1,k+1) && gVelocityMAC) {
+					v[0] += gaVel(i+1,j,k)[0];
+					v[1] += gaVel(i,j+1,k)[1];
+					v[2] += gaVel(i,j,k+1)[2];
+					v *= 0.5;
+				}
+				if(dxScale) v *= mDX;
+				v *= gScaleVelocityDisplay;
+
+				p[0] += mDX*0.5;
+				p[1] += mDX*0.5;
+				if (gDim==3) p[2] += mDX*0.5; // offset in z dir for display only
+
+				glColor3f(0.,1.,0.);
+				glVertex3fv(&p[0]);
+				p += v;
+				glColor3f(1.,1.,1.);
+				glVertex3fv(&p[0]);
+			} else { // side
+				// dont use averaged vels!
+				nVec3f v = vec2F( gaVel(i,j,k) ); // * 0.33;
+				if(dxScale) v *= mDX;
+				v *= gScaleVelocityDisplay;
+
+				p = nVec3f(off[0]*mDX, off[1]*mDX, off[2]*mDX);
+				p[0] += 0.5*mDX;
+				glColor3f(0.,0.,1.);
+				glVertex3fv(&p[0]);
+				p[1] += v[1];
+				glColor3f(1.,1.,1.);
+				glVertex3fv(&p[0]);
+
+				p = nVec3f(off[0]*mDX, off[1]*mDX, off[2]*mDX);
+				p[1] += 0.5*mDX;
+				glColor3f(1.,0.,0.);
+				glVertex3fv(&p[0]);
+				p[0] += v[0];
+				glColor3f(1.,1.,1.);
+				glVertex3fv(&p[0]);
+
+				if (gDim==3) {
+				p = nVec3f(off[0]*mDX, off[1]*mDX, off[2]*mDX);
+				p[2] += 0.5*mDX;
+				glColor3f(1.,0.,0.);
+				glVertex3fv(&p[0]);
+				p[2] += v[2];
+				glColor3f(1.,1.,1.);
+				glVertex3fv(&p[0]); } // 3dim
+			}
+		};
+	protected:
+		Real mDX;
+		BboxVeci mRoi; 
+		Grid<Vec3> *mpVel;
+		GridAccessor<Vec3,1> gaVel;
+		//bool mMacValues;
+}; // fsDrawVels */
+
+// helper functions from fileio.cpp
+bool isosurfaceNodeIsOkHasInvNbs(Grid<Real>* grid,int i,int j,int k, nVec3i const & gs);
+void floodFillIsosurfaceGrid(Grid<Real> *grid,int i,int j,int k, nVec3i const & gs, int callcount);
+
+// debug output for patch solver
+void drawPatchGrid()
+{
+	Grid<Real> *perr = NULL; 
+
+	// determine draw type from grid name
+	int drawType = 0;
+	if(gShowRealgridName.length()>3) {
+		if( gShowRealgridName[0] == 'p' &&
+		    gShowRealgridName[1] == 'h' &&
+		    gShowRealgridName[2] == 'i' ) drawType = 1;
+
+		// error display unused for now
+		/* if( gShowRealgridName[0] == 'e' &&
+		    gShowRealgridName[1] == 'r' &&
+		    gShowRealgridName[2] == 'r' ) drawType = 2; */
+	}
+
+	Grid<Real> *realGrid = NULL; 
+	realGrid = gpGlutFsolver->getParams()->getGridReal(gShowRealgridName); // DEBUG
+
+	// allocate projection image and project (if on)
+	if(gGlutProject>0. && realGrid) {
+		if(!gpProjImg) {
+			// img size, add patchsize for safety, unnecessary?
+			int maxs = gpGlutFsolver->getParams()->getDimMax(); // + gPatchSize; 
+
+			gpProjImg = new SimpleImage;
+			gpProjImg->initMem(maxs, maxs);
+		}
+
+		// project field to 2d values
+		BboxVeci unused;
+		opProjectGrid(gpProjImg, realGrid, unused, gRoiPlane ); 
+	}
+	
+	// hide everything else for some iso & mesh disp settings
+	bool drawGridInfo = true;
+	bool onlySurfaceMesh = gDrawSurfaceMesh==4 || gDrawSurfaceMesh==5;
+	if ( onlySurfaceMesh && gpGlutFsolver->haveMesh(gGuiMeshName) ) {
+		drawGridInfo = false;
+	}
+	
+	if(drawGridInfo) {
+		fsDrawObstacles( 
+				gpGlutFsolver->getGridFlags(), 
+				realGrid, perr,
+				gRealgridMin,gRealgridmMax, gGlutRoi, drawType); 
+	}
+
+	glLineWidth(1.0);
+	if(gDrawLines && drawGridInfo) {
+		fsDrawGridLines( gpGlutFsolver->getGridFlags(), gGlutRoi ); 
+	}
+
+	// show surface mesh (if there is one)
+	if( gDrawSurfaceMesh && gpGlutFsolver->haveMesh(gGuiMeshName) ) {
+		fsDrawMesh( gpGlutFsolver->getMesh(gGuiMeshName) );
+	}
+
+	if (gDrawVel && drawGridInfo) {
+		Grid<Vec3> *vels = gpGlutFsolver->getParams()->getGridVec3(gShowVelgridName);
+		fsDrawVels( gpGlutFsolver->getParams()->getGridInt("flags"), vels, gGlutRoi );
+	}
+
+	// draw isosurface mesh? , warning - this can be slow for large sims...
+	// TODO , create display list after sim step?
+	if(gDrawIsoSurface>0) {
+		const Real gSmoothSurface = 0.;
+		const Real gSmoothNormals = 0.;
+
+		// phi grid might not be there?
+		if(gDrawIsoSurface == 2 || gpGlutFsolver->getParams()->haveGridReal(gIsoSurfaceGrid)) {
+			if(!gIsoSurface) {
+				FlagGrid*  pFlags  = gpGlutFsolver->getParams()->getGridInt( "flags" );
+				Grid<Real> *grid = NULL;
+				if (gDrawIsoSurface==1) grid = gpGlutFsolver->getParams()->getGridReal(gIsoSurfaceGrid);
+				nVec3i size = pFlags->getSize();
+
+				gIsoSurface = new IsoSurface(0.0001);
+				Vec3 geomStart = Vec3(0.);
+				Real invMaxs = 1./(Real)pFlags->getMaxSize();
+				Vec3 geomEnd   = Vec3(
+						pFlags->getSizeX()*invMaxs, 
+						pFlags->getSizeY()*invMaxs, 
+						pFlags->getSizeZ()*invMaxs );
+				if(gDim==2) {
+					geomStart[2] = -0.025;
+					geomEnd  [2] = 0.075;
+				}
+				gIsoSurface->setStart(geomStart);
+				gIsoSurface->setEnd  (geomEnd  );
+
+				gIsoSurface->initializeIsosurface(size[0]+2, size[1]+2, size[2]+2, Vec3(1.) );
+				int dimMax = VMAX(size);
+				gIsoSurface->setSmoothSurface(gSmoothSurface * 1./(Real)dimMax);
+				gIsoSurface->setSmoothNormals(gSmoothNormals * 1./(Real)dimMax);
+				gIsoSurface->resetAll(-1.);
+
+				if (gDrawIsoSurface == 2) {
+					debMsg("GlutGui","Using flags as isosurface");
+					FOR_IJK_GRID(pFlags) {
+						int fl = -1;
+						if ((pFlags->getGlobal(i,j,k) & FOBSTACLE)!=0 && i>0 && k>0 && i<size[0]-1 && j<size[1]-1 && k<size[2]-1) fl=1;
+						*(gIsoSurface->lbmGetData(i,j,k)) = fl;
+					}
+				} else if(gIsoSurfaceGrid.compare( string("phi-curr") ) == 0) {
+					// special handling for fluid narrow band levelset
+					debMsg("GlutGui","Using isosurface fluid phi grid 'phi-curr', special handling on!");
+
+					// flood fill levelset
+					FOR_IJK_GRID(grid) {
+						if (isosurfaceNodeIsOkHasInvNbs(grid,i,j,k, size)) floodFillIsosurfaceGrid(grid,i,j,k, size, 0);
+					}
+
+					FOR_IJK_GRID(grid) {
+						Real set = -grid->getGlobal(i,j,k);
+
+						int flag = pFlags->getGlobal(i,j,k);
+						if (fgIsObstacle(flag)) set = -1.;
+
+						*(gIsoSurface->lbmGetData(i,j,k)) = set;
+					}
+				} else {
+					// directly use source grid
+					debMsg("GlutGui","Using isosurface direct source grid "<<gIsoSurfaceGrid );
+					FOR_IJK_GRID(grid) {
+						Real set = grid->getGlobal(i,j,k);
+						*(gIsoSurface->lbmGetData(i,j,k)) = set;
+					}
+				}
+
+				gIsoSurface->triangulate();
+			}
+
+			gIsoSurface->drawOpenGL(gIsoAlpha);
+		} // phi grid exists?
+	}
+
+	if (gDrawParticles && drawGridInfo) {
+		std::vector<DDF::Particle> *parts = gpGlutFsolver->getParticles();
+		drawParticles(parts);
+	}
+
+	if (gDrawVortexParticles && drawGridInfo && gpGlutFsolver->getVorticitySys() != NULL) {
+		drawVortexParticles(gpGlutFsolver->getVorticitySys()->getParticles());
+	}
+
+	if(gDrawLsParticles >= 4) {
+		drawSurfacePoints();
+	} else if (gDrawLsParticles && gpGlutFsolver->getLevelSet() && drawGridInfo) {
+		const std::list<DDF::LevelSetParticle>& lsparts = gpGlutFsolver->getLevelSet()->getParticles();
+		const std::list<DDF::EscapedParticle>& escparts = gpGlutFsolver->getLevelSet()->getEscapedParticles();
+		drawLsParticles(gDrawLsParticles, lsparts, escparts);
+	}
+}
+
+
+
+void drawSurfacePoints(void) { 
+	const bool doJitter = false;
+
+	if(!gpGlutFsolver->mpPointSet) return;
+	SurfacePointSet *sps = (SurfacePointSet *)gpGlutFsolver->mpPointSet;
+	vector<SurfacePoint> *sp = sps->p();
+	const Real dx =  gpGlutFsolver->getParams()->getDeltaX();
+
+	glBegin(GL_LINES);
+	for(int i=0; i<(int)sp->size(); i++)
+	{
+		glLineWidth(1.0);
+
+		// points are displayed with 0.5dx offset to center for cell
+		Vec3 dp = (*sp)[i].getPos();
+		//debMsg("drawSurfacePoints","p "<<dp<<" "<<i<<"/"<<sp->size() );
+		dp += Vec3(dx) * 0.5;
+
+		// jitter points, this helps to identify many points in one spot...
+		if(doJitter) {
+			dp += Vec3(glutRand.getReal()-0.5,glutRand.getReal()-0.5, 0.) * dx * 0.1; 
+		}
+
+		if(gDim==2) { dp[2] = 0.; }
+		glColor3d(1., 0.9, 0.9);
+		glVertex3f( dp[0],dp[1],dp[2] );
+
+		dp += (*sp)[i].getNormal() * 0.5 * dx;
+		if(gDim==2) { dp[2] = 0.; }
+		glColor3d(0., 0.9, 0.9);
+		glVertex3f( dp[0],dp[1],dp[2] );
+	}
+	glEnd();
+
+} // test draw
+
+/******************************************************************************/
+
+extern bool advanceAllSolvers(); // from main
+extern void finalizeAllSolvers(); // from main
+extern void deleteAllSolvers(); // from main
+
+void writePNG(); // forward declaration
+void runSimulation () {
+	if (gPause) return;
+	if (gFinalizationDone) return;
+
+	if ((gpGlutFsolver->getParams()->mPNGScreenDumps)&&(gNextPNGNumber==0)) {
+		// dump initial state
+		writePNG();
+	}
+
+	bool quit = advanceAllSolvers();
+	if (quit) {
+		gPause=true;
+
+		if (!gFinalizationDone) {
+			finalizeAllSolvers();
+			gFinalizationDone = true;
+		}
+
+		// immediatly quit for qutorun
+		if(getenv("DDF_GUIAUTORUN")) {
+			if(atoi(getenv("DDF_GUIAUTORUN"))>=1) {
+				exit(0);
+			}
+		}
+	} // quit
+
+	// debug info per timestep
+	gRealgridMin = gRealgridmMax = 0.;
+
+	// compute only once each time step
+	if (1) {
+		Grid<Real> *realGrid = NULL; 
+		realGrid = gpGlutFsolver->getParams()->getGridReal(gShowRealgridName); // DEBrealGrid
+		goFindMinMax<Real> gomm = goFindMinMax<Real>( gpGlutFsolver->getGridFlags(), realGrid );
+		gRealgridMin = gomm.mMinVal;
+		gRealgridmMax = gomm.mMaxVal;
+		debMsg("MINMAX-REAL","min="<<gRealgridMin<<" at "<<gomm.mMinPos<<" max="<<gRealgridmMax<<" at "<<gomm.mMaxPos);
+
+		goFindMinMax<Vec3> gomv = goFindMinMax<Vec3>( gpGlutFsolver->getGridFlags(), 
+				gpGlutFsolver->getParams()->getGridVec3(gShowVelgridName) );
+		gVecgridMin = gomv.mMinVal;
+		gVecgridMax = gomv.mMaxVal;
+		debMsg("MINMAXV","min="<<gomv.mMinVal<<" at "<<gomv.mMinPos<<" max="<<gomv.mMaxVal<<" at "<<gomv.mMaxPos);
+
+	} // end minmax debug info
+
+	if ( (gpGlutFsolver->getParams()->mPNGScreenDumps>0) &&
+	     ((gFrameCounter%gpGlutFsolver->getParams()->mPNGScreenDumps)==0)	) {
+		//debMsg("mPNGScreenDumps"," "<< gFrameCounter <<" "<<gpGlutFsolver->getParams()->mPNGScreenDumps);
+		gWritePNG = true; // will be recognized by the redraw function
+	}
+
+	if(gIsoSurface) {
+		delete gIsoSurface;
+		gIsoSurface = NULL;
+	}
+
+	glutPostRedisplay();
+	if (gStep) {
+		gPause = true;
+		gStep = false;
+	}
+
+	// pause sim, if an error occurred
+	if(!isSimworldOk()) {
+		gPause = true;
+	}
+
+	gFrameCounter++;
+}
+
+
+template<class Scalar>
+std::string printGridValues(std::map<std::string, Grid<Scalar>*> &gridMap, int x,int y,int z) {
+	bool debSwitch = false;
+	SolverParams* prms = gpGlutFsolver->getParams();
+	std::ostringstream out;
+
+	typename std::map<std::string, Grid<Scalar>*>::iterator iter = gridMap.begin(); 
+	for ( ; iter!= gridMap.end(); iter++) {
+		if(!(*iter).second) {
+			continue;
+		}
+
+		Grid<Scalar> *cgrid = NULL;
+		cgrid = (*iter).second;
+		Scalar val = cgrid->getGlobal(x,y,z);
+		out <<"\t '"<<cgrid->getName()<<"'\t\t\t"<< val<<"\n";
+	}
+
+	return out.str();
+}
+
+// display clicked value
+void probePhiValue(int x, int y, bool showAll)
+{
+	const bool pickCellDebug = false;
+	GLint viewport[4];
+	GLubyte pixel[3];
+
+	// draw texture coords for picking
+	gPickCellMode = 1;
+	handle_display();
+
+	glGetIntegerv(GL_VIEWPORT,viewport);
+	glReadPixels(x,viewport[3]-y, 1,1,
+		GL_RGB, GL_UNSIGNED_BYTE, (void *)pixel);
+
+	gPickCellMode = 0;
+
+	//printf("PROBE1 %d %d %d\n", pixel[0], pixel[1], pixel[2]); // DEBUG
+	Grid<Real>* greal = NULL;
+	Grid<Vec3>* gvec3 = NULL;
+	greal = gpGlutFsolver->getParams()->getGridReal(gShowRealgridName);
+	gvec3 = gpGlutFsolver->getParams()->getGridVec3(gShowVelgridName);
+
+	const int i =            (int)( (Real)(pixel[0] *greal->getSizeX()) /255. +0.5);
+	const int j =            (int)( (Real)(pixel[1] *greal->getSizeY()) /255. +0.5);
+	const int k = (gDim>2) ? (int)( (Real)(pixel[2] *greal->getSizeZ()) /255. +0.5) : (gPatchSize/2);
+	//printf("PROBE2 %d %d %d\n", i,j,k ); // DEBUG
+	
+	//if (gDrawPhiRef) {
+		//greal = gpGlutFsolver->getParams()->getGridReal(gPhiRefName);
+		//printf("'%s' value at (%d,%d,%d): \t\t %f\n", greal->getName().c_str(), i,j,k, greal->getGlobal(i,j,k));
+	//} 
+	//printf("'%s' value at (%d,%d,%d): %s\n", gvec3->getName().c_str(), i,j,k, gvec3->getGlobal(i,j,k).toString.c_str() );
+
+	if(showAll) {
+		printf("Printing all grid values at (%d,%d,%d):\n", i,j,k);
+		printf("%s", printGridValues<Real>(
+					gpGlutFsolver->getParams()->mGridsReal, i,j,k).c_str() );
+		printf("%s", printGridValues<Vec3>(
+					gpGlutFsolver->getParams()->mGridsVec3, i,j,k).c_str() );
+		printf("%s", printGridValues<int>(
+					gpGlutFsolver->getParams()->mGridsInt, i,j,k).c_str() );
+	//glutgSelectNextGrid<Real>( prms->mGridsReal, gShowRealgridName );
+	} else {
+		Vec3 vec = gvec3->getGlobal(i,j,k);
+
+		std::string flagstring = " ";
+		if (gProbeShowFlags) {
+			FlagGrid* flags = gpGlutFsolver->getGridFlags();
+			int flag = flags->getGlobal(i,j,k);
+			flagstring = " flags=" + convertFlags2String(flag);
+		}
+
+		char buf[512];
+		sprintf(buf, "Val (%d,%d,%d): %f and %s %s", i,j,k, greal->getGlobal(i,j,k), vec.toString().c_str(),
+				flagstring.c_str() );
+		gProbeGridString = std::string(buf);
+		debMsg("ProbeGrid"," "<<gProbeGridString);
+
+		// only show active grids
+		//if(gDrawVel) printf(buf, "'%s' value at (%d,%d,%d): \t\t %s\n", gvec3->getName().c_str(), i,j,k, vec.toString().c_str() );
+		//else         printf(buf, "'%s' value at (%d,%d,%d): \t\t %f\n", greal->getName().c_str(), i,j,k, greal->getGlobal(i,j,k));
+	}
+
+	// show gui again...
+	handle_display();
+}
+
+// helper functions for point probing 
+
+void encodePointIndex(size_t index, GLubyte color[3]) {
+	color[0] = (index     ) & 0x000000FF;
+	color[1] = (index >> 8) & 0x000000FF;
+	color[2] = (index >>16) & 0x000000FF;
+
+	// safety check
+	if( (index >> 24) > 0 ) {
+		errFatal("encodePointIndex","Index too large "<<index, SIMWORLD_GENERICERROR);
+	}
+}
+
+void decodePointIndex(GLubyte color[3], size_t& index) {
+	index = color[0] + (color[1] << 8) + (color[2] << 16);
+}
+
+void fsDrawProbeMeshPoints() {
+#ifdef DDF_MESHSURFACE_3D
+	SurfaceMesh *mesh = gpGlutFsolver->getMesh(gGuiMeshName);
+	GLubyte color[3];
+
+	glPointSize(5.0);
+	glBegin(GL_POINTS);
+	for(int i=0; i<(int)mesh->surfaceNodes.size(); i++)
+	{
+		// add 1, 0 means no point found...
+		encodePointIndex(i+1, color);
+		//debMsg("encodePointIndex"," at "<<i<<" "<<(int)color[0]<<" "<<(int)color[1]<<" "<<(int)color[2] );
+		glColor3ub( color[0] ,color[1] ,color[2] );
+		glVertex3dv( &mesh->surfaceNodes[ i ].pos[0] );
+	}
+	glEnd();
+
+	glPointSize(1.0);
+#endif 
+}
+
+std::string getNodeInfo(SurfaceMesh *mesh, size_t index) {
+	std::string ret = string("");
+#ifdef DDF_MESHSURFACE_3D
+	if(index > 0) {
+		std::ostringstream out;
+
+		SmVector3 p = mesh->surfaceNodes[index].pos;
+		out << "Point "<<index<<" pos="<<p<<" :";
+
+		for(int m=0; m<(int)mesh->getNodeProps().size(); m++) { 
+			out << " P"<<m<<": "<< mesh->getNodeProps()[m]->printElement(index);
+		}
+
+		ret = out.str();
+	} 
+#	endif 
+	return ret;
+}
+
+std::string getNodeInfoNbs(SurfaceMesh *mesh, size_t index) {
+	std::ostringstream out;
+#ifdef DDF_MESHSURFACE_3D
+	out <<"NBS: \n";
+
+	int ctEntry = -1;
+	for(int i=0; i< (int)mesh->surfaceCT.ct.size();i ++) {
+		if( mesh->surfaceCT.ct[i].v == (int)index) ctEntry = i;
+	}
+
+	//std::cout<<" DEB "<< ctEntry  <<" for "<<target   <<"\n";
+	if (ctEntry>=0 )  {
+		int current = ctEntry;
+		int end = current;
+		do {
+			current = mesh->surfaceCT.ct[ mesh->surfaceCT.ct[ mesh->surfaceCT.ct[current].n ].o ].n; 
+			int nbv = mesh->surfaceCT.ct[ mesh->surfaceCT.ct[ current ].n ].v;
+			//if(mProps.size()>0) std::cout <<"subdiv DDD 1 "<<nbv<<" "<<mProps[0]->printElement(nbv)<<" \n";
+			out << "    " <<getNodeInfo(mesh, nbv)  <<"\n";
+		}
+		while(current != end);
+	} else {
+		errFatal("getNodeInfoNbs","Invalid Index !? "<<index, SIMWORLD_GENERICERROR);
+	}
+
+#	endif 
+	return out.str();
+}
+
+// display clicked point
+void probeMeshPoint(int x, int y, bool showAll)
+{
+	GLint viewport[4];
+	GLubyte pixel[3];
+	if( gDrawSurfaceMesh && gpGlutFsolver->haveMesh(gGuiMeshName) ) {
+		// ok, continue
+	} else {
+		debMsg("probeMeshPoint","No mesh shown, or not loaded...");
+		return;
+	}
+
+	// draw point ids for picking
+	gPickCellMode = 2;
+	handle_display();
+
+	glGetIntegerv(GL_VIEWPORT,viewport);
+	glReadPixels(x,viewport[3]-y, 1,1, GL_RGB, GL_UNSIGNED_BYTE, (void *)pixel);
+	gPickCellMode = 0;
+
+	size_t index;
+	decodePointIndex(pixel, index);
+	gProbeGridString = std::string("");
+	gProbePointIndex = index;
+
+	if(index > 0) {
+		index--;
+
+		SurfaceMesh *mesh = gpGlutFsolver->getMesh(gGuiMeshName);
+		gProbeGridString = getNodeInfo(mesh, index); // std::string(buf);
+		debMsg("ProbePoint"," "<<gProbeGridString);
+		debMsg("ProbePointNBs"," "<< getNodeInfoNbs(mesh, index) );
+	} 
+
+	// show gui again...
+	handle_display();
+}
+
+
+
+void writePNG(void)
+{
+	char filename[64];
+	sprintf(filename,"screen_%s_%04d.png",gpGlutFsolver->getParams()->mAnimOutputFile.c_str(), gNextPNGNumber++);
+	debMsg("writePNG","Writing screen dump to file " << std::string(filename));
+
+	GLint viewport[4];
+	glGetIntegerv(GL_VIEWPORT,viewport);
+	int w = viewport[2], h = viewport[3];
+
+	std::vector<unsigned char> buf;
+	buf.resize(w*h*4);
+	glReadPixels(0,0,w,h,
+		GL_RGBA,GL_UNSIGNED_BYTE,&buf[0]);
+
+	unsigned char **rows;
+	rows = new unsigned char*[h];
+	for (int i = 0; i < h; i++) rows[i] = &buf[(h-i-1)*w*4];
+	writeImage(filename, rows, w, h);
+	delete[] rows;
+}
+
+/******************************************************************************/
+void handle_display (void) {
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE); 
+
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	//gluLookAt(0.5, 0.5, 1.0, 0.5, 0.5, 0.0, 0.0, 1.0, 0.0);
+	//        from           to             up
+	gluLookAt(0., 0., 0.5,   0., 0., -0.5,  0., 1., 0.);
+	glPushMatrix();
+
+	glTranslatef( gViewTrafo[0], gViewTrafo[1], gViewTrafo[2] );
+	glRotatef(gViewRot[0],  1.,0.,0.);
+	glRotatef(gViewRot[1],  0.,1.,0.);
+	// center on .5 .5 .5
+	glTranslatef( -0.5,-0.5,-0.5 );
+
+	if (gPickCellMode == 1) {
+		glDisable(GL_LIGHTING); 
+		fsDrawCellIndex(gpGlutFsolver->getGridFlags(), gGlutRoi);
+		glEnable(GL_LIGHTING); 
+	} else if (gPickCellMode == 2) {
+		glDisable(GL_LIGHTING); 
+		fsDrawProbeMeshPoints();
+		glEnable(GL_LIGHTING); 
+	} else {
+		drawPatchGrid();
+	}
+
+	std::ostringstream outstr;
+	int frame = gpGlutFsolver->getFrameNum();
+	int aniframe = gpGlutFsolver->getAniFrameNum();
+	outstr << "Solver: "<<gpGlutFsolver->getName()<<", t="<< gpGlutFsolver->getSimTime() << " [frame " << frame << ", ani " << aniframe  <<  "]\n";
+
+	// real grid stats
+	//Real absmax=gRealgridmMax;
+	//if (fabs(gRealgridMin)>fabs(absmax)) absmax=gRealgridMin; 
+	outstr << "Real-grid: "<<gShowRealgridName<< " [range " << gScaleRealDisplay[gShowRealgridName]   ;
+	if(gRealgridMin != 0.) outstr << " min " << gRealgridMin <<  "," ;
+	outstr << " max " << gRealgridmMax <<  "]\n";
+	int numP = (gpGlutFsolver->getVorticitySys()==NULL) ? 0 : gpGlutFsolver->getVorticitySys()->getParticles().size();
+	if (numP > 0) outstr << numP << " vortex parts active\n";
+
+	// vec grid stats
+	if(gDrawVel) {
+		outstr<<"Vec3-grid: "<<gShowVelgridName<<"";
+		if(gDrawCenteredVels) outstr<<", centered ";
+		else outstr<<", faces ";
+
+		outstr << " range=" << gScaleVelocityDisplay ;
+		if(norm( gVecgridMin ) > 0.) outstr << " min=" << gVecgridMin <<  ",";
+		outstr << " max=" << gVecgridMax ;
+		if (!gVelocityMAC) outstr << " noMAC" ;
+		outstr << "\n";
+	}
+
+	switch(gDrawIsoSurface) {
+		case 0: break;
+		case 1: outstr<<"Iso: on\n"; break;
+		case 2: outstr<<"Iso: flags\n"; break;
+	}
+
+	if(gDrawSurfaceMesh > 0) {
+		outstr<<"Mesh '"; 
+		outstr<<gGuiMeshName;
+		outstr<<"': "; 
+	}
+	switch(gDrawSurfaceMesh) {
+		case 0: break;
+		case 1: outstr<<"on"; break;
+		case 2: outstr<<"lines"; break;
+		case 3: outstr<<"points"; break;
+		case 4: outstr<<"only"; break;
+		case 5: outstr<<"+Waves"; break;
+	}	
+	outstr<< gLastPluginSubstepName;
+
+	fontRender.setColor(1., 1., 1., 0.8);
+	fontRender.print(0.025, 0.975, 0.015, outstr.str().c_str() );
+
+	// selection
+	std::ostringstream outstr2;
+	outstr2<< gProbeGridString;
+
+	fontRender.setColor(1., 1., 0.5, 0.8);
+	fontRender.print(0.025, 0.025, 0.015, outstr2.str().c_str() );
+
+	// status
+	if(!gPause) {
+		fontRender.setColor(0., 1., 0., 0.8);
+		fontRender.print(0.025, 0.075, 0.015, "SIM" );
+	}
+
+	glPopMatrix();
+	glFlush();
+	glutSwapBuffers();
+
+	if (gWritePNG) {
+		writePNG();
+		gWritePNG = false;
+	}
+}
+
+void handle_reshape (int w, int h) {
+	glViewport(0, 0, (GLsizei) w, (GLsizei) h);
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(60.0, (GLfloat) w/(GLfloat) h, 0.05, 20.0);
+
+	glMatrixMode(GL_MODELVIEW);
+}
+
+void handle_keyboard(unsigned char key, int x, int y) {
+	bool roiMsgs = false;
+	switch (key) {
+		case 'p': 
+			// run simulation
+			gPause = !gPause;
+			break;
+		case 'l': 
+			// single step
+			gPause = false; 
+			gStep = true;
+			break;
+
+			// roi z plane
+		case '-': 
+		case '_': 
+			gGlutRoi.getStart()[gRoiPlane]--; gGlutRoi.getEnd()[gRoiPlane]--; 
+			if (roiMsgs) debMsg("key","- plane = " << gGlutRoi.getStart()[gRoiPlane]);
+			if (roiMsgs) debMsg("changeGlutRoi","- roi = "<<gGlutRoi.toString()<<" plane="<<gRoiPlane ); // debug
+			break;
+		case '+': 
+		case '=': 
+			gGlutRoi.getStart()[gRoiPlane]++; gGlutRoi.getEnd()[gRoiPlane]++; 
+			if (roiMsgs) debMsg("key","+ plane = " << gGlutRoi.getStart()[gRoiPlane]);
+			if (roiMsgs) debMsg("changeGlutRoi","+ roi = "<<gGlutRoi.toString()<<" plane="<<gRoiPlane ); // debug
+			break;
+		case '*': 
+			gRoiPlane++; gRoiPlane=gRoiPlane%3; 
+			initGlutRoi( 0.5 ); 
+			if (roiMsgs) debMsg("changeGlutRoi","* roi = "<<gGlutRoi.toString()<<" plane="<<gRoiPlane ); // debug
+			break;
+		/*case '8':
+			// toggle showing phi/phi-reference, for level set debugging
+			if (gpGlutFsolver->getParams()->haveGridReal(gPhiRefName))
+				gDrawPhiRef = ! gDrawPhiRef;
+			if (gDrawPhiRef)
+				printf("Drawing reference phi grid.\n");
+			else
+				printf("Drawing original phi grid.\n");
+			//if ((gpPhiGrid != NULL) && (gpPhiRefGrid != NULL)) std::swap(gpPhiGrid, gpPhiRefGrid);
+			break; */
+		case 'R':
+			// specify reference phi grid for '8'
+			{
+				char _gridname[32];
+				printf("Specify reference phi grid: ");
+				char* gridname = fgets(_gridname, 32, stdin);
+				if (gridname) {
+					gridname[strlen(gridname)-1] = 0;
+					if (gpGlutFsolver->getParams()->haveGridReal(gridname)) {
+						gPhiRefName = std::string(gridname);
+						printf("Displaying %s.\n", gridname);
+					} else {
+						printf("Grid not found, display remains unchanged.\n");
+					}
+				} else
+					printf("No input!\n");
+			}
+			break;
+
+		case 'P':
+			// toggle draw particles
+			gDrawParticles = !gDrawParticles;
+			break;
+		case 'L':
+			// toggle draw level set particles
+			gDrawLsParticles = (gDrawLsParticles+1)%5;
+			break;
+		case 'o':
+			gDrawVortexParticles = !gDrawVortexParticles;
+			break;
+		case 'v':
+			// toggle velocity display
+			gDrawVel = !gDrawVel;
+			gVelocityMAC = !(gpGlutFsolver->getParams()->getGridVec3(gShowVelgridName)->getDisplayFlags() & 4);
+			break;
+		case 'V':
+			// toggle centered velocity display
+			gDrawCenteredVels = !gDrawCenteredVels;
+			break;
+
+			// toggle velocity MAC display (values being averaged for center or not)
+			// disabled for now, not often used anymore...?
+		//case 'M': gVelocityMAC = !gVelocityMAC; break;
+
+		case 'g':
+			gGlutProject *=-1;
+			break;
+		case 'G':
+			gGlobalVPart =!gGlobalVPart;
+			break;
+
+			// surface mesh debugging flags
+		case 'm':
+			gDrawSurfaceMesh = (gDrawSurfaceMesh+1)%6;
+			break;
+		case 'M': // select next mesh
+			glutgSelectNextMesh();
+			break;
+
+		case 'i':
+			// draw iso surface of the specified grid (param "isosurface-grid")
+			gDrawIsoSurface = (gDrawIsoSurface+1) % 3;
+			break;
+
+		case '`': {
+				// remember grid selection factor
+				nVec3i grsize = gpGlutFsolver->getGridFlags()->getSize();
+				Real planeFac = ( ((Real)gGlutRoi.getStart()[gRoiPlane]+1.0) / (Real)grsize[gRoiPlane]) ;
+				//grsize[gRoiPlane] = (grsize[gRoiPlane] * planeFac);
+
+				// show next solver, cycle through all available
+				glutgSelectNextSolver();
+
+				// reset struct that have to be initialized anew for solver
+				if(gGlutProject) { 
+					delete gpProjImg; 
+					gpProjImg=NULL; 
+				}
+				if(gIsoSurface) {
+					delete gIsoSurface;
+					gIsoSurface = NULL;
+				}
+
+				initGlutRoi(planeFac); 
+				debMsg("selectNextSolver","Roi factor="<<planeFac<<", plane = "<< gGlutRoi.getStart()[gRoiPlane] );
+			 } break;
+
+		case '[':
+			gScaleRealDisplay[gShowRealgridName]  *= 2.;
+			break;
+		case ']':
+			gScaleRealDisplay[gShowRealgridName]  /= 2.;
+			break;
+		case '{':
+			gScaleVelocityDisplay /= 2.;
+			break;
+		case '}':
+			gScaleVelocityDisplay *= 2.;
+			break;
+
+		case 'z': 
+			// show next float grid
+			glutgSelectNextFloatArray();
+			initFloatArrayDisplay();
+			break;
+		case 'x': 
+			// show next vec3 grid
+			glutgSelectNextVec3Array();
+			gVelocityMAC = !(gpGlutFsolver->getParams()->getGridVec3(gShowVelgridName)->getDisplayFlags() & 4);
+			break;
+		case 'S': 
+			//gpGlutFsolver->getParams()->mSubstepDebug = !gpGlutFsolver->getParams()->mSubstepDebug;
+			break;
+
+			// cam movement
+		case 'a': gViewTrafo[0] += gMoveSpeed* 15; break;
+		case 'd': gViewTrafo[0] += gMoveSpeed*-15; break;
+		case 's': gViewTrafo[1] += gMoveSpeed* 15; break;
+		case 'w': gViewTrafo[1] += gMoveSpeed*-15; break;
+		case 'q': gViewTrafo[2] += gMoveSpeed* 15; break;
+		case 'e': gViewTrafo[2] += gMoveSpeed*-15; break;
+
+		case 27: // ESC
+			// quit
+			//cleanSimulation();
+			exit(0);
+			break;
+	}
+
+	glutPostRedisplay();
+}
+
+
+void handle_mousePress(int button, int state, int x, int y) {
+	g_specialKey = glutGetModifiers();
+	// if both a mouse button, and the ALT key, are pressed  then
+	if ( (state == GLUT_DOWN) ) {
+
+		if (g_specialKey == GLUT_ACTIVE_SHIFT) {
+			// show active grids
+			probePhiValue(x,y, false);
+		} else if (g_specialKey == GLUT_ACTIVE_CTRL) {
+			// show all grids
+			probePhiValue(x,y, true);
+		} else if (g_specialKey == GLUT_ACTIVE_ALT) {
+			// show mesh point info
+			probeMeshPoint(x,y, true);
+
+		} else {
+			if (button == GLUT_LEFT_BUTTON) {
+				g_mouseBut = GLUT_LEFT_BUTTON;
+			} else if (button == GLUT_MIDDLE_BUTTON) {
+				g_mouseBut = GLUT_MIDDLE_BUTTON;
+			} else {
+				g_mouseBut = GLUT_RIGHT_BUTTON;
+			}
+		}
+	} else {
+		g_mouseBut = -1;
+		g_lastMouseX=g_lastMouseY=-1;
+		// gProbeGridString = std::string(""); // reset display
+	}
+}
+void handle_mouseMotion(int x,int y) {
+
+	if (g_lastMouseX==-1 && g_lastMouseY==-1) {
+		g_lastMouseX = x;
+		g_lastMouseY = y;
+		return;
+	}
+
+	if (g_mouseBut==GLUT_RIGHT_BUTTON) {
+		gViewTrafo[0] += (g_lastMouseX-x) * -gMoveSpeed;
+		gViewTrafo[1] += (g_lastMouseY-y) *  gMoveSpeed;
+		glutPostRedisplay();
+	}
+	if (g_mouseBut==GLUT_MIDDLE_BUTTON) {
+		gViewTrafo[2] += (g_lastMouseX-x) * -gMoveSpeed;
+		gViewTrafo[2] += (g_lastMouseY-y) *  gMoveSpeed;
+		glutPostRedisplay();
+	}
+	if (g_mouseBut==GLUT_LEFT_BUTTON) {
+		gViewRot[1] += (g_lastMouseX-x) * -gRotSpeed;
+		gViewRot[0] += (g_lastMouseY-y) * -gRotSpeed;
+		glutPostRedisplay();
+	}
+	g_lastMouseX = x;
+	g_lastMouseY = y;
+	//debMsg("mouseMotion"," at "<<PRINT_VEC(x,y,0.)<<", last "<<PRINT_VEC(g_lastMouseX,g_lastMouseY,0.)<<" but="<<g_mouseBut);
+}
+
+
+
+
+/******************************************************************************/
+// mesh surface tracking display & debugging functions
+
+
+void fsDrawMesh(SurfaceMesh *mesh)
+{
+#if DDF_MESHSURFACE==1
+#if DDF_DIMENSION==3
+	bool showTris = gDrawSurfaceMesh==1 || gDrawSurfaceMesh==4 || gDrawSurfaceMesh==5;
+	bool showLines = gDrawSurfaceMesh==2;
+	bool showPoints = gDrawSurfaceMesh==3;
+
+	// gDrawSurfaceMesh==4 means only mesh, opaque
+	bool showOnlyTris = gDrawSurfaceMesh==4 || gDrawSurfaceMesh==5;
+	bool showWaves = gDrawSurfaceMesh==5;
+
+	// render surface edges
+	Real dx = gpGlutFsolver->getParams()->getDeltaX();
+	NodeProperty<WaveData>* pwdp = gpGlutFsolver->getWaveData();
+	NodeProperty<WaveData>& wdp = *pwdp;
+
+	// uvs / textures
+	TriProperty<TexCoordData>* ptcdp = gpGlutFsolver->getTexCoordData();
+	TriProperty<TexCoordData>& tcdp = *ptcdp;
+	bool haveTexture = (ptcdp != NULL);
+
+	// per vertex cols
+	NodeProperty<VertexColorData>* pVertCols = gpGlutFsolver->getVertexColorData();
+	NodeProperty<VertexColorData>& vertCols = *pVertCols;
+	bool haveVertCols = (pVertCols != NULL); 
+
+	// setup OpenGL lighting and material
+	//glColorMaterial ( GL_FRONT_AND_BACK, GL_DIFFUSE ) ;
+	glColorMaterial ( GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE ) ;
+	glEnable(GL_COLOR_MATERIAL);
+
+	// control colors
+	float max = 1.0;
+	float dim = 0.5;
+	float amb = 0.1;
+	float shininess = 50.;
+	dim = 1.0; amb=0.5; // shininess = 0.; // no colored lights or speculars, debugging
+
+	float ambient0[] = {amb, amb, amb, max};
+	glLightfv(GL_LIGHT0, GL_AMBIENT, ambient0); 
+
+	float diffuse0[]  = {max, dim, dim, 1.0};
+	float specular0[] = {max, dim, dim, 1.0};
+	float position0[] = { 5., 5., 5., 1.0f };
+	glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse0); 
+	glLightfv(GL_LIGHT0, GL_SPECULAR, specular0); 
+	glLightfv(GL_LIGHT0, GL_POSITION, position0);
+
+	float diffuse1[]  = {dim, max, dim, 1.0};
+	float specular1[] = {dim, max, dim, 1.0};
+	float position1[] = {  5., -5., -5., 1.0f };
+	glLightfv(GL_LIGHT1, GL_DIFFUSE, diffuse1); 
+	glLightfv(GL_LIGHT1, GL_SPECULAR, specular1); 
+	glLightfv(GL_LIGHT1, GL_POSITION, position1);
+
+	float diffuse2[]  = {dim, dim, max, 1.0};
+	float specular2[] = {dim, dim, max, 1.0};
+	float position2[] = {  -5.,  5., -5., 1.0f };
+	glLightfv(GL_LIGHT2, GL_DIFFUSE, diffuse2); 
+	glLightfv(GL_LIGHT2, GL_SPECULAR, specular2); 
+	glLightfv(GL_LIGHT2, GL_POSITION, position2);
+
+	float specReflection[] = { dim, dim, dim, 1.0f };
+	if(shininess == 0.) specReflection[0] = specReflection[1] = specReflection[2] = 0.;
+	glMaterialfv(GL_FRONT, GL_SPECULAR, specReflection); 
+	glMateriali(GL_FRONT, GL_SHININESS, shininess); 
+
+	glEnable(GL_LIGHTING); 
+	glEnable(GL_LIGHT0);
+	glEnable(GL_LIGHT1);
+	glEnable(GL_LIGHT2);
+
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	//glEnable(GL_CULL_FACE); 
+
+	if(!showOnlyTris) glEnable(GL_BLEND);  // enable / disable blending
+	if(showOnlyTris) glEnable(GL_DEPTH_TEST); 
+
+	// overdraw with & points
+	if ( gMeshDrawLines && (!showPoints) && (!showLines) ) {
+		glColor3d(0.2, 0.9, 0.2);
+		glPointSize(0.5);
+		glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh->surfaceNodes.size(); i++) {
+			glVertex3dv( &mesh->surfaceNodes[ i ].pos[0] );
+		}
+		glEnd();
+
+		glBegin(GL_LINES);
+		glColor3d(0., 0., 0.2);
+		glLineWidth(1.0);
+		for(int i=0; i<(int)mesh->surfaceTris.size(); i++) {
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[2] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[0] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[0] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[1] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[1] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[2] ].pos[0] );
+		}
+		glEnd();
+	}
+
+	// set default drawing color
+	glColor4f(0.5,0.5,0.5, gIsoAlpha);
+
+	if(showWaves) {
+		// compute displaced mesh for wave equation
+		// and draw with smooth per vertex normals
+
+		std::vector<SmVector3> vertNormals;
+		std::vector<SmVector3> vertPosWave;
+		displaceMeshSurfaceWaves(mesh, vertPosWave, vertNormals, pwdp);
+
+		glBegin(GL_TRIANGLES);
+		if(showTris)
+		for(int i=0; i<(int)mesh->surfaceTris.size(); i++)
+		{
+			SmVector3 normal = mesh->GetTriangleNormal(i);
+			//glNormal3dv( &normal[0] );
+
+			for (int j=0; j<3; j++) {
+				const int index = mesh->surfaceTris[i].p[j];
+
+				glNormal3dv( &vertNormals[index][0] );
+
+				SmVector3 v = vertPosWave[index];
+
+				if(haveVertCols) 
+					glColor3f( vertCols[index].color[0], vertCols[index].color[1], vertCols[index].color[2] );
+
+				glVertex3dv( &v[0] );
+			}
+		}
+		glEnd();
+		// WEQ
+
+	} else {
+
+		// activate texture
+		if(haveTexture && gDrawSurfaceMesh==4) {
+			glEnable( GL_TEXTURE_2D );
+			glBindTexture( GL_TEXTURE_2D, gMeshTexture );
+		} 
+
+		// org: direct display of mesh vertices
+		glPolygonOffset(1.0, 0.5);
+		glColor4f(0.5,0.5,0.5, gIsoAlpha);
+		glBegin(GL_TRIANGLES);
+		if (showTris)
+			for(int triIndex=0; triIndex<(int)mesh->surfaceTris.size(); triIndex++)
+			{
+				SmVector3 normal = mesh->GetTriangleNormal(triIndex);
+				glNormal3dv( &normal[0] );
+				int vertIndex = 0;
+
+				//for(int j=0; j<3; j++) { debMsg("tc "," uv "<< triIndex<<" = " <<  tcdp[triIndex](j)[0] <<"," <<tcdp[triIndex](j)[1] ); } // debug
+
+				vertIndex = mesh->surfaceTris[triIndex].p[0];
+				if(haveTexture) 
+					glTexCoord2d( tcdp[triIndex](0)[0], tcdp[triIndex](0)[1] ); 
+				else if(haveVertCols) 
+					glColor3f( vertCols[vertIndex].color[0], vertCols[vertIndex].color[1], vertCols[vertIndex].color[2] );
+				glVertex3dv( &mesh->surfaceNodes[ vertIndex ].pos[0] );
+
+				vertIndex = mesh->surfaceTris[triIndex].p[1];
+				if(haveTexture) 
+					glTexCoord2d( tcdp[triIndex](1)[0], tcdp[triIndex](1)[1] ); 
+				else if(haveVertCols) 
+					glColor3f( vertCols[vertIndex].color[0], vertCols[vertIndex].color[1], vertCols[vertIndex].color[2] );
+				glVertex3dv( &mesh->surfaceNodes[ vertIndex ].pos[0] );
+
+				vertIndex = mesh->surfaceTris[triIndex].p[2];
+				if(haveTexture) 
+					glTexCoord2d( tcdp[triIndex](2)[0], tcdp[triIndex](2)[1] ); 
+				else if(haveVertCols) 
+					glColor3f( vertCols[vertIndex].color[0], vertCols[vertIndex].color[1], vertCols[vertIndex].color[2] );
+				glVertex3dv( &mesh->surfaceNodes[ vertIndex ].pos[0] );
+			}
+		glEnd();
+
+
+		if(haveTexture) {
+			glDisable( GL_TEXTURE_2D );
+		} 
+		glPolygonOffset(1., 1.);
+	}
+
+	//glDisable(GL_CULL_FACE); 
+	glDisable(GL_BLEND);
+	glDisable(GL_LIGHT0);
+	glDisable(GL_LIGHT1);
+	glDisable(GL_LIGHT2);
+	glDisable(GL_LIGHTING);
+	glDisable(GL_COLOR_MATERIAL);
+
+	if(showLines) {
+		glColor3d(1., 0.9, 0.9);
+		glLineWidth(1.0);
+		glBegin(GL_LINES);
+		for(int i=0; i<(int)mesh->surfaceTris.size(); i++)
+		{
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[2] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[0] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[0] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[1] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[1] ].pos[0] );
+			glVertex3dv( &mesh->surfaceNodes[ mesh->surfaceTris[i].p[2] ].pos[0] );
+		}
+		glEnd();
+	}
+
+	// draw points
+	if(showPoints) {
+		glColor3d(1., 0.9, 0.9);
+		glPointSize(2.0);
+		glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh->surfaceNodes.size(); i++)
+		{
+			// waves debugging
+			if(pwdp && wdp[ i ].onBoundary) {
+				glColor3d(0.0, 0.0, 1.0);
+			} else {
+				glColor3d(1.0, 0.9, 0.9);
+			}
+
+			glVertex3dv( &mesh->surfaceNodes[ i ].pos[0] );
+		}
+		glEnd();
+
+		glPointSize(1.0);
+	}
+
+	// draw selected point
+	if(gProbePointIndex > 0) {
+		glPointSize(8.0);
+		glEnable(GL_BLEND);
+		glDisable(GL_DEPTH_TEST);
+		glBegin(GL_POINTS);
+		glColor4d(1.0, 1.0, 1.0, 0.5);
+
+		glVertex3dv( &mesh->surfaceNodes[ gProbePointIndex-1 ].pos[0] );
+
+		glEnd();
+		glPointSize(1.0);
+		glDisable(GL_BLEND);	
+		glEnable(GL_DEPTH_TEST);
+	}
+
+	// show debug info , optional sometimes inited in meshinit.cpp
+	if (1 && gpGlutFsolver->meshDebugFlags.size()>0 &&
+			gpGlutFsolver->meshDebugFlags.size() == mesh->surfaceNodes.size() ) {
+		debMsg("GlutGui","Showing meshDebugFlags info");
+		std::vector<int>& debflags = gpGlutFsolver->meshDebugFlags;
+		glPointSize(5.0); glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh->surfaceNodes.size(); i++)
+		{
+			if(debflags[i] == 0) continue;
+			Vec3 col(0.);
+			if(debflags[i] & 1) col += Vec3(0.,1.,0.);
+			if(debflags[i] & 2) col += Vec3(1.,0.,0.);
+
+			glColor3d(col[0], col[1], col[2]);
+			glVertex3dv( &mesh->surfaceNodes[ i ].pos[0] );
+		}
+		glEnd(); 
+		glPointSize(1.0);
+	}
+	// end, show debug info 
+
+#else // DDF_DIMENSION==3
+	const bool showPoints = true;
+	SM2D::SurfaceMesh2D *mesh2d = (SM2D::SurfaceMesh2D*)(mesh);
+
+	// render surface edges
+	Real dx = gpGlutFsolver->getParams()->getDeltaX();
+	glColor3d(1.0, 1.0, 1.0);
+	if(!showPoints) glColor3d(0., 1., 1.);
+	glLineWidth(1.0);
+	glBegin(GL_LINES);
+	for(int i=0; i<(int)mesh2d->edges.size(); i++)
+	{
+		// draw a line for each boundary edge
+		glVertex2d(	mesh2d->surface_nodes[mesh2d->edges[i].p1].x[0],
+				mesh2d->surface_nodes[mesh2d->edges[i].p1].x[1]);
+		glVertex2d(	mesh2d->surface_nodes[mesh2d->edges[i].p2].x[0],
+				mesh2d->surface_nodes[mesh2d->edges[i].p2].x[1]);
+	}
+	glEnd();
+
+
+	// draw points
+	if(showPoints) {
+		glColor3d(1., 0.9, 0.9);
+		glPointSize(3.0);
+		glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh2d->surface_nodes.size(); i++) {
+			// show component id's by color:
+			if (1) {
+				if ((mesh2d->surface_nodes[i].componentId%4)==0) 
+					glColor3d(1., 1., 1.);
+				if ((mesh2d->surface_nodes[i].componentId%4)==1) 
+					glColor3d(1., 0., 0.);
+				if ((mesh2d->surface_nodes[i].componentId%4)==2) 
+					glColor3d(0., 1., 0.);
+				if ((mesh2d->surface_nodes[i].componentId%4)==3) 
+					glColor3d(0., 0., 1.);
+			}
+
+			glVertex2d(	mesh2d->surface_nodes[i].x[0], mesh2d->surface_nodes[i].x[1]);
+		}
+		glEnd();
+
+		glPointSize(1.0);
+	}
+
+	// draw curvature 
+	const Real showCurvature = 0.5;
+	if ( (gMeshDrawDebugFlags&1) && showCurvature > 0.) {
+		glColor3d(0., 1., 0.);
+		glLineWidth(2.0);
+		glBegin(GL_LINES);
+		for(int i=0; i<(int)mesh2d->edges.size(); i++)
+		{
+			Vec2 p = mesh2d->surface_nodes[mesh2d->edges[i].p1].x;
+			glVertex2d(	p[0], p[1] );
+			Real len = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].curvature;
+			Real len2 = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].orgCurvature;
+			//len = mesh2d->surface_nodes[mesh2d->edges[i].p1].surfaceTension; // ALT
+			//p += mesh2d->surface_nodes[mesh2d->edges[i].p1].normal * len * 0.5 * showCurvature; // show full curvature
+			//p += mesh2d->surface_nodes[mesh2d->edges[i].p1].normal * dx * 2.; // shown only normals
+			p += mesh2d->surface_nodes[mesh2d->edges[i].p1].normal * len2 * 0.5 * showCurvature; // show full curvature
+			glVertex2d(	p[0], p[1] );
+		}
+		glEnd();
+	}
+
+	// debug - show st speed values
+	const Real showStSpeed = 2.5;
+	if ( (gMeshDrawDebugFlags&2) && showStSpeed > 0.) {
+		glColor3d(1., 0., 0.); glLineWidth(2.0); glBegin(GL_LINES);
+		for(int i=0; i<(int)mesh2d->edges.size(); i++)
+		{
+			Vec2 p = mesh2d->surface_nodes[mesh2d->edges[i].p1].x;
+			glVertex2d(	p[0], p[1] );
+			//Real len2 = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].orgCurvature;
+			p += mesh2d->surface_nodes[mesh2d->edges[i].p1].stSpeed * showStSpeed;
+			glVertex2d(	p[0], p[1] );
+		}
+		glEnd();
+	}
+
+	// debug draw smoothed mesh
+	const bool showSmoothedMesh = (gMeshDrawDebugFlags&4);
+	if (showSmoothedMesh) {
+		glColor3d(0., 0.8, 0.0);
+		glLineWidth(1.0);
+		glBegin(GL_LINES);
+		for(int i=0; i<(int)mesh2d->tempEdges.size(); i++) {
+			glVertex2d(	mesh2d->tempNodes[mesh2d->tempEdges[i].p1].x[0],
+					mesh2d->tempNodes[mesh2d->tempEdges[i].p1].x[1]);
+			glVertex2d(	mesh2d->tempNodes[mesh2d->tempEdges[i].p2].x[0],
+					mesh2d->tempNodes[mesh2d->tempEdges[i].p2].x[1]);
+		}
+		glEnd();
+
+		glColor3d(0.3, 1.0, 0.3);
+		glPointSize(3.0);
+		glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh2d->tempNodes.size(); i++) {
+			glVertex2d(	mesh2d->tempNodes[i].x[0], mesh2d->tempNodes[i].x[1]);
+		}
+		glEnd();
+
+		// draw smoothed mesh normals, optional
+		if (0) {
+			glColor3d(0.6, 0.4, 0.4);
+			glLineWidth(1.0);
+			glBegin(GL_LINES);
+			for(int i=0; i<(int)mesh2d->tempNodes.size(); i++) {
+				glVertex2d(	mesh2d->tempNodes[i].x[0], mesh2d->tempNodes[i].x[1]);
+				glVertex2d(	mesh2d->tempNodes[i].x[0]+mesh2d->tempNodes[i].normal[0]*dx, 
+							mesh2d->tempNodes[i].x[1]+mesh2d->tempNodes[i].normal[1]*dx);
+			}
+			glEnd();
+		}
+
+		// draw COMs
+		if (1) {
+			glPointSize(10.0);
+			glBegin(GL_POINTS);
+			for(int i=0; i<(int)mesh2d->getNumConnectedComponents(); i++) {
+				Vec2 p = mesh2d->getComponent(i).COM;
+				glColor3d(1.0, 1.0, 0.5);
+				glVertex2d(	p[0], p[1] );
+			}
+			glEnd();
+
+			// debug, print ID next to components
+			if (0) {
+				for(int i=0; i<(int)mesh2d->getNumConnectedComponents(); i++) {
+					Vec2 p = mesh2d->getComponent(i).COM;
+
+					std::ostringstream outstr;
+					outstr <<"c"<<i;
+					fontRender.setColor(0., 1., 0., 0.8);
+					fontRender.print( p[0],p[1], 0.015, outstr.str().c_str() );
+				}
+			}
+
+		} // draw COMs
+	}
+
+	// debug draw wave equation
+	const Real showWaveeq = 0.1;
+	if ((gMeshDrawDebugFlags&8) && showWaveeq > 0.) {
+		glColor3d(0.6, 0.6, 0.6);
+		glLineWidth(0.5);
+		glBegin(GL_LINES);
+		for(int i=0; i<(int)mesh2d->edges.size(); i++)
+		{
+			Vec2 p1 = mesh2d->surface_nodes[mesh2d->edges[i].p1].x;
+			//glVertex2d(	p1[0], p1[1] );
+			Real len = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].waveHeight;
+			p1 += mesh2d->surface_nodes[mesh2d->edges[i].p1].normal * len * 1.0; 
+			glVertex2d(	p1[0], p1[1] );
+
+			Vec2 p2 = mesh2d->surface_nodes[mesh2d->edges[i].p2].x;
+			len = dx * mesh2d->surface_nodes[mesh2d->edges[i].p2].waveHeight;
+			p2 += mesh2d->surface_nodes[mesh2d->edges[i].p2].normal * len * 1.0; 
+			glVertex2d(	p2[0], p2[1] );
+		}
+		glEnd();
+		// also overdraw points
+		glColor3d(1., 1., 1.);
+		glPointSize(3.0);
+		glBegin(GL_POINTS);
+		for(int i=0; i<(int)mesh2d->surface_nodes.size(); i++) {
+			Vec2 p1 = mesh2d->surface_nodes[i].x;
+			Real len = dx * mesh2d->surface_nodes[i].waveHeight;
+			p1 += mesh2d->surface_nodes[i].normal * len * 1.0; 
+			glVertex2d(	p1[0], p1[1] );
+		}
+		glEnd();
+	}
+
+	// draw a line towards the closest position found on the smoothed mesh
+	bool showStPos = (gMeshDrawDebugFlags&16);
+	if ( showStPos) {
+		glColor3d(1., 0., 1.);
+		glLineWidth(2.0);
+		glBegin(GL_LINES);
+		if(0) for(int i=0; i<(int)mesh2d->edges.size(); i++) {
+			glVertex2d(	mesh2d->surface_nodes[mesh2d->edges[i].p1].stPos[0],
+					mesh2d->surface_nodes[mesh2d->edges[i].p1].stPos[1]);
+			glVertex2d(	mesh2d->surface_nodes[mesh2d->edges[i].p2].stPos[0],
+					mesh2d->surface_nodes[mesh2d->edges[i].p2].stPos[1]);
+		}
+		// draw per vertex normals from smooth mesh
+		if (0) for(int i=0; i<(int)mesh2d->surface_nodes.size(); i++) {
+			glColor3d(1., 0.1, 0.8);
+			glVertex2d(	mesh2d->surface_nodes[i].x[0],mesh2d->surface_nodes[i].x[1]);
+			glColor3d(1., 0.8, 0.8);
+			glVertex2d(	mesh2d->surface_nodes[i].x[0]+ mesh2d->surface_nodes[i].stNormal[0]*dx ,
+					    mesh2d->surface_nodes[i].x[1]+ mesh2d->surface_nodes[i].stNormal[1]*dx );
+		}
+		glEnd();
+
+		glLineWidth(1.0);
+		glBegin(GL_LINES);
+		// connection towards point
+		if (1) for(int i=0; i<(int)mesh2d->surface_nodes.size(); i++) {
+			glVertex2d(	mesh2d->surface_nodes[i].stPos[0],mesh2d->surface_nodes[i].stPos[1]);
+			glVertex2d(	mesh2d->surface_nodes[i].x[0],mesh2d->surface_nodes[i].x[1]);
+		}
+		glEnd();
+	}
+
+
+	// draw a line towards the closest along-normal pos found on the smoothed mesh
+	bool showStnPos = (gMeshDrawDebugFlags&32);
+	if ( showStnPos) {
+		glColor3d(0.5, 0.7, 1.);
+		glLineWidth(1.0);
+		glBegin(GL_LINES);
+		// connection towards point
+		for(int i=0; i<(int)mesh2d->surface_nodes.size(); i++) {
+			if (mesh2d->surface_nodes[i].waveHeight>0.) {
+				glColor3d(0.5, 0.7, 1.);
+			} else {
+				glColor3d(1.0, 0.7, 0.5);
+			}
+			glVertex2d(	mesh2d->surface_nodes[i].stnPos[0], mesh2d->surface_nodes[i].stnPos[1] );
+			glVertex2d(	mesh2d->surface_nodes[i].x[0],      mesh2d->surface_nodes[i].x[1]      );
+		}
+		glEnd();
+	}
+
+
+	// debug draw wave equation
+	if (gMeshDrawDebugFlags&64) {
+		const Real showWavevel = 10.0;
+		const Real showWaveacc = 0.15;
+
+		if (showWavevel>0.) {
+			glColor3d(0.6, 1.0, 0.6);
+			glLineWidth(2.0);
+			glBegin(GL_LINES);
+			for(int i=0; i<(int)mesh2d->edges.size(); i++)
+			{
+				Vec2 p1 = mesh2d->surface_nodes[mesh2d->edges[i].p1].x;
+				glVertex2d(	p1[0], p1[1] );
+				Real len = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].waveVel;
+				p1 += mesh2d->surface_nodes[mesh2d->edges[i].p1].stnNormal * len * showWavevel; 
+				glVertex2d(	p1[0], p1[1] );
+			}
+			glEnd();
+		}
+
+		if (showWaveacc>0.) {
+			glColor3d(1.0, 0.0, 0.5);
+			glLineWidth(0.5);
+			glBegin(GL_LINES);
+			for(int i=0; i<(int)mesh2d->edges.size(); i++)
+			{
+				Vec2 p1 = mesh2d->surface_nodes[mesh2d->edges[i].p1].x;
+				glVertex2d(	p1[0], p1[1] );
+				Real len = dx * mesh2d->surface_nodes[mesh2d->edges[i].p1].waveAccel;
+				p1 += mesh2d->surface_nodes[mesh2d->edges[i].p1].stnNormal * len * showWaveacc; 
+				glVertex2d(	p1[0], p1[1] );
+			}
+			glEnd();
+		}
+	}
+
+	// debug - show st speed values
+
+#endif // DDF_DIMENSION==3
+#endif // DDF_MESHSURFACE==1
+}
+
+
+/******************************************************************************/
+// glut gui test
+int showGlutGui(const char *argv_title)
+{
+	int argc=1;
+	char argvb[64]; strcpy(argvb,"ddfCmd");
+	char* argv = argvb;
+	int sx = 800, sy = 800;
+
+	// autorun?
+	if(getenv("DDF_GUIAUTORUN")) {
+	 	if(atoi(getenv("DDF_GUIAUTORUN"))>=1) {
+			gPause = false;
+		}
+	}
+
+	debMsg("\nglutGui","Starting...");
+
+	// init parser parameters
+	string solverName = gGlutGuiParams.FindOneString("solvername","default");
+	gScaleVelocityDisplay = gGlutGuiParams.FindOneFloat("vel-scale", gScaleVelocityDisplay );
+	gpGlutFsolver = ddfWorldFindSolver(solverName);
+	if (!gpGlutFsolver) { return 1; }
+
+	//if(gpGlutFsolver->getGridFlags()->getMaxSize() > 128) gDrawLines = false;
+	gDrawLines = gGlutGuiParams.FindOneInt("draw-lines", gDrawLines ) > 0;
+	gMeshDrawLines = gGlutGuiParams.FindOneInt("mesh-draw-lines", gMeshDrawLines ) > 0;
+	gMeshDrawDebugFlags = gGlutGuiParams.FindOneInt("mesh-draw-debug-flags", gMeshDrawDebugFlags );
+
+	gShowRealgridName = gGlutGuiParams.FindOneString("showgrid",gShowRealgridName);
+	gShowVelgridName = gGlutGuiParams.FindOneString("showvel",gShowVelgridName);
+	gGlutProject = gGlutGuiParams.FindOneFloat("project-grid",gGlutProject);
+	gGlobalVPart = gGlutProject > 0;
+	gIsoSurfaceGrid = gGlutGuiParams.FindOneString("isosurface-grid",gIsoSurfaceGrid);
+	gIsoAlpha = gGlutGuiParams.FindOneFloat("isosurface-alpha",gIsoAlpha);
+	gProbeShowFlags = gGlutGuiParams.FindOneInt("probe-show-flags", gProbeShowFlags ) > 0;
+	gGuiMeshName = gGlutGuiParams.FindOneString("mesh-name",gGuiMeshName);
+	
+	gGlutGuiParams.ReportUnused();
+
+	if(gShowRealgridName.length()<=0 || (!gpGlutFsolver->getParams()->haveGridReal(gShowRealgridName)) ) {
+		debMsg("glutGui","Invalid gShowRealgridName init '"<<gShowRealgridName<<"', re-init...");
+		glutgSelectNextFloatArray();
+	}
+	initFloatArrayDisplay();
+
+	// center view to grid 
+	Grid<Real> *realGrid = gpGlutFsolver->getParams()->getGridReal(gShowRealgridName);
+	nVec3i size = realGrid->getSize();
+	double dx = 1./(double)realGrid->getMaxSize();
+	gViewTrafo[0] = 0.5 - 0.5* (double)size[0] *dx;
+	gViewTrafo[1] = 0.5 - 0.5* (double)size[1] *dx;
+
+	// init GLUT
+	glutInit(&argc, &argv);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH );
+	glutInitWindowSize(sx, sy);
+	glutInitWindowPosition(10, 10);
+
+	// randomize title to make windows distinguishable
+	std::ostringstream title;
+	title << string(argv_title);
+	title << string(" id=");
+	title << (int)(glutRand.getReal() * 1e7);
+	glutCreateWindow( title.str().c_str() );
+
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity(); 
+	
+	// initialize OpenGL
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glClearDepth(1.0);
+	//glShadeModel(GL_SMOOTH);
+	glDepthFunc(GL_LESS);
+
+	// initialize Simulation drawing
+	initGlutRoi( 0.5 );
+	fontRender.init();
+	fontRender.setScreenResolution(sx, sy);
+
+#	ifdef DDF_MESHSURFACE_3D
+	gMeshTexture = LoadTexture(1, "../data/textures/UVsm.pbm", 1);
+	//gMeshTexture = LoadTexture(0, "/Users/sinithue/temp/texture.raw", 1);
+#	endif
+
+	// setup callbacks
+	glutDisplayFunc(handle_display);
+	glutReshapeFunc(handle_reshape);
+	glutKeyboardFunc(handle_keyboard);
+	glutIdleFunc(runSimulation);
+	glutMouseFunc(handle_mousePress);
+	glutMotionFunc(handle_mouseMotion);
+	glutMainLoop();
+
+	return 0;
+}
+
+
+#else // DDF_GLUTGUI==1
+/******************************************************************************/
+int showGlutGui()
+{
+	// dummy
+	return 0;
+}
+#endif // DDF_GLUTGUI==1
+
+}; // namespace DDF
+

@@ -1,0 +1,93 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2008 Johannes Schmid
+ *
+ * Header for a Fast Iterative Method (FIM) solver for the Eikonal equation
+ * 
+ *****************************************************************************/
+
+#ifndef FASTITERATIVEEIKONAL_H
+
+#include <list>
+#include <limits>
+#include <assert.h>
+#include "globals.h"
+#include "solverparams.h"
+#include "fastmarch.h"
+
+namespace DDF {
+
+extern const Real gFIFarValue; // defined in fastiterativeeikonal.cpp
+
+class GridCellCoord {
+	public:
+		int x,y,z;
+		GridCellCoord(int xx, int yy, int zz) : x(xx), y(yy), z(zz) {}
+		GridCellCoord() {}
+};
+
+enum FIFlags {
+	FIBOUNDARY = 1,
+	FIFAR,
+	FIINTERFACE,
+	FIACTIVE,
+	FIALIVE
+};
+
+class FastIterativeEikonal
+{
+public:
+	typedef std::list<GridCellCoord> ActiveList;
+
+	//! Constructor 
+	// WARNING: always supply positive maxTime (even for inward update)
+	FastIterativeEikonal(int sizex, int sizey, int sizez, FluidSolver* pFluidSolver);
+	//! Destructor 
+	~FastIterativeEikonal();
+
+	void setGrids(FlagGrid* fiFlags, Grid<Real>* pPhi) { mpFIFlags = fiFlags; mpPhi = pPhi; }
+
+	void addToInitialList(int x, int y, int z);
+	void setInitialList(ActiveList& initList);
+	void activateInitialList(void);
+	void solveEikonal(int dir, int maxTime, Real epsilon, bool doValTransport);
+
+	// WARNING: always supply positive maxTime (even for inward update)
+	void setMaxTime(Real maxTime) { mMaxTime = maxTime; }
+
+protected:
+	inline void insertIntoActiveList(const GridCellCoord& c);
+
+	int getUpwindCells(/*GridCellCoord* cells, */Real* phi, char* dir, int x, int y, int z);
+	Real computeDistance(int x, int y, int z, Real* uwphi, int uwcnt);
+	int visitNeighbour(int x, int y, int z, const std::list<GridCellCoord>::iterator& insert_it);
+	bool processList(ActiveList& activeList, bool isInitialFront);
+
+	void debugPrintGrid(int z, int focusx = -1, int focusy = -1);
+
+protected:
+	Grid<Real>* mpPhi;
+	FlagGrid* mpFIFlags;
+	FluidSolver* mpFluidSolver;
+	int mSizex, mSizey, mSizez;
+	Real mMaxTime;
+	Real mEpsilon;
+
+	int TDIR;
+
+	FmValueTransport<Vec3> mVT;
+	bool mDoValTransport;
+
+	int mCntInitial, mCntEncountered, mCntReactivated, mNumIterations;
+	int mMaxIterations;
+
+	ActiveList mActiveList;
+
+	int mAnyz;
+};
+
+} // namespace DDF
+
+#define FASTITERATIVEEIKONAL_H
+#endif

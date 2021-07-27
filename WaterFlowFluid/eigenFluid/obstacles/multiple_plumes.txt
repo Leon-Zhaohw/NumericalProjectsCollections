@@ -1,0 +1,6 @@
+sphere ./obstacles/small_sphere1.txt
+sphere ./obstacles/small_sphere2.txt
+sphere ./obstacles/small_sphere3.txt
+sphere ./obstacles/small_sphere4.txt
+sphere ./obstacles/small_sphere5.txt
+sphere ./obstacles/small_sphere6.txt

@@ -1,0 +1,301 @@
+
+DDF ChangeLog  (NT)
+
+
+
+2009-01-04:
+- added mesh surface functions
+- gui isosurface display
+- volume control tests
+- cleanup
+
+...
+
+2008-06-14:
+- continued noise fields
+- added more warnings to debug compile, removed dynload.cpp/h
+- fixed dt transfer to WT
+
+2008-06-13:
+- added inflow randomness, waveletnoise file
+- started noisefields
+
+2008-06-10:
+- simplified grids, removed patches, cleaned up parser
+- reintroduced openmp support
+
+2008-06-09:
+- fixed patchless CG
+- changed CG accuracy to residual norm check
+
+2008-06-06:
+- open boundary conditions tests, CG debugging
+
+2008-06-05:
+- bugfixing
+- cleaned up advection, added boundary checks
+
+2008-06-04:
+- started removing patches
+
+2008-06-03:
+- command line cfg parsing
+
+2008-06-02:
+- blender volsampler export
+
+2008-04-09:
+- added profiling runs
+
+2008-04-07:
+- added timing stats
+
+2008-04-04:
+- vec3 maccormack working
+- resurrected 2d test cases
+
+2008-04-03:
+- vec3 maccormack debugging
+
+2008-04-01:
+- started vec3 maccormack
+
+2008-03-29:
+- fixed projection glut bug, vortConf seems to be broken
+- ran maccormack tests, fixed clamping bug (wrong grid used)
+
+2008-03-28:
+- added density init gradient intervals
+- started image projection for debugging
+
+2008-03-14
+- some more cleaning up
+- reactivated initfrom plugin
+
+2008-03-13
+- cleanup of levelset advection, removing arrays
+
+2008-03-06
+- added density test cases, smokeplugins.cpp
+- included dirty version of vorticity confinement
+
+2008-02-26
+- occasional testing
+
+2008-02-14
+- changed fast march to grid, mostly working
+
+2008-02-10
+- added buoyancy, maccormack
+- first LS maccormack tests
+
+2008-02-07
+- removed nopatch boundary checks again (keep code same for w/wo patches)
+- fixed removeVecEntry warnings
+- removed flagtsize, particle free surface
+
+2008-02-06
+- real advection tests, fixed velocity access
+- added noPatches security checks to allow debugging
+
+2008-01-10
+- ran single phase tests for wavelet turb
+- added velocity field export
+
+2007-11-26
+- added density advection test
+
+2007-11-21
+- ...
+
+2007-11-20
+- osx10.5 migration - other include paths... careful with pbrtparse.h links, caused parser errors 
+- 64bit tests
+
+2007-11-15
+- tested error calculation, curvature
+
+2007-11-14
+- simulation transfer code started
+
+2007-11-13
+- fixed dt params, and grav add - both anitime and grav. need "physical" dt (simdt*dx)
+- now working...
+- cleanups
+
+2007-11-12
+- bug searching
+
+2007-11-11
+- boundary condition fiddling - init empty and fluid bounds in sep step (not add forces anymore)
+- fixed adaptive time step (for small sizes still quite some mass loss)
+- added multisolvers, started dt sync
+- parametrization for different resolutions still problematic
+
+2007-11-10
+- velocity bug was caused by loop-dependent force update, now uses two grids
+- seems to be working now!
+
+2007-11-09
+- found pbrt parse string bug: BEGIN STR does not reset...
+- added ls plugin steps, first fast march, then ls advect!?
+- substepping fixed again
+- still bug with top velocities...
+
+2007-11-08
+- vel bug; don't store grid pointers anywhere...
+- grid access fixes
+
+2007-11-07
+- bug searching
+
+2007-11-04
+- added plug parsers stack
+- plugin interface
+- added advection and swap plugins
+- added further solver steps as plugins
+
+2007-10-28
+- fixed pointer problems
+
+2007-10-26
+- added solver params, + parsing
+- broke by removing globals
+
+2007-10-22
+- minor bug fixing
+- still 3d bug, +z fast marching problem
+
+2007-10-22
+- changed marching to keep inner boundary
+- fixed outward marching vels
+
+2007-10-22
+- level set , marching cleanup
+- notived problems with boundary init
+
+2007-10-20
+- fast marching debugging
+- problem was wrong boundary init, keep one side of
+	interface fixed, now only add next to interface cells for outer marching
+
+2007-10-16
+- first freesurf tests, still shrinking/fastmarch problem
+- fixed msvc compiling
+- fixed reinit, just take all marchIn values
+- reinit working, but flickering around 0
+
+2007-10-15
+- added geomfile init to levelset tests
+
+2007-10-13
+- started geomfile init
+
+2007-10-12
+- fixed vector parse, added grid init
+
+2007-10-10
+- started including pbrt parsing funcs
+
+2007-10-01
+- started including lbm levelset funcs
+
+2007-09-20
+- further tests
+
+2007-08-20
+- added isosurface/mcubes/bobj write
+- particle reseeding
+
+2007-08-15
+- added profiler & font renderer
+
+2007-08-15
+- started free surface setup
+- added brix profiler classes
+- particle velocity interpolation
+- added fs bc velocity extension
+- found rhs bug - always compute for fluid cells...
+
+2007-08-15
+- started free surface setup
+- added brix profiler classes
+
+2007-07-31
+- secured advection (clamping, mem reset)
+- added timings, OMP speedup ca. 2.5, for larger patches (15-20% influence)
+
+2007-07-30
+- found memleak, getPatchMem look removed all of same kind...
+
+2007-07-30
+- fixed invalid check (int to double cast caused segfault at patch boundary)
+- added critical sections for memory alloc
+
+2007-07-29
+- omp debugging and profiling
+
+2007-07-28
+- found memleak (mpData of patches wasnt freed)
+- 3d was slow due to debug file dump, omp unstable
+- speedup 30s (1 thread) to 16s (3 threads), 20s with 2 threads
+
+2007-07-26
+- particle bug - mult. vel by dx!
+
+2007-07-24
+- found stability bug, advection was using k instead of srck for interpolation
+
+2007-07-22
+- debugging advection, seems to be PG dependance
+
+2007-07-13
+- advection bug fixing
+- added roi section
+- there's still a bug in the 3d version +z plane
+
+2007-07-11
+- obstacle matrix not properly used so far... including
+- added pg-cg matrix handling
+- found patch advect bug: s.l. adv. depends on downwards rounding, neg.
+- > indexes caused wrong upwards round, neg. weights etc
+
+2007-07-10
+- fixed force adding
+- sg particle tracing for debuggin, sg working w/o grav
+
+2007-06-13
+- started patch advec & pressure solve
+- patch grid glut display
+- cleanup up flag array handling (removed from apply op)
+- particle tracing tests
+
+2007-06-13
+- twod solver working (fixed pgrad add)
+- started boundary conditions
+
+2007-06-11
+- sg fluid solver functions (matrix setup, rhs comp, 3d advection)
+- minor win32 fixes
+
+2007-06-10
+- started semi-lagr adv
+- fixed 2d tests (added k loop boundaries, fixed n^3 asymm flags init)
+
+2007-06-08
+- minor fixes
+
+2007-06-04
+- started glut gui
+
+2007-06-01
+- started unit tests
+
+2007-05-14 - 2007-05-27
+- grid implementation
+- openm tests & fixes
+- cg testing
+
+2007-05-14
+- initial checkin
+

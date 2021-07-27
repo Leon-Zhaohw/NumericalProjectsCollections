@@ -1,0 +1,10 @@
+cylinder
+center 0.2 0.24 0.26
+height 0.1
+radius 0.2
+period 5
+rotating 1
+color 0.01 0.2 0.1
+use_sine 1
+velocity 0 0 0
+reset_pos 0

@@ -1,0 +1,250 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2007-208 Nils Thuerey
+ *
+ * Image helper functions
+ *
+ *****************************************************************************/
+
+#ifndef DDF_IMAGEIO_H
+#define DDF_IMAGEIO_H
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h> 
+
+#include "globals.h"
+#include "vectorbase.h"
+#include "boundbox.h"
+
+namespace DDF {
+
+
+
+//*****************************************************************************
+// simple 2d image class
+//template<class Scalar>
+class SimpleImage {
+	public:
+		// cons/des
+		SimpleImage() : mSize(-1), mpData(NULL), mAbortOnError(true) { };
+		virtual ~SimpleImage() {
+			if(mpData) delete [] mpData;
+		};
+
+		//! init memory & reset to zero
+		void initMem(int x,int y) {
+			mSize = nVec3i(x,y,0);
+			mpData = new Vec3[x*y];
+			resetToZero();
+		};
+
+		void resetToZero() {
+			//debMsg("SimpleImage::resetToZero","size="<<mSize);
+			for(int i=0; i<mSize[0]*mSize[1]; i++) 
+				mpData[i] = Vec3(0.);
+		}
+		void resetToValue(Real val) {
+			const Vec3 v = Vec3(val);
+			for(int i=0; i<mSize[0]*mSize[1]; i++) 
+				mpData[i] = val;
+		}
+
+		// access element
+		inline Vec3& operator() (int x,int y) {
+
+			// check bounds?
+			if(DDF_DEBUG == 1) {
+				if( (x<0) || (y<0) ||
+					 (x>mSize[0]-1) || (y>mSize[1]-1) ) {
+					errFatal("SimpleImage::operator()","Invalid access to "<<x<<","<<y<<", size="<<mSize,SIMWORLD_GENERICERROR);
+				}
+			}
+
+			return mpData[y*mSize[0]+x];
+		};
+		inline Vec3& get (int x, int y) { return (*this)(x,y); }
+		inline Vec3& getMap (int x, int y, int z, int axis) { 
+			int i = x;
+			int j = y;
+			if(axis==1) j=z;
+			if(axis==0) {
+				i=y;
+				j=z;
+			}
+			return get(i,j); 
+		}
+
+
+		// output as string, debug
+		std::string toString() {
+			std::ostringstream out;
+
+				for (int j=0; j<mSize[1]; j++) {
+					for (int i=0; i<mSize[0]; i++) { 
+						// normal zyx order */
+						out << (*this)(i,j);
+						out <<" ";
+					}
+					//if (format) 
+					out << std::endl;
+				}
+
+			return out.str();
+		}
+
+		// return axes perpendicular to input axis
+		static void getPlaneAxes(int axis, int& axis1, int& axis2) {
+			switch(axis) {
+				case 0: axis1 = 1; axis2 = 2; break;
+				case 1: axis1 = 0; axis2 = 2; break;
+				case 2: axis1 = 0; axis2 = 1; break;
+				default:
+					errFatal("SimpleImage::getPlaneAxes","Invalid axis "<<axis, SIMWORLD_GENERICERROR);
+			}; 
+		}
+
+		// multiply all values by f
+		void addOffset(Vec3 f) {
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					get(i,j) += f;
+				}
+		}
+		void mapFrom0To1(Real f) {
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					get(i,j) /= f;
+					CLAMP( get(i,j)[0], (Real)0.,(Real)1.);
+					CLAMP( get(i,j)[1], (Real)0.,(Real)1.);
+					CLAMP( get(i,j)[2], (Real)0.,(Real)1.);
+				}
+		}
+
+		// multiply all values by f
+		void multiplyBy(Real f) {
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					get(i,j) *= f;
+				}
+		}
+
+		// normalize max values
+		void normalizeMax() {
+			Real max = normNoSqrt(get(0,0));
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					if(normNoSqrt(get(i,j))>max) max = normNoSqrt(get(i,j));
+				}
+			max = sqrt(max);
+			Real invMax = 1./max;
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					get(i,j) *= invMax;
+				} 
+		};
+
+		// normalize min and max values
+		void normalizeMinMax() {
+			Real max = normNoSqrt(get(0,0));
+			Real min = max;
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					if(normNoSqrt(get(i,j))>max) max = normNoSqrt(get(i,j));
+					if(normNoSqrt(get(i,j))<min) min = normNoSqrt(get(i,j));
+				}
+			max = sqrt(max);
+			min = sqrt(min);
+			Real factor = 1./(max-min);
+			for (int j=0; j<mSize[1]; j++) 
+				for (int i=0; i<mSize[0]; i++) { 
+					get(i,j) -= min;
+					get(i,j) *= factor;
+				} 
+		};
+
+		void setAbortOnError(bool set) { mAbortOnError = set; }
+
+		// ppm in/output
+
+		// write whole image
+		bool writePpmFull(string filename);
+		bool writePng(string filename);
+		// write rectangle to ppm
+		bool writePpm(string filename, int minx, int miny, int maxx, int maxy, bool invertXY = false); 
+		// read in a ppm file, and init the image accordingly
+		bool initFromPpm (std::string filename);
+		// convert another image via imagemagick into ppm, then load
+		bool initFromFile (std::string filename);
+
+		// check index is valid
+		bool indexIsValid(int i, int j);
+		// compute difference of two images
+		double computeDifferrenceTo(SimpleImage &img, nVec3i offset, Vec3 scale, SimpleImage &mask);
+
+		// paste another image into current one
+		bool pasteImage(SimpleImage &img, nVec3i offset, Vec3 scale);
+		void downsampleFrom(SimpleImage *src);
+
+		// access
+		inline nVec3i getSize() const { return mSize; }
+
+	protected:
+
+		// size
+		nVec3i mSize;
+		// data
+		Vec3* mpData;
+
+		// make errors fatal, or continue?
+		bool mAbortOnError;
+
+}; // SimpleImage
+
+
+// helper functions
+
+// project values onto grid along axis (not parallel!)
+#if NO_CONFIG_H!=1
+class opProjectGrid : public GridOpBase {
+	public:
+		opProjectGrid(SimpleImage *img, //FlagGrid *flags, 
+				Grid<Real> *grid, BboxVeci roi, int axis) : 
+				GridOpBase(),
+				mpImg(img), mpGrid(grid), mRoi(roi), mAxis(axis),
+				mProjX(0), mProjY(1)	{ 
+			//mpFlags = flags;
+			// void applyOperatorWithBoundSimple(Operator *opOrg, GridClass *grid, int bound) 
+			applyOperatorWithBoundSimple(this, grid, 0);
+		};
+		~opProjectGrid() { }; 
+		void resetVariables() { 
+			mpImg->resetToZero();
+			mpImg->getPlaneAxes(mAxis, mProjX,mProjY);
+		};
+		void reduce(opProjectGrid &op) { };
+
+		void buildCallList() {
+			gaGrid.gridAccInit(mpGrid, AM_READ, gaCalls); 
+			// setFlags(mpFlags);
+		};
+		inline void operator() (int i, int j, int k) { 
+			//? const int currFlag = getFlagAcc()(i,j,k); 
+			nVec3i pos = nVec3i(i,j,k);
+			(*mpImg)(pos[mProjX],pos[mProjY]) += Vec3(gaGrid(i,j,k));
+		};
+	protected:
+		SimpleImage *mpImg;
+		Grid<Real> *mpGrid;
+		BboxVeci mRoi; 
+		int mAxis;
+		GridAccessor<Real,0> gaGrid;
+
+		// axis to project to
+		int mProjX, mProjY;
+}; // opProjectGrid */
+#endif // NO_CONFIG_H!=1
+
+}; // DDF
+#endif

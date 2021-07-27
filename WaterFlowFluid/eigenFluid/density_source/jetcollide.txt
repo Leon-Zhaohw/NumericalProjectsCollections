@@ -1,0 +1,3 @@
+position 0.75 0.333 0.333
+size 0.4 0.1 0.1
+buoyancy_direction -1 0 0

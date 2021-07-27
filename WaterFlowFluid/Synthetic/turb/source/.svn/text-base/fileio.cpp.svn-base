@@ -1,0 +1,2339 @@
+/******************************************************************************
+ *
+ * DDF 
+ * Copyright 2007-2008 Nils Thuerey
+ *
+ * File IO Dumping/Printing plugins 
+ *
+ *****************************************************************************/
+
+// lsdebug
+#include "fluidsolver.h"
+#include "solverplugin.h"
+#include "isosurface.h"
+#include "levelset.h"
+#include "paramset.h"
+#include "imageio.h"
+#include "vortexpart.h"
+#include <fstream>
+
+#if DDF_MESHSURFACE==1
+#include "meshsurface.h"
+#include <zlib.h>
+#endif
+
+// global debugging var - reuse frame nr for badtrioutput, used in spluginDumpMeshSurf
+int g_meshSurfaceOutNr = 0;
+using std::endl;
+
+namespace DDF { 
+
+// print contents of a single grid
+class spluginPrintGrid : public SolverPlugin {
+	public:
+		spluginPrintGrid() : 
+			SolverPlugin(),
+   		mGrid("-unnamed1-") { };
+
+		~spluginPrintGrid() {
+			debMsg("spluginPrintGrid","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginPrintGrid","parse");
+			mGrid = params.FindOneString("gridname", mGrid );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginPrintGrid","printing grid:"<<mGrid); 
+
+			if (mpPlParams->mPrintGlobEnable==1) {
+				return true; // all off
+			}
+			if (mpPlParams->mPrintGlobEnable==2 && gDim!=2) {
+				return true; // 3d off
+			}
+
+			dt = 0.; // unused
+			if (mpPlParams->haveGridInt(mGrid) && 1) {
+				Grid<int>* grid = mpPlParams->getGridInt(mGrid);
+				std::cout << grid->printWithRoi(mpPlParams->mPrintRoi) << std::endl;
+			} else if (mpPlParams->haveGridReal(mGrid) && 1) {
+				Grid<Real>* grid = mpPlParams->getGridReal(mGrid);
+				std::cout << grid->printWithRoi(mpPlParams->mPrintRoi) << std::endl;
+			} else if (mpPlParams->haveGridVec3(mGrid) && 1) {
+				Grid<Vec3>* grid = mpPlParams->getGridVec3(mGrid);
+				std::cout << grid->printWithRoi(mpPlParams->mPrintRoi) << std::endl;
+			} else {
+				errFatal("spluginPrintGrid","Grid "<<mGrid<<" not found...", SIMWORLD_GRIDERROR);
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid to print
+		std::string mGrid;
+};
+
+// print contents of a single grid
+class spluginPrintGridDiff : public SolverPlugin {
+	public:
+		spluginPrintGridDiff() : 
+			SolverPlugin(),
+   			mGrid1("-unnamed1-"),
+			mGrid2("-unnamed2-"),
+			mDest("-unnamed3-") { };
+
+		~spluginPrintGridDiff() {
+			debMsg("spluginPrintGridDiff","des");
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginPrintGridDiff","parse");
+			mGrid1 = params.FindOneString("grid1", mGrid1 );
+			mGrid2 = params.FindOneString("grid2", mGrid2 );
+			mDest = params.FindOneString("dest", mDest );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginPrintGridDiff","printing difference between grid "<<mGrid1<<" and "<<mGrid2); 
+			FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+
+			if(mpPlParams->haveGridInt(mGrid1) && 1) {
+				Grid<int>* grid1 = mpPlParams->getGridInt(mGrid1);
+				Grid<int>* grid2 = mpPlParams->getGridInt(mGrid2);
+				Grid<int>* tmp = mpPlParams->getGridInt(mDest);
+				GridOpDifference<int> godiff(tmp,grid1,grid2,pFlags);
+				std::cout << tmp->printWithRoi(mpPlParams->mPrintRoi) << std::endl;
+				std::cout << "Differences summed up over grid " << godiff.getDiffSum() << std::endl;
+			} else if(mpPlParams->haveGridReal(mGrid1) && 1) {
+				Grid<Real>* grid1 = mpPlParams->getGridReal(mGrid1);
+				Grid<Real>* grid2 = mpPlParams->getGridReal(mGrid2);
+				Grid<Real>* tmp = mpPlParams->getGridReal(mDest);
+				GridOpDifference<Real> godiff(tmp,grid1,grid2,pFlags);
+				std::cout << tmp->printWithRoi(mpPlParams->mPrintRoi) << std::endl;
+				std::cout << "Differences summed up over grid " << godiff.getDiffSum() << std::endl;
+				goCompMinMax<Real> gominmax(tmp, pFlags);
+				std::cout << "Min: " << gominmax.getMinValue() << ", Max: : " << gominmax.getMaxValue() << std::endl;
+			} else if(mpPlParams->haveGridVec3(mGrid1) && 1) {
+				std::cout << "Not implemented" << std::endl;
+			} else {
+				errFatal("spluginPrintGridDiff","Grid "<<mGrid1<<" not found...", SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:
+		// grid to print
+		std::string mGrid1, mGrid2, mDest;
+};
+
+
+// print timing stats
+class spluginPrintTimingStats : public SolverPlugin {
+	public:
+		spluginPrintTimingStats() : 
+			SolverPlugin(), mSort(0) { };
+
+		~spluginPrintTimingStats() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mSort = params.FindOneInt("sort", mSort );
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+
+			debMsg("spluginPrintTimingStats", mpPlParams->getFluidSolver()->getTimingStats(mSort) );
+
+			return true;
+		};
+
+	protected:
+		int mSort;
+};
+
+
+/******************************************************************************/
+// helper functions for isosurface 
+
+// recursive flood fill for isosurface display
+// of level sets
+void floodFillIsosurfaceGrid(Grid<Real> *grid,int i,int j,int k, nVec3i const & gs, int callcount) {
+	const Real INVV = -1000.; // hard coded! invalid time from fastmarch INVALIDTIME
+
+	// limit recursion depth
+	if (callcount>10) return;
+
+	if (i<=0) return;
+	if (j<=0) return;
+	if (k<=0) return;
+	if (i>=gs[0]-1) return;
+	if (j>=gs[1]-1) return;
+	if (k>=gs[2]-1) return;
+	//debMsg("FF"," at "<<PRINT_IJK);
+
+	if ( grid->getGlobal(i+1,j,k) <= INVV) 
+		{ grid->getGlobal(i+1,j,k) = grid->getGlobal(i,j,k); 
+			floodFillIsosurfaceGrid(grid, i+1,j,k, gs, callcount+1); }
+
+	if ( grid->getGlobal(i-1,j,k) <= INVV) 
+		{ grid->getGlobal(i-1,j,k) = grid->getGlobal(i,j,k); 
+			floodFillIsosurfaceGrid(grid, i-1,j,k, gs, callcount+1); }
+
+	if ( grid->getGlobal(i,j+1,k) <= INVV) 
+		{ grid->getGlobal(i,j+1,k) = grid->getGlobal(i,j,k); 
+			floodFillIsosurfaceGrid(grid, i,j+1,k, gs, callcount+1); }
+
+	if ( grid->getGlobal(i,j-1,k) <= INVV)                                 
+		{ grid->getGlobal(i,j-1,k) = grid->getGlobal(i,j,k); 
+			floodFillIsosurfaceGrid(grid, i,j-1,k, gs, callcount+1); }
+
+	if ( grid->getGlobal(i,j,k+1) <= INVV) { 
+		grid->getGlobal(i,j,k+1) = grid->getGlobal(i,j,k); 
+		floodFillIsosurfaceGrid(grid, i,j,k+1, gs, callcount+1); }
+
+	if ( grid->getGlobal(i,j,k-1) <= INVV) { 
+		grid->getGlobal(i,j,k-1) = grid->getGlobal(i,j,k); 
+		floodFillIsosurfaceGrid(grid, i,j,k-1, gs, callcount+1); }
+}
+
+// check nodes that have to be flood-filled
+bool isosurfaceNodeIsOkHasInvNbs(Grid<Real>* grid,int i,int j,int k, nVec3i const & gs) {
+	const Real INVV = -1000.; // hard coded! invalid time from fastmarch INVALIDTIME
+	if (i<0) return false;
+	if (j<0) return false;
+	if (k<0) return false;
+	if (i>=gs[0]) return false;
+	if (j>=gs[1]) return false;
+	if (k>=gs[2]) return false;
+
+	// only if ijk is ok
+	if ( grid->getGlobal(i,j,k) <= INVV) return false;
+	// check nbs...
+	if ( grid->checkIndexValid(i+1,j,k) && grid->getGlobal(i+1,j,k) <= INVV) return true;
+	if ( grid->checkIndexValid(i-1,j,k) && grid->getGlobal(i-1,j,k) <= INVV) return true;
+	if ( grid->checkIndexValid(i,j+1,k) && grid->getGlobal(i,j+1,k) <= INVV) return true;
+	if ( grid->checkIndexValid(i,j-1,k) && grid->getGlobal(i,j-1,k) <= INVV) return true;
+	if ( grid->checkIndexValid(i,j,k+1) && grid->getGlobal(i,j,k+1) <= INVV) return true;
+	if ( grid->checkIndexValid(i,j,k-1) && grid->getGlobal(i,j,k-1) <= INVV) return true;
+	return false;
+}
+
+
+/******************************************************************************/
+
+class spluginDumperBase : public SolverPlugin {
+	public:
+		spluginDumperBase() : SolverPlugin(),
+   				mSimTime(-1.), mMaxFrames(-1), 
+				mAnimOutCounter(0), mLastAniOutTime(0.), mStart(0.), mDumpAllFrames(false), mLastDumpTime(-10.),
+  				mOutputOverrideName(""), mOutname("")
+					{ };
+
+		~spluginDumperBase() { };
+
+		bool parseParamsDumperBase(const ParamSet& params) {
+			mOutputOverrideName = params.FindOneString("override-name", mOutputOverrideName );
+			mDumpAllFrames = params.FindOneInt("dump-all-frames", mDumpAllFrames );
+			mStart = params.FindOneFloat("start-time", mStart );
+			mMaxFrames = params.FindOneInt("max-frames", mMaxFrames );
+			
+			// do we have a override name param? if yes use...
+			// otherwise take defaults from params
+			if(mOutputOverrideName.length()>0)
+				mOutname = mOutputOverrideName;
+			else 
+				mOutname = this->mpPlParams->mAnimOutputFile;
+
+			mLastAniOutTime = mStart;
+			return true;
+		}
+
+		// check if current frame should be dumped (note, needs valid mSimTime!)
+		bool doDump() {
+			// dump each frame once
+			if(mDumpAllFrames) {
+				if(mLastDumpTime<mSimTime) {
+					mLastDumpTime = mSimTime;
+					return true;
+				}
+				return false;
+			}
+
+			// dump according to timestep
+			return (mpPlParams->mTimestepAnim>0. && 
+					(mSimTime-mLastAniOutTime > mpPlParams->mTimestepAnim) &&
+					(!mpPlParams->getQuit()) );
+		}
+
+		void increaseDumpCounter() {
+			mAnimOutCounter++;
+			if (mMaxFrames>=0) {
+				// signal end
+				if (mAnimOutCounter>=mMaxFrames) mpPlParams->setQuit(true);
+			}
+		}
+
+	protected:
+		Real mSimTime; 
+		// max no of frames param
+		int mMaxFrames;
+		// no of output frames
+		int mAnimOutCounter;
+		// output time of last animation frame
+		Real mLastAniOutTime, mStart; 
+		// dump each frame?
+		int mDumpAllFrames;
+		double mLastDumpTime;
+
+		// override name from params?
+		std::string mOutputOverrideName, mOutname;
+};
+
+// dump isosurface to disk as bobj.gz
+class spluginDumpIsosurf : public spluginDumperBase {
+	public:
+		spluginDumpIsosurf() : spluginDumperBase(),
+   				mIsoGrid("-unnamed1-"), mpIso(NULL), mSmoothSurface(1.), mSmoothNormals(1.),
+					mIsoValue(0.499), mWriteObj(0)
+			{ };
+		~spluginDumpIsosurf() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpIsosurf","parse");
+			mIsoGrid = params.FindOneString("iso-grid", mIsoGrid );
+			mIsoValue = params.FindOneFloat("iso-value", mIsoValue );
+
+			mSmoothSurface = params.FindOneFloat("smooth-surface", mSmoothSurface);
+			mSmoothNormals = params.FindOneFloat("smooth-normals", mSmoothNormals);
+
+			mWriteObj = params.FindOneInt("write-obj", mWriteObj );
+			this->parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpIsosurf","dt="<<dt<<" grid:"<<mIsoGrid<<"; isoSimTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+			Grid<Real> *grid = mpPlParams->getGridReal(mIsoGrid);
+
+			// iso test
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+			//while(mpPlParams->mTimestepAnim>0. && (mSimTime-mLastAniOutTime > mpPlParams->mTimestepAnim) && (!mpPlParams->getQuit()) ) {
+			while( this->doDump() ) {
+				myTime_t dumptstart = getTime(); 
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				//nVec3i gridSize = mpPlParams->getFluidSolver()->get gridSize();
+				nVec3i size = grid->getSize();
+				FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+				// TODO optimize allocation
+				if(!mpIso) {
+					//mpIso = new IsoSurface(0.499);
+					mpIso = new IsoSurface(mIsoValue);
+					mpIso->initializeIsosurface(size[0]+2, size[1]+2, size[2]+2, Vec3(1.) );
+				}
+				IsoSurface *iso = mpIso;
+
+				// set grid size
+				Vec3 geomStart = Vec3(0.);
+				Real invMaxs = 1./(Real)grid->getMaxSize();
+				Vec3 geomEnd   = Vec3(
+						grid->getSizeX()*invMaxs, 
+						grid->getSizeY()*invMaxs, 
+						grid->getSizeZ()*invMaxs );
+				if(gDim==2) {
+					geomStart[2] = -0.025;
+					geomEnd  [2] = 0.075;
+				}
+				iso->setStart(geomStart);
+				iso->setEnd  (geomEnd  );
+
+				int dimMax = VMAX(size);
+				iso->setSmoothSurface(mSmoothSurface * 1./(Real)dimMax);
+				iso->setSmoothNormals(mSmoothNormals * 1./(Real)dimMax);
+				//iso->setSmoothSurface(0.); iso->setSmoothNormals(0.);
+
+				const int twodKs = mpPlParams->getFluidSolver()->get2dKstart();
+				const int twodKe = mpPlParams->getFluidSolver()->get2dKend();
+
+				iso->setIsolevel(0.00001); 
+				iso->resetAll(-1.);
+
+				if(mIsoGrid.compare( string("phi-curr") ) == 0) {
+					debMsg("spluginDumpIsosurf","Using isosurface fluid phi grid 'phi-curr', special handling on!");
+
+					// always use level set export now
+					// flood fill levelset
+					FOR_IJK_GRID(grid) {
+						if (isosurfaceNodeIsOkHasInvNbs(grid,i,j,k, size)) floodFillIsosurfaceGrid(grid,i,j,k, size, 0);
+					}
+
+					FOR_IJK_GRID(grid) {
+						Real set = -grid->getGlobal(i,j,k);
+
+						int flag = pFlags->getGlobal(i,j,k);
+						if (fgIsObstacle(flag)) set = -1.;
+
+						*(iso->lbmGetData(i,j,k)) = set;
+						// debMsg("ISO","at "<<PRINT_IJK<<" = "<<set);
+					}
+
+				} else {
+					debMsg("spluginDumpIsosurf","Using isosurface direct source grid "<<mIsoGrid );
+
+					// direct isosurf version
+					FOR_IJK_GRID(grid) {
+						Real set = grid->getGlobal(i,j,k);
+						*(iso->lbmGetData(i,j,k)) = set;
+					}
+				} 
+
+				iso->triangulate();
+				if(!mWriteObj) {
+					iso->writeBobjGz(this->mOutname, (int)(mAnimOutCounter)); // start at 0
+				} else {
+					iso->writeObj(this->mOutname, (int)(mAnimOutCounter)); // start at 0
+				}
+
+				this->increaseDumpCounter();
+
+				myTime_t dumptend = getTime(); 
+				debMsg("spluginDumpIsosurf","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mIsoGrid, mOutputOverrideName;
+
+		IsoSurface *mpIso;
+		Real mSmoothSurface, mSmoothNormals;
+		Real mIsoValue;
+		int mWriteObj;
+};
+
+#if DDF_MESHSURFACE==1
+// write file
+static int writeBobjGzFromMesh(SurfaceMesh *mesh, std::string filename, int frnr, FluidSolver* solver, int uvMethod ) 
+{
+	std::ostringstream boutfilename;
+
+	char nrStr[5];								/* nr conversion */
+	snprintf(nrStr, 5, "%04d", frnr );
+
+	boutfilename << filename <<"_"<< nrStr;
+	boutfilename << ".bobj.gz";
+
+	gzFile gzf;
+	gzf = gzopen(boutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+	if (!gzf) {
+		errMsg("writeBobjGzFromMesh","Unable to open output '"<<boutfilename.str()<<"' ");
+		return 1; 
+	}
+
+	// include mesh displacements
+	NodeProperty<WaveData>* wdp = solver->getWaveData();
+	std::vector<SmVector3> vertNormals;
+	std::vector<SmVector3> vertPos;
+	displaceMeshSurfaceWaves(mesh, vertPos, vertNormals, wdp);
+
+	// write to file
+	int numVerts;
+	if(sizeof(numVerts)!=4) { errMsg("writeBobjGzFromMesh","Invalid int size"); return 1; }
+
+	numVerts = mesh->surfaceNodes.size();
+	gzwrite(gzf, &numVerts, sizeof(numVerts));
+	for(size_t i=0; i<mesh->surfaceNodes.size(); i++) {
+		for(int j=0; j<3; j++) {
+			//float vertp = mesh->surfaceNodes[i].pos[j];
+			float vertp = vertPos[i][j];
+			gzwrite(gzf, &vertp, sizeof(vertp)); }
+	}
+
+	// should be the same as Vertices.size
+	gzwrite(gzf, &numVerts, sizeof(numVerts));
+	for(size_t i=0; i<mesh->surfaceNodes.size(); i++) {
+		for(int j=0; j<3; j++) {
+			//float normp = normals[i][j]; // 1.; // mesh->surfaceNodes[i].n[j];
+			float normp = vertNormals[i][j];
+			gzwrite(gzf, &normp, sizeof(normp)); }
+	}
+
+	int numTris = mesh->surfaceTris.size();
+	gzwrite(gzf, &numTris, sizeof(numTris));
+	for(size_t i=0; i<mesh->surfaceTris.size(); i++) {
+		for(int j=0; j<3; j++) { 
+			int triIndex = mesh->surfaceTris[i].p[j];
+			gzwrite(gzf, &triIndex, sizeof(triIndex)); 
+		} // */
+	}
+
+	// uvs / textures, write 3 indices, for 2D textures, only 2 used!
+	// write 4int ID
+	int uvcoordId[4] = {0, 'u','v','w'};
+	TriProperty<TexCoordData>* ptcdp = solver->getTexCoordData();
+	TriProperty<TexCoordData>& tcdp = *ptcdp;
+	bool haveTexture = (ptcdp != NULL);
+
+	// write full per TRI uvs, or write shared ones?
+	//const int uvMethod = 2; // 1==full per tri, 2==shared per vert (smaller)
+
+	if(haveTexture && uvMethod==1) { 
+		gzwrite(gzf, &uvcoordId[0], sizeof(int) * 4); 
+
+		// note - no additional size, has to match tris!
+		for(int triIndex=0; triIndex<(int)numTris; triIndex++) {
+			for(int triP=0; triP<3; triP++) {  // 3 points = uvw's
+				for(int j=0; j<3; j++) {  // with 3 components each
+					float tcVal = tcdp[triIndex](triP)[j];
+					gzwrite(gzf, &tcVal, sizeof(tcVal)); 
+				}
+			}
+		}
+	}
+
+	// shared UVs
+	if(haveTexture && uvMethod==2) { 
+		int uvcoordId2[4] = {0, 'U','V','W'};
+		gzwrite(gzf, &uvcoordId2[0], sizeof(int) * 4); 
+
+		// note - no additional size, has to match tris & verts!
+
+		// init per vert UVs, lots of overwriting...
+		std::vector<SmVector3> vertUV;
+		vertUV.resize(mesh->surfaceNodes.size());
+		for(int triIndex=0; triIndex<(int)numTris; triIndex++) {
+			for(int triP=0; triP<3; triP++) {  // 3 points = uvw's
+				vertUV[ mesh->surfaceTris[triIndex].p[triP] ] = tcdp[triIndex](triP);
+			}
+		} 
+		for(size_t i=0; i<mesh->surfaceNodes.size(); i++) {
+			for(int j=0; j<2; j++) {
+				float vertp = vertUV[i][j];
+				gzwrite(gzf, &vertp, sizeof(vertp)); 
+			}
+		}
+	}
+
+	// per vertex cols
+	int vertcolId[4] = {0, 'v','c','o'};
+	NodeProperty<VertexColorData>* pVertCols = solver->getVertexColorData();
+	NodeProperty<VertexColorData>& vertCols = *pVertCols;
+	bool haveVertCols = (pVertCols != NULL);
+	if(haveVertCols) { 
+		gzwrite(gzf, &vertcolId[0], sizeof(int) * 4); 
+
+		// note - no additional size, has to match points!
+		for(int point=0; point<(int)numVerts; point++) {
+			for(int j=0; j<3; j++) {  // with 3 components each
+				float col = vertCols[point].color[j];
+				gzwrite(gzf, &col, sizeof(col)); 
+			}
+		}
+	}
+
+	// dine...
+	gzclose( gzf );
+	debMsg("writeBobjGzFromMesh"," Wrote: '"<<boutfilename.str()<<"' texCoords:"<<haveTexture<<"|"<<uvMethod<<" vertCols:"<<haveVertCols);
+
+	return 0;
+}
+
+static int writeObjFromMesh(SurfaceMesh *mesh, std::string filename, int frnr, FluidSolver* solver ) 
+{
+	std::ostringstream boutfilename;
+
+	char nrStr[5];								/* nr conversion */
+	snprintf(nrStr, 5, "%04d", frnr );
+
+	boutfilename << filename <<"_"<< nrStr;
+	boutfilename << ".obj";
+
+	FILE* filep;
+	filep = fopen(boutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+	if (!filep) {
+		errMsg("writeObjFromMesh","Unable to open output '"<<boutfilename.str()<<"' ");
+		return 1; 
+	}
+
+	// include mesh displacements
+	NodeProperty<WaveData>* wdp = solver->getWaveData();
+	std::vector<SmVector3> vertNormals;
+	std::vector<SmVector3> vertPos;
+	displaceMeshSurfaceWaves(mesh, vertPos, vertNormals, wdp);
+
+	// write to file
+	int numVerts;
+	if(sizeof(numVerts)!=4) { errMsg("writeObjFromMesh","Invalid int size"); return 1; }
+	fprintf(filep,"# DDF fluid mesh output\n\n");
+
+	numVerts = mesh->surfaceNodes.size();
+	//fwrite(filep, &numVerts, sizeof(numVerts));
+	for(size_t i=0; i<mesh->surfaceNodes.size(); i++) {
+		float vertp[3];
+		for(int j=0; j<3; j++) {
+			vertp[j] = vertPos[i][j]; }
+		fprintf(filep,"v %f %f %f\n", vertp[0],vertp[1],vertp[2]); 
+	}
+	fprintf(filep,"\n\n");
+
+	// should be the same as Vertices.size
+	//fwrite(filep, &numVerts, sizeof(numVerts));
+	for(size_t i=0; i<mesh->surfaceNodes.size(); i++) {
+		//for(int j=0; j<3; j++) { float normp = vertNormals[i][j]; fprintf(filep, &normp, sizeof(normp)); }
+		float normp[3];
+		for(int j=0; j<3; j++) {
+			normp[j] = vertNormals[i][j]; }
+		fprintf(filep,"vn %f %f %f\n", normp[0],normp[1],normp[2]); 
+	}
+	fprintf(filep,"\n\n");
+
+
+	TriProperty<TexCoordData>* ptcdp = solver->getTexCoordData();
+	TriProperty<TexCoordData>& tcdp = *ptcdp;
+	bool haveTexture = (ptcdp != NULL);
+	if(haveTexture) { 
+
+		// note - no additional size, has to match tris!
+		for(int triIndex=0; triIndex<(int)mesh->surfaceTris.size(); triIndex++) {
+			for(int triP=0; triP<3; triP++) {  // 3 points = uvw's
+				//for(int j=0; j<3; j++) {  float tcVal = tcdp[triIndex](triP)[j]; gzwrite(gzf, &tcVal, sizeof(tcVal)); }
+				fprintf(filep,"vt %f %f\n", tcdp[triIndex](triP)[0], tcdp[triIndex](triP)[1] );
+			}
+		}
+		fprintf(filep,"\n\n");
+	} else { 
+		// no UVs!
+		fprintf(filep,"vt 0.0 0.0 \n");
+		fprintf(filep,"vt 0.0 0.0 \n");
+		fprintf(filep,"vt 0.0 0.0 \n\n");
+	}
+
+	int numTris = mesh->surfaceTris.size();
+	//fwrite(filep, &numTris, sizeof(numTris));
+	for(size_t i=0; i<mesh->surfaceTris.size(); i++) {
+		int triIndex[3];
+		for(int j=0; j<3; j++) { 
+			// obj indices start at 1!
+			triIndex[j] = mesh->surfaceTris[i].p[j] + 1; 
+		}
+		// use same indices for vertices & normals, dummy values for teture coords
+		int uvIndex = 1;
+		if(haveTexture) 
+			uvIndex = i*3 + 1; // 3 per triangle
+
+		// write out
+		fprintf(filep,"f %d/%d/%d %d/%d/%d %d/%d/%d\n", 
+				triIndex[0],uvIndex+0, triIndex[0],
+				triIndex[1],uvIndex+1, triIndex[1],
+				triIndex[2],uvIndex+2, triIndex[2]
+				); 
+	}
+
+	fclose( filep );
+	debMsg("writeObjFromMesh"," Wrote: '"<<boutfilename.str()<<"' "); 
+	return 0;
+}
+
+// similar to writeBobjGzFromMesh
+static int writeBobjGzPreview(SurfaceMesh *mesh, std::string filename, int frnr, FluidSolver* solver ) 
+{
+	const bool debout = false;
+	std::ostringstream boutfilename; 
+	char nrStr[5];
+	snprintf(nrStr, 5, "%04d", frnr ); 
+	boutfilename << filename <<"pre_"<< nrStr;
+	boutfilename << ".bobj.gz";
+
+	const int dstTris = 30000;
+	// randomly select X tris
+	std::map<int,bool> triSelection;
+	triSelection.clear();
+	RandomStream rand(frnr);
+	const int total_numTris = mesh->surfaceTris.size();
+	for (int s=0; s<dstTris; s++) {
+		const int index = rand.getReal() * total_numTris;
+		triSelection[index] = true;
+		if(debout) debMsg("triSelection","at "<<index<<" / "<< total_numTris);
+	}
+	int numTris = triSelection.size();
+
+	gzFile gzf;
+	gzf = gzopen(boutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+	if (!gzf) {
+		errMsg("writeBobjGzPreview","Unable to open output '"<<boutfilename.str()<<"' ");
+		return 1; }
+
+	int numVerts = numTris * 3;
+	gzwrite(gzf, &numVerts, sizeof(numVerts));
+	//for(size_t i=0; i<mesh->surfaceNodes.size(); i++) 
+
+	int cnt = 0;
+	std::map<int,bool>::iterator iter;
+	for(iter = triSelection.begin(); iter!=triSelection.end(); iter++) {
+		const int tri = (*iter).first;
+		for(int pp=0; pp<3; pp++) {
+			const int poi = mesh->surfaceTris[tri].p[pp];
+
+			for(int j=0; j<3; j++) {
+				float vertp = mesh->surfaceNodes[poi].pos[j];
+				gzwrite(gzf, &vertp, sizeof(vertp)); }
+			if(debout) debMsg("writeBobjGzPreview","p "<<cnt<<"/"<<numVerts<<", tri="<<tri<<" "<< mesh->surfaceNodes[poi].pos );
+			cnt++;
+		}
+	}
+
+	// no normals, all zero...
+	gzwrite(gzf, &numVerts, sizeof(numVerts));
+	float normp[3] = {0.,0.,0.};
+	for(int i=0; i<numVerts; i++) {
+		gzwrite(gzf, &normp[0], 3*sizeof(float)); 
+	}
+
+	cnt = 0;
+	gzwrite(gzf, &numTris, sizeof(numTris));
+	//for(size_t i=0; i<mesh->surfaceTris.size(); i++) {
+	for(iter = triSelection.begin(); iter!=triSelection.end(); iter++) {
+		const int tri = (*iter).second;
+		for(int j=0; j<3; j++) { 
+			int triIndex = cnt*3+j; // mesh->surfaceTris[tri].p[j];
+			gzwrite(gzf, &triIndex, sizeof(triIndex)); 
+		}
+		if(debout) debMsg("writeBobjGzPreview","tri"<<cnt<<"/"<<numTris<<" "<<(cnt*3+0)<<" "<<(cnt*3+1)<<" "<<(cnt*3+2) );
+		cnt++;
+	} // */
+
+	// dine...
+	gzclose( gzf );
+	debMsg("writeBobjGzPreview"," Wrote: '"<<boutfilename.str()<<"', #tris:"<<numTris);
+
+	return 0;
+}
+
+#endif // DDF_MESHSURFACE==1
+
+
+// dump mesh surface to disk as bobj.gz
+class spluginDumpMeshSurf : public spluginDumperBase {
+	public:
+		spluginDumpMeshSurf() : spluginDumperBase(), 
+				mWriteObj(0) , mWriteRandomPreview(0), mUvMethod(2), mName("mesh") { };
+		~spluginDumpMeshSurf() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpMeshSurf","parse");
+			mDumpAllFrames = params.FindOneInt("dump-all-frames", mDumpAllFrames );
+			mWriteObj = params.FindOneInt("write-obj", mWriteObj );
+			mWriteRandomPreview = params.FindOneInt("write-random-preview", mWriteRandomPreview );
+			mUvMethod = params.FindOneInt("uv-write-method", mUvMethod ); // 1=full, 2=per-vert reduced (default)
+			mName = params.FindOneString("name", mName );
+
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpMeshSurf","dt="<<dt<<" meshSimTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+			mSimTime += dt;
+			bool dumped = false;
+			while( this->doDump() ||
+					(mDumpAllFrames && !dumped) ) {
+				myTime_t dumptstart = getTime(); 
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+
+				g_meshSurfaceOutNr = mAnimOutCounter;
+#				if DDF_MESHSURFACE==1
+				FluidSolver* solver = mpPlParams->getFluidSolver(); 
+				SurfaceMesh *mesh   = solver->getMesh(mName);
+				NodeProperty<WaveData>* wdp = solver->getWaveData();
+
+				if(!mWriteObj) {
+					// write "normal" zipped binary obj
+					writeBobjGzFromMesh(mesh, this->mOutname, (int)(mAnimOutCounter), solver, mUvMethod); 
+				} else {
+					// write "old" wavefront object format
+					writeObjFromMesh   (mesh, this->mOutname, (int)(mAnimOutCounter), solver); 
+				}
+				if(mWriteRandomPreview) {
+					// write randomly compressed preview file
+					writeBobjGzPreview(mesh, this->mOutname, (int)(mAnimOutCounter), solver); 
+				}
+				this->increaseDumpCounter();
+#				endif // DDF_MESHSURFACE==1
+
+				dumped=true;
+				myTime_t dumptend = getTime(); 
+				debMsg("spluginDumpMeshSurf","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+			}
+
+			return true;
+		};
+
+	protected:
+		int mWriteObj;
+		int mWriteRandomPreview;
+		int mUvMethod;
+		std::string mName;
+};
+
+// dump velocities to disk, re-compute to co-located grid
+class spluginDumpVelocities : public spluginDumperBase {
+	public:
+		spluginDumpVelocities() : spluginDumperBase(),
+   				mVelGrid("-unnamed1-") { };
+		~spluginDumpVelocities() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpVelocities","parse");
+			mVelGrid = params.FindOneString("gridname", mVelGrid );
+			mDumpAllFrames = params.FindOneInt("dump-all-frames", mDumpAllFrames ) > 0;
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpVelocities","dt="<<dt<<" grid:"<<mVelGrid<<"; simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" dump-all-frame="<<mDumpAllFrames ); 
+
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+					// (mSimTime-mLastAniOutTime > mpPlParams->mTimestepAnim) && 
+			bool dumped = false;
+			//while( this->doDump() || (mDumpAllFrames && !dumped) ) {
+			while( this->doDump() ) {
+
+				dumped = true;
+				myTime_t dumptstart = getTime(); 
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				//FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+				Grid<Vec3>* srcVel = mpPlParams->getGridVec3(mVelGrid);
+				const nVec3i gridSize = srcVel->getSize();
+
+				// TODO optimize allocation
+				int dimMax = VMAX(gridSize);
+
+				const int twodKs = mpPlParams->getFluidSolver()->get2dKstart();
+				const int twodKe = mpPlParams->getFluidSolver()->get2dKend();
+				nVec3i min(0, 0, twodKs);
+				nVec3i max(gridSize[0], gridSize[1], twodKe);
+				nVec3i res = max-min;
+				// TODO update as for image dump...
+
+				std::ostringstream voutfilename; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+				//voutfilename << this->mOutname <<"_vels_"<< nrStr<< ".gz";
+				voutfilename << this->mOutname <<"_"<< nrStr<< ".gz";
+				debMsg("spluginDumpVelocities","Writing '"<<voutfilename.str()<<"', resolution="<<res<<" " );
+
+				gzFile gzf;
+				gzf = gzopen(voutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+				if (!gzf) {
+					errMsg("spluginDumpVelocities::writeVels","Unable to open output '"<<voutfilename.str()<<"' ");
+					return false; 
+				}
+				gzwrite(gzf, &res[0] , 3*sizeof(int));
+
+				// dump velocities, component wise full grids
+				FOR_IJK(twodKs, twodKe,   0, gridSize[1],   0, gridSize[0] ) {
+					//int flag = pFlags->getGlobal(i,j,k);
+					float write = srcVel->getGlobal(i,j,k)[0];
+					if(i+1<gridSize[0]) {
+						write += srcVel->getGlobal(i+1,j,k)[0];
+						write *= 0.5;
+					}
+					gzwrite(gzf, &write , sizeof(float));
+				}
+				FOR_IJK(twodKs, twodKe,   0, gridSize[1],   0, gridSize[0] ) {
+					float write = srcVel->getGlobal(i,j,k)[1];
+					if(j+1<gridSize[1]) {
+						write += srcVel->getGlobal(i,j+1,k)[1];
+						write *= 0.5;
+					}
+					gzwrite(gzf, &write , sizeof(float));
+				}
+				FOR_IJK(twodKs, twodKe,   0, gridSize[1],   0, gridSize[0] ) {
+					float write = srcVel->getGlobal(i,j,k)[2];
+					if(k+1<gridSize[2]) {
+						write += srcVel->getGlobal(i,j,k+1)[2];
+						write *= 0.5;
+					}
+					gzwrite(gzf, &write , sizeof(float));
+				}
+
+				// write timestep with arbitrary signature float
+				const float dtSignature = 0.12345f;
+				float wdt = dtSignature;
+				gzwrite(gzf, &wdt , sizeof(float));
+				wdt = org_dt;
+				gzwrite(gzf, &wdt , sizeof(float));
+				// TODO read in loader...
+
+				gzclose(gzf);
+
+				this->increaseDumpCounter();
+
+				myTime_t dumptend = getTime(); 
+				debMsg("spluginDumpVelocities","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mVelGrid;
+};
+
+
+// dump velocities to disk, re-compute to co-located grid
+class spluginDumpScalar : public spluginDumperBase {
+	public:
+		spluginDumpScalar() : spluginDumperBase(),
+   				mGridname("-unnamed1-") { };
+		~spluginDumpScalar() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpScalar","parse");
+			mGridname = params.FindOneString("gridname", mGridname );
+			mDumpAllFrames = params.FindOneInt("dump-all-frames", mDumpAllFrames ) > 0;
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpScalar","dt="<<dt<<" grid:"<<mGridname<<"; simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" dump-all-frame="<<mDumpAllFrames ); 
+
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			bool dumped = false;
+			while( this->doDump() ||
+					(mDumpAllFrames && !dumped) ) {
+				dumped = true;
+				myTime_t dumptstart = getTime(); 
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+
+				// TODO , also handle int/float/double grids ... (include bytesize?)
+
+				Grid<Real>* srcGrid = mpPlParams->getGridReal(mGridname);
+				const nVec3i gridSize = srcGrid->getSize();
+				int dimMax = VMAX(gridSize);
+
+				const int twodKs = mpPlParams->getFluidSolver()->get2dKstart();
+				const int twodKe = mpPlParams->getFluidSolver()->get2dKend();
+				nVec3i min(0, 0, twodKs);
+				nVec3i max(gridSize[0], gridSize[1], twodKe);
+				nVec3i res = max-min;
+
+				std::ostringstream voutfilename; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+				voutfilename << this->mOutname <<"_"<< nrStr<< ".gz";
+				debMsg("spluginDumpScalar","Writing '"<<voutfilename.str()<<"', resolution="<<res<<" " );
+
+				gzFile gzf;
+				gzf = gzopen(voutfilename.str().c_str(), "wb1"); // wb9 is slow for large meshes!
+				if (!gzf) {
+					errMsg("spluginDumpScalar::write","Unable to open output '"<<voutfilename.str()<<"' ");
+					return false; 
+				}
+				gzwrite(gzf, &res[0] , 3*sizeof(int));
+
+				// dump velocities, component wise full grids
+				FOR_IJK(twodKs, twodKe,   0, gridSize[1],   0, gridSize[0] ) {
+					float write = srcGrid->getGlobal(i,j,k);
+					gzwrite(gzf, &write , sizeof(float));
+				}
+
+				// write timestep with arbitrary signature float
+				// dt is written with two floats: a signature (0.12345f), then actual timestep size
+				const float dtSignature = 0.12345f;
+				float writeVal = dtSignature;
+				gzwrite(gzf, &writeVal , sizeof(float));
+				// now write actual time step size
+				writeVal = org_dt; 
+				gzwrite(gzf, &writeVal , sizeof(float));
+				// TODO read in loader...
+
+				gzclose(gzf);
+
+				this->increaseDumpCounter();
+
+				myTime_t dumptend = getTime(); 
+				debMsg("spluginDumpScalar","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGridname;
+};
+
+
+
+// dump vpart positions to disk
+class spluginDumpVpart : public spluginDumperBase {
+	public:
+		spluginDumpVpart() : spluginDumperBase() {};
+		~spluginDumpVpart() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			//debMsg("spluginDumpVpart","dt="<<dt<<" simtime="<<mSimTime<<", lastdump="<<mLastDumpTime ); 
+			debMsg("spluginDumpVpart","dt="<<dt<<" simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+			bool dumped = false;
+			while ( this->doDump() ) {
+				dumped = true;
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				
+				std::ostringstream voutfilename; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+				voutfilename << this->mOutname <<"_vpart_"<< nrStr << ".gz";
+				
+				gzFile gzf;
+				gzf = gzopen(voutfilename.str().c_str(), "wb1");
+				if (!gzf) {
+					errMsg("spluginDumpVpart::writeVels","Unable to open output '"<<voutfilename.str()<<"' ");
+					return false; 
+				}
+				if (mpPlParams->getFluidSolver()->getVorticitySys() == NULL) {
+					errMsg("spluginDumpVpart::writeVels", "no vorticity system hosted");
+					return false;
+				}
+
+				VorticitySystem::VList parts = mpPlParams->getFluidSolver()->getVorticitySys()->getParticles();
+				unsigned len = parts.size();
+				gzwrite(gzf, &len , sizeof(unsigned));
+				Vec3 gsize = vec2R(mpPlParams->getGridInt("flags")->getSize());
+				for (VorticitySystem::VList::const_iterator it = parts.begin(); it != parts.end(); ++it)
+				{
+					//Vec3 pos = (*it)->getPos();
+					//pos = (pos / gsize) * mpPlParams->mDomainSize + mpPlParams->mDomainOffset;
+					Vec3 posScaled = ((*it)->getPos()); // always write floats! no matter what precision is set...
+					posScaled = (posScaled / gsize) * mpPlParams->mDomainSize + mpPlParams->mDomainOffset;
+					nVec3f posFloat = vec2F(posScaled);
+					gzwrite(gzf, &(posFloat[0]), sizeof(nVec3f));
+
+					//gzwrite(gzf, &((*it)->getStrength()[0]), sizeof(Vec3));
+					nVec3f str = vec2F((*it)->getStrength()); // always write floats!
+					gzwrite(gzf, &(str[0]), sizeof(Vec3));
+
+					float v=(float)(*it)->getRadius();
+					v *= mpPlParams->mDomainSize.max() / gsize.max();
+					gzwrite(gzf, &v, sizeof(float));
+				}
+				gzclose(gzf);
+
+				this->increaseDumpCounter();
+			}
+
+			return true;
+		};
+};
+
+// dump PLS particle positions  & types to disk
+class spluginDumpPlsPart : public spluginDumperBase {
+	public:
+		spluginDumpPlsPart() : spluginDumperBase() {};
+		~spluginDumpPlsPart() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			//debMsg("spluginDumpPlsPart","dt="<<dt<<" simtime="<<mSimTime<<", lastdump="<<mLastDumpTime ); 
+			debMsg("spluginDumpPlsPart","dt="<<dt<<" simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+			bool dumped = false;
+			while ( this->doDump() ) {
+				dumped = true;
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				
+				std::ostringstream voutfilename; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+				voutfilename << this->mOutname <<"_plspart_"<< nrStr << ".gz";
+				
+				gzFile gzf;
+				gzf = gzopen(voutfilename.str().c_str(), "wb1");
+				if (!gzf) {
+					errMsg("spluginDumpPlsPart::writeVels","Unable to open output '"<<voutfilename.str()<<"' ");
+					return false; 
+				}
+				LevelSet* levelset = mpPlParams->getFluidSolver()->getLevelSet();
+				if (levelset == NULL) {
+					errMsg("spluginDumpPlsPart::write", "no level set!");
+					return false;
+				}
+				//VorticitySystem::VList parts = mpPlParams->getFluidSolver()->getVorticitySys()->getParticles();
+				const std::list<DDF::EscapedParticle>& escparts = levelset->getEscapedParticles();
+				int partsSize = (int)escparts.size();
+				gzwrite(gzf, &partsSize , sizeof(int));
+				Vec3 gsize = vec2R(mpPlParams->getGridInt("flags")->getSize());
+
+				//for (VorticitySystem::VList::const_iterator it = escparts.begin(); it != escparts.end(); ++it)
+				std::list<EscapedParticle>::const_iterator it, it_end;
+				for (it=escparts.begin(), it_end = escparts.end(); it!=it_end; ++it)
+				{
+					// the following data is saved per part:
+					// int      - type
+					// 3x flaot - pos
+					// int      - age
+					// float    - radius
+					const EscapedParticle& p = *it;
+					int type = p.getType(); // escaped
+					gzwrite(gzf, &(type), sizeof(int));
+
+					//nVec3f pos = vec2F(p.getPos());
+					//pos = (pos / gsize) * mpPlParams->mDomainSize + mpPlParams->mDomainOffset;
+					Vec3 posScaled = (p.getPos()); // always write floats! no matter what precision is set...
+					posScaled = (posScaled / gsize) * mpPlParams->mDomainSize + mpPlParams->mDomainOffset;
+					nVec3f posFloat = vec2F(posScaled);
+					gzwrite(gzf, &(posFloat[0]), sizeof(nVec3f));
+
+					int age = p.getAge(); // escaped
+					gzwrite(gzf, &(age), sizeof(int));
+
+					float r = p.getRadius();
+					gzwrite(gzf, &(r), sizeof(float));
+
+				}
+				gzclose(gzf);
+
+				this->increaseDumpCounter();
+			}
+
+			return true;
+		};
+};
+
+typedef struct {
+	char id[4];
+	int dimX, dimY, dimZ;
+	int frames, elements, elementType, bytesPerElement, bytesPerFrame;
+} UniversalHeader;
+
+// query dimensions of universal grid file
+nVec3i getUniversalGridSize(const string& file)
+{
+	UniversalHeader head;
+	
+	gzFile gzf = gzopen(file.c_str(),"r");
+	if (gzf == NULL) {
+		errFatal("spluginLoadUniversal","can't open field file " << file, SIMWORLD_INITERROR);
+		return nVec3i(0);
+	}
+	if (gzread(gzf, &head,sizeof(UniversalHeader)) != sizeof(UniversalHeader) || strncmp(head.id, "DDF1", 4)) {
+		errFatal("spluginLoadUniversal","wrong filetype in " << file,SIMWORLD_INITERROR);
+		return nVec3i(0);
+	}
+	gzclose(gzf);
+		
+	return nVec3i(head.dimX, head.dimY, head.dimZ);
+}
+
+// dump any grid to universal file format
+class spluginDumpUniversal : public spluginDumperBase {
+	public:
+		spluginDumpUniversal() : spluginDumperBase(), mFirstTime(true) { };
+		~spluginDumpUniversal() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			mGrid = params.FindOneString("grid", "");
+			mMAC = params.FindOneInt("mac", !mGrid.compare("vel-curr")) != 0; // MAC grid is default for 'vel-curr' only
+			mFilePerFrame = params.FindOneInt("file-per-frame", 0) != 0;
+			mNoExt = params.FindOneInt("no-ext", 0) != 0;
+			bool singleDump = params.FindOneInt("single-dump", 0) != 0;
+			parseParamsDumperBase(params);
+			if (singleDump) { mNoExt = true; mFilePerFrame = true; mDumpAllFrames = true; }
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpUniversal","dt="<<dt<<" grid:"<<mGrid<<"; simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" dump-all-frame="<<mDumpAllFrames ); 
+			mSimTime += dt;
+
+			while( this->doDump() ) 
+			{
+				UniversalHeader head;
+				const nVec3i gridSize = mpPlParams->getGridInt("flags")->getSize();
+					
+				// get Grid
+				Grid<int> *gI=NULL;
+				Grid<Real> *gR=NULL;
+				Grid<Vec3> *gV=NULL;
+				if (mpPlParams->haveGridInt(mGrid)) {
+					gI = mpPlParams->getGridInt(mGrid);
+					head.bytesPerElement = sizeof(int);
+					head.elementType = 0;
+					head.elements = 1;					
+				}
+				else if (mpPlParams->haveGridReal(mGrid)) {
+					gR = mpPlParams->getGridReal(mGrid);
+					head.bytesPerElement = sizeof(Real);
+					head.elementType = 1;
+					head.elements = 1;
+				}
+				else if (mpPlParams->haveGridVec3(mGrid)) {
+					gV = mpPlParams->getGridVec3(mGrid);
+					head.bytesPerElement = sizeof(Real);
+					head.elementType = 2;
+					head.elements = 3;
+				}
+				else {
+					errMsg("spluginDumpUniversal","Grid '"<<mGrid<<"' not found or gridtype unsupported");
+					return false;
+				}
+				
+				if (mFirstTime || mFilePerFrame) {
+					// Open a file					
+					std::string filename = mOutname;
+					if (mFilePerFrame && !mNoExt) {
+						char nrStr[5]; // nr conversion 
+						snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+						filename += nrStr;
+					}
+					mGzf = gzopen( (filename+".gz").c_str(), "wb1");
+					if (!mGzf) {
+						errMsg("spluginDumpUniversal","Unable to open output '"<<filename<<"' ");
+						return false; 
+					}
+					debMsg("spluginDumpUniversal","writing to file '" << filename << ".gz'" ); 
+								
+					// Write header				
+					strncpy(head.id,"DDF1",4);
+					head.dimX = gridSize.x;
+					head.dimY = gridSize.y;
+					head.dimZ = (gDim==2) ? 1:gridSize.z;
+					head.frames = mMaxFrames;
+					head.bytesPerFrame = head.dimX * head.dimY * head.dimZ * head.elements * head.bytesPerElement + sizeof(float);
+				
+					gzwrite(mGzf, &head, sizeof(UniversalHeader));
+				}
+				
+				// write frame
+				const int z0 = mpPlParams->getFluidSolver()->get2dKstart();
+				const int z1 = mpPlParams->getFluidSolver()->get2dKend();
+				for (int e=0; e< head.elements; e++)
+				{
+					// write grid of current element
+					FOR_IJK(z0,z1, 0, head.dimY, 0, head.dimX) 
+					{
+						if (head.elementType == 0)
+							gzwrite(mGzf, &(gI->getGlobal(i,j,k)), sizeof(int));
+						else if (head.elementType == 1)
+							gzwrite(mGzf, &(gR->getGlobal(i,j,k)), sizeof(Real));
+						else if (head.elementType == 2) {
+							Real data = gV->getGlobal(i,j,k)[e];
+							if (mMAC) // get centered value on MAC grid
+							{
+								nVec3i pos(i,j,k);
+								pos[e] += 1;
+								if (pos[e] < gridSize[e]) {
+									data += gV->getGlobal(pos[0],pos[1],pos[2])[e];
+									data *= 0.5;
+								}
+							}
+							gzwrite(mGzf, &data, sizeof(Real));
+						}
+					}
+				}
+				// write timestamp
+				float tm = mSimTime;
+				gzwrite(mGzf, &tm, sizeof(float));
+
+				if (mFilePerFrame)
+					gzclose(mGzf);
+
+				this->increaseDumpCounter();
+			}
+
+			return true;
+		};
+
+		virtual void finish()
+		{
+			if (!mFilePerFrame && !mFirstTime) {
+				gzclose(mGzf);
+				debMsg("spluginDumpUniversal","file archive closed.");
+			}
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		bool mFirstTime, mFilePerFrame, mMAC, mNoExt;
+		gzFile mGzf;
+};
+
+template<class T>
+class fsLoadData : public GridOpBase { 
+	public:
+		fsLoadData(FlagGrid *flags, Grid<T> *dst, unsigned char *data, const UniversalHeader& head, bool setonlyFluid, int interpol) :
+				GridOpBase(), mpDst(dst),mpData(data), onlyFluid(setonlyFluid), mInterpolateWithBorder(interpol) {
+			mpFlags = flags;
+			mSizeRead = nVec3i(head.dimX, head.dimY, head.dimZ);
+			mSizeDst = mpFlags->getSize() -nVec3i(1,1,1);
+			mPageSize = head.bytesPerElement * head.dimX * head.dimY * head.dimZ;
+			mBytesPerElement = head.bytesPerElement;
+			applyOperatorToGridsSimple(this);
+		};
+		~fsLoadData() {}
+		
+		void resetVariables() { };
+		void buildCallList() {
+			gaDst.gridAccInit(mpDst, AM_WRITE, gaCalls); 
+			setFlags(mpFlags);
+		};
+
+		inline T getRaw (unsigned chunk);
+		
+		// load & safety check access of file data at i,j,k
+		inline T getFileData (int i, int j, int k) { 
+			CLAMP(i, 0, mSizeRead[0]-1);
+			CLAMP(j, 0, mSizeRead[1]-1);
+			CLAMP(k, 0, mSizeRead[2]-1);
+			
+			if (gDim==2) k=0;
+			unsigned chunk = i + mSizeRead[0]*(j + mSizeRead[1]*k);			
+			return getRaw(chunk);
+		}
+		
+		inline void operator() (int i, int j, int k) { 
+			nVec3i src = nVec3i(i,j,k);
+			const nVec3i dst = nVec3i(i,j,k);
+
+			if(mInterpolateWithBorder>-1) {
+				for(int l=0; l<gDim; l++) {
+					if(dst[l]<mInterpolateWithBorder) {
+						// keep
+					} else if(dst[l]>=mSizeDst[l]-mInterpolateWithBorder) {
+						// keep upper grid boundary as well
+						src[l] = mSizeRead[l]-1 + (dst[l]-mSizeDst[l]);
+					} else {
+						//src[l] = dst[l]* mSizeRead[l] / mSizeDst[l];
+						const int b = mInterpolateWithBorder;
+						src[l] = ((dst[l]-b) * (mSizeRead[l]-2*b) / (mSizeDst[l]-2*b)) + b;
+					}
+				}
+				//std::cerr <<"Init debug" << "at dst="<<dst<<"|"<<mSizeDst<<"    file src="<<src<<", filesize"<<mSizeRead <<"\n";
+			} else {
+				// direct read (standard way of loading)
+				// nothing to do, load from (i,j,k)
+			}
+
+			if (!onlyFluid || fgIsFluid(getFlagAcc()(i,j,k)) ) 
+				gaDst.write(i,j,k) = getFileData(src[0],src[1],src[2]); 			
+		};
+		void reduce(fsLoadData &op) { };
+
+	protected:
+		Grid<T> *mpDst;
+		GridAccessor<T,0> gaDst;
+	   
+		unsigned char * mpData;
+		bool onlyFluid;
+		nVec3i mSizeRead; // size of grid in file
+		nVec3i mSizeDst;   // size of destination grid
+		int mInterpolateWithBorder;
+		unsigned mPageSize, mBytesPerElement;
+};
+
+template<class T>
+inline T fsLoadData<T>::getRaw(unsigned chunk)
+{
+	return *((T*) &mpData[ mBytesPerElement * chunk]);
+}
+template<>
+inline Vec3 fsLoadData<Vec3>::getRaw(unsigned chunk)
+{
+	Vec3 a;
+	for (int e=0; e < 3; e++)
+		a[e] = *((Real*) &mpData[ mBytesPerElement * chunk + e * mPageSize]);
+	return a;
+}
+
+class spluginLoadUniversal : public SolverPlugin {
+	public:
+		spluginLoadUniversal() : SolverPlugin() { };
+		~spluginLoadUniversal() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			onlyFluid = params.FindOneInt("onlyfluid", 0 ) != 0;
+			mGrid = params.FindOneString("grid", "");
+			mSolver = params.FindOneString("solver", "" );
+			mFile = params.FindOneString("file", "" );
+
+			// interpolate, but keep #mInterpolBorder cells from each side unscaled
+			// -1 means off, 0 means scale everything
+			mInterpolBorder = params.FindOneInt("interpolate-with-border", 1);
+
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real dt) {
+			debMsg("spluginLoadUniversal","file " + mFile);
+			SolverParams* param = mpPlParams;
+			if (!mSolver.empty()) param = ddfWorldFindSolver(mSolver)->getParams();
+			Grid<int>* flags = param->getGridInt("flags");
+			nVec3i gridSize = flags->getSize();
+			if (gDim==2) gridSize[2] = 1;
+
+			// load file into byte array
+			UniversalHeader head;
+			gzFile gzf = gzopen(mFile.c_str(),"r");
+			if (gzf == NULL)
+				errFatal("spluginLoadUniversal","can't open field file " << mFile, SIMWORLD_INITERROR);
+
+			if (gzread(gzf, &head,sizeof(UniversalHeader)) != sizeof(UniversalHeader) || strncmp(head.id, "DDF1", 4)) 
+				errFatal("spluginLoadUniversal","wrong filetype in " << mFile,SIMWORLD_INITERROR);
+
+			if (gridSize[0] != head.dimX || gridSize[1] != head.dimY || gridSize[2] != head.dimZ) {
+				debMsg("spluginLoadUniversal","file's gridsize (" << head.dimX << "," << head.dimY << "," << head.dimZ << ") != gridsize (" << gridSize[0] << "," << gridSize[1] << "," << gridSize[2] << ")");
+				if(mInterpolBorder<=-1) 
+					errFatal("spluginLoadUniversal","Gridsizes don't match, and interpolation is turned off" , SIMWORLD_GRIDERROR);
+			}
+
+			unsigned char* rawFrame = new unsigned char[head.bytesPerFrame];
+			if (gzread(gzf, rawFrame, head.bytesPerFrame) != head.bytesPerFrame) 
+				errFatal("spluginLoadUniversal","error loading frame data in " << mFile,SIMWORLD_INITERROR);
+			
+			gzclose(gzf);
+		
+			// distinguish data types, invoke grid loader
+			if(param->haveGridInt(mGrid)) {
+				Grid<int>* grid = param->getGridInt(mGrid);
+				if (head.elementType != 0 || head.elements != 1) 
+					errFatal("spluginLoadUniversal","Trying to load non-integer data into integer grid" , SIMWORLD_GRIDERROR);
+				fsLoadData<int>(flags, grid, rawFrame, head, onlyFluid, mInterpolBorder);
+			} else if(param->haveGridReal(mGrid)) {
+				Grid<Real>* grid = param->getGridReal(mGrid);
+				if (head.elementType != 1 || head.elements != 1) 
+					errFatal("spluginLoadUniversal","Trying to load non-real data into real grid" , SIMWORLD_GRIDERROR);
+				fsLoadData<Real>(flags, grid, rawFrame, head, onlyFluid, mInterpolBorder);
+			} else if(param->haveGridVec3(mGrid)) {
+				Grid<Vec3>* grid = param->getGridVec3(mGrid);
+				if (head.elementType != 2 || head.elements != 3) 
+					errFatal("spluginLoadUniversal","Trying to load non-vec3 data into vec3 grid" , SIMWORLD_GRIDERROR);				
+				fsLoadData<Vec3>(flags, grid, rawFrame, head, onlyFluid, mInterpolBorder);
+			} else { 
+				errFatal("spluginLoadUniversal","Grid not found "<< mGrid , SIMWORLD_GRIDERROR);
+			}
+			return true;
+		};
+
+	protected:		
+		std::string mGrid, mFile, mSolver;
+		bool onlyFluid;
+		int mInterpolBorder;
+};
+
+
+class spluginDumpMean : public spluginDumperBase {
+	public:
+		spluginDumpMean() : spluginDumperBase(), mFrameIdx(0), mFrameCount(0), mFrameStart(0), mICount(-1),mData(NULL) {};
+		~spluginDumpMean() 
+		{	
+			delete mData;
+		};
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpMean","parse");
+			mGrid = params.FindOneString("grid", "" );
+		   mFileName = params.FindOneString("filename", "");
+			mStaggered = params.FindOneInt("mac", 1) != 0;
+			mExit = params.FindOneInt("exit", 1) != 0;
+			mFrameCount = params.FindOneInt("frames", 0);
+			mFrameStart = params.FindOneInt("startframe", 0);
+			mStride = params.FindOneInt("stride", 1);
+			return true;
+		};
+		virtual bool initPlugin() { return true; };
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) 
+		{
+			if (mFrameIdx > mFrameCount) return true;
+			if (mFrameStart > 0)
+				mFrameStart--;
+			else
+			{
+				mICount++;
+				if (mICount == mStride) 
+					mICount=0;
+				else
+					return true;
+				
+				//nVec3i gridSize = mpPlParams->getFluidSolver()->get gridSize();
+				FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+				nVec3i gridSize = pFlags->getSize();
+				Grid<Vec3>* vecGrid = NULL;
+				Grid<Real>* realGrid = NULL;
+				int numElem = 0;
+				if(mpPlParams->haveGridVec3(mGrid) && 1) {
+					vecGrid = mpPlParams->getGridVec3(mGrid);
+					numElem = 4;
+				} else if(mpPlParams->haveGridReal(mGrid) && 1) {
+					realGrid = mpPlParams->getGridReal(mGrid);
+					numElem=1;
+				}
+	
+				const int twodKs = (gDim==2) ? mpPlParams->getFluidSolver()->get2dKstart() : 0;
+				const int twodKe = (gDim==2) ? mpPlParams->getFluidSolver()->get2dKend() : gridSize[2];
+				nVec3i res = nVec3i(gridSize[0], gridSize[1], twodKe-twodKs);				
+				int length = numElem * gridSize[0] * gridSize[1] * twodKe-twodKs;
+				if (mData == NULL)
+					mData = new Real[length];
+				
+				int idx=0;
+				// dump velocities, component wise full grids
+				FOR_IJK(twodKs, twodKe,   0, gridSize[1],   0, gridSize[0] ) {
+					if (vecGrid!=NULL)
+					{
+						Real write = vecGrid->getGlobal(i,j,k)[0];
+						if (i<gridSize[0]-1 && mStaggered) { write += vecGrid->getGlobal(i+1,j,k)[0]; write *= 0.5;}
+						mData[idx++] += write;
+		
+						write = vecGrid->getGlobal(i,j,k)[1];
+						if (j<gridSize[1]-1 && mStaggered) { write += vecGrid->getGlobal(i,j+1,k)[1]; write *= 0.5; }
+						mData[idx++] += write;
+		
+						write = vecGrid->getGlobal(i,j,k)[2];
+						if (k<gridSize[2]-1 && mStaggered) { write += vecGrid->getGlobal(i,j,k+1)[2]; write *= 0.5; }
+						mData[idx++] += write;
+		
+						mData[idx++] += (Real)pFlags->getGlobal(i,j,k);
+					}
+					else if (realGrid != NULL)
+					{
+						mData[idx++] += realGrid->getGlobal(i,j,k);
+					}
+				}
+
+				mFrameIdx++;
+				if (mFrameIdx >= mFrameCount)
+				{
+					// write out
+					for (int i=0;i < length;i++)
+						mData[i] /= (Real) mFrameCount;
+					
+					debMsg("spluginDumpMean","Writing "<<mFileName);
+					gzFile gzf = gzopen(mFileName.c_str(), "wb9");
+					if (!gzf) {
+						errMsg("spluginDumpVelExt::writeVels","Unable to open output '"<<mFileName<<"' ");
+					} else {					
+						gzwrite(gzf, &res[0] , 3*sizeof(int));
+						gzwrite(gzf, &numElem, sizeof(int));
+						gzwrite(gzf, mData, sizeof(Real)*length);
+						gzclose(gzf);
+					}
+					if (mExit) exit(0);
+				}
+			}
+			return true;
+		};
+		
+	protected:
+		// grid names to swap
+		std::string mGrid, mFileName;
+		bool mStaggered, mExit;
+		int mFrameIdx, mFrameCount, mFrameStart, mICount, mStride;
+		Real* mData;
+};
+
+
+// dump density to disk as gzipped df3
+class spluginDumpDf3 : public spluginDumperBase {
+	public:
+		spluginDumpDf3() : spluginDumperBase(),
+   				mGrid("-unnamed1-"), prefix("") { };
+		~spluginDumpDf3() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpDf3","parse");
+			mGrid = params.FindOneString("gridname", mGrid );
+			prefix = params.FindOneString("prefix", mGrid );
+			mAnimLog = params.FindOneInt("anim-log", 0 ) != 0;
+			mPbrt = params.FindOneInt("pbrt", 0 ) != 0;
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			debMsg("spluginDumpDf3","dt="<<dt<<" grid:"<<mGrid<<"; simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+			while ( this->doDump() ) { 
+				myTime_t dumptstart = getTime(); 
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+				nVec3i gridSize = pFlags->getSize();
+				Grid<Real>* srcVal = mpPlParams->getGridReal(mGrid);
+
+				int dimMax = VMAX(gridSize);
+
+				const int twodKs = mpPlParams->getFluidSolver()->get2dKstart();
+				const int twodKe = mpPlParams->getFluidSolver()->get2dKend();
+				// TODO why are x,y swapped?
+				//nVec3i min(twodKs, 0, 0);
+				//nVec3i max(twodKe, gridSize[0], gridSize[1]);
+				//nVec3i res = max-min;
+
+				std::ostringstream voutfilename; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+
+				voutfilename << this->mOutname;
+				if(prefix.length()>0) voutfilename << "_" << prefix;
+			  	voutfilename << "_" << nrStr;
+
+				std::cout << "FRAME DUMP " << voutfilename.str() << std::endl;
+
+				if (mAnimLog)	{
+					std::ofstream logfile ( (voutfilename.str()+".animlog").c_str() );
+					logfile << mpPlParams->getFluidSolver()->getDebugBuffer();
+					logfile.close();
+				}
+
+				debMsg("spluginDumpDf3","Writing '"<<voutfilename.str()<<"', resolution="<<gridSize<<" " );
+				string filenameDf3 = voutfilename.str() + (mPbrt ? ".pbrt.gz" : ".df3.gz");
+			
+				gzFile file;
+				file = gzopen(filenameDf3.c_str(), "wb1"); 
+				if (file != NULL) {
+					// dimensions
+					const int byteSize = 2;
+					const unsigned short int onx=srcVal->getSizeX(),ony=srcVal->getSizeY(),onz=srcVal->getSizeZ();
+					/*unsigned short int nx,ny,nz; 
+					nx = onx >> 8;
+					ny = ony >> 8;
+					nz = onz >> 8;
+					nx += (onx << 8);
+					ny += (ony << 8);
+					nz += (onz << 8);
+					nx = onx; ny = ony; nz = onz;
+					gzwrite(file, (void*)&nx, sizeof(short));
+					gzwrite(file, (void*)&ny, sizeof(short));
+					gzwrite(file, (void*)&nz, sizeof(short));
+					*/
+					// get rid of swizzling
+					nVec3i write_res = nVec3i(onx,ony,onz);					
+					const int nitems = onx*ony*onz;
+					const float mul = (float)( (1<<(8*byteSize))-1); 
+
+					Real *buf = new Real[nitems];
+					for (int k = 0; k < onz; k++) 
+						for (int j = 0; j < ony; j++) 
+							for (int i = 0; i < onx; i++) {
+								float val = srcVal->getGlobal(i,j,k);
+								CLAMP(val, 0.f,1.f);
+								buf[k*(onx*ony)+j*onx+i] = val;
+					}					
+					if (mPbrt) {
+						// text pbrt output
+						std::ostringstream sbuf;
+						Vec3 prop(onx,ony,onz);
+						prop /= prop.max();
+						sbuf << "Volume \"volumegrid\"" << endl;
+						sbuf << " \"integer nx\" " << onx << endl;
+						sbuf << " \"integer ny\" " << ony << endl;
+						sbuf << " \"integer nz\" " << onz << endl;
+						sbuf << " \"point p0\" [ 0 0 0 ]" << endl;
+						sbuf << " \"point p1\" [ " << prop.x << " " << prop.y << " " << prop.z << " ]" << endl;
+						sbuf << " \"float density\" [ " << endl;
+						for (int i=0;i<nitems;++i)
+							sbuf << buf[i] << " ";
+						sbuf << " ] " << endl;
+						string bs = sbuf.str();
+						gzwrite(file, (void*)(bs.c_str()), bs.length());						
+					} else {
+						// binary DF3 output
+						gzwrite(file, &write_res[0] , 3*sizeof(int));
+						unsigned short int *dbuf = new unsigned short int[nitems];
+						for (int i=0;i<nitems;++i)	
+							dbuf[i] = (unsigned short int)(buf[i]*mul);
+						gzwrite(file, (void*)dbuf, sizeof(unsigned short int)* nitems);
+						delete[] dbuf;
+					}
+					gzclose(file);
+					delete[] buf;
+					// df3 gz written
+				} else {
+					errMsg("spluginDumpDf3","Unable to write to "<<filenameDf3 );
+				}
+
+				this->increaseDumpCounter();
+
+				myTime_t dumptend = getTime(); 
+				debMsg("spluginDumpDf3","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+			}
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid, prefix;
+		bool mAnimLog, mPbrt;
+};
+
+
+/******************************************************************************/
+// dump scalar field as image, eg for smoke densities
+// largely similar to spluginDumpIsosurf and spluginDumpVelocities
+class spluginDumpImage : public spluginDumperBase {
+	public:
+		spluginDumpImage() : spluginDumperBase(),
+   				mGrid("-unnamed1-"), 
+   				mVecGrid("-unnamed2-"), mOffset(0.), mMapRange(0.),
+  					mAxis(2), mProject(0.), mSlice(0.5), mNormalize(0), 
+					mpImg(NULL),
+					mSuffix(""), mConvertTo("") { };
+		~spluginDumpImage() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpImage","parse");
+			mGrid = params.FindOneString("gridname", mGrid );
+			mVecGrid = params.FindOneString("vecgridname", mVecGrid );
+			mAxis = params.FindOneInt("axis", mAxis );
+			mOffset = params.FindOneVector("offset", mOffset );
+			mMapRange = params.FindOneFloat("map-range", mMapRange );
+			mProject = params.FindOneFloat("project-grid", mProject );
+			mSlice = params.FindOneFloat("slice", mSlice );
+			mNormalize = params.FindOneInt("normalize", mNormalize);
+			mConvertTo = params.FindOneString("convert-to", mConvertTo);
+			mSuffix = params.FindOneString("suffix", mSuffix);
+
+			parseParamsDumperBase(params);
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			myTime_t dumptstart = getTime(); 
+			debMsg("spluginDumpImage","dt="<<dt<<" grid:"<<mGrid<<","<<mVecGrid<<"; simTime="<<
+					mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+			// iso test
+			mSimTime += dt;
+			// crude approx if dt is larger than mTimestepAnim, 
+			// might be better to reduce dt?
+			while ( this->doDump() ) {
+				mLastAniOutTime += mpPlParams->mTimestepAnim;
+				FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+
+				int a1 = 0, a2 = 1;
+				mpImg->getPlaneAxes(mAxis, a1,a2);
+
+				Grid<Real>* srcGrid = NULL;
+				if(mpPlParams->haveGridReal(mGrid))    srcGrid    = mpPlParams->getGridReal(mGrid);
+				Grid<Vec3>* srcVecGrid = NULL;
+				if(mpPlParams->haveGridVec3(mVecGrid)) srcVecGrid = mpPlParams->getGridVec3(mVecGrid);
+				nVec3i gsize(-1); 
+				int sa1 = -1; 
+				int sa2 = -1; 
+
+				GridBase* baseGrid = NULL;
+				if(srcGrid) {
+					if(srcVecGrid) {
+						debMsg("spluginDumpImage","Warning - not using scalar grid, only vec one!!!!!!!!!!!!!!!!!!!!!!");
+					}
+					baseGrid = srcGrid;
+				} else if(srcVecGrid) {
+					baseGrid = srcVecGrid;
+				} else {
+					errFatal("spluginDumpImage","Provide either 'gridname'='"<<mGrid<<"', or 'vecgridname'='"<<mVecGrid<<"' ",SIMWORLD_PLUGINERROR);
+				}
+				gsize = baseGrid->getSize();
+				sa1 = baseGrid->getSize()[a1]; 
+				sa2 = baseGrid->getSize()[a2];
+
+				// TODO optimize allocation
+				if (!mpImg) {
+					mpImg = new SimpleImage;
+					mpImg->initMem( sa1, sa2 );
+				}
+				mpImg->resetToZero();
+
+				// use either vec or scalar grid
+				if(srcVecGrid) {
+					nVec3i lmin = nVec3i( 0,        0,        baseGrid->getMinZLoopValue());
+					nVec3i lmax = nVec3i( gsize[0], gsize[1], baseGrid->getMaxZLoopValue());
+					lmin[mAxis] = (int)(gsize[mAxis] * mSlice);
+					lmax[mAxis] = lmin[mAxis]+1;
+					FOR_IJK_VEC(lmin,lmax) { 
+						mpImg->getMap(i,j,k, mAxis) = srcVecGrid->getGlobal(i,j,k).getAbsolutes();
+					}
+				} else {
+					if (mProject<=0.) {
+						//errFatal("spluginDumpImage","not proj NYI",SIMWORLD_GENERICERROR);
+						nVec3i lmin = nVec3i(0,        0,        baseGrid->getMinZLoopValue());
+						nVec3i lmax = nVec3i(gsize[0], gsize[1], baseGrid->getMaxZLoopValue());
+						lmin[mAxis] = (int)(gsize[mAxis] * mSlice);
+						lmax[mAxis] = lmin[mAxis]+1;
+						FOR_IJK_VEC(lmin,lmax) { 
+							mpImg->getMap(i,j,k, mAxis) = Vec3( srcGrid->getGlobal(i,j,k) );
+						}
+					} else {
+						// project field to 2d values
+						BboxVeci unused;
+						opProjectGrid(mpImg, srcGrid, unused, mAxis ); 
+
+						Real projVal = mProject / (Real)mpPlParams->getDimMax();
+						//if (mProject != 1.) {
+						mpImg->multiplyBy( projVal );
+						//}
+					}
+				}
+
+				if (normNoSqrt(mOffset)>0.) mpImg->addOffset(mOffset); 
+				if(ABS(mMapRange)>0.) {
+					mpImg->mapFrom0To1(mMapRange);
+					if(mNormalize!=0) {
+						debMsg("spluginDumpImage","Warning - 'map-range' and 'normalize' are exclusive!!!!!!!!!!!!!!!!!!!!!!");
+					}
+				}
+
+				switch (mNormalize) {
+					case 0: break;
+					case 1: mpImg->normalizeMax(); break;
+					case 2: mpImg->normalizeMinMax(); break;
+					default:
+						errFatal("spluginDumpImage","Invalid normalize value "<<mNormalize, SIMWORLD_GENERICERROR);
+						break;
+				}
+
+				std::ostringstream baseName, ppmFn; 
+				char nrStr[5]; // nr conversion 
+				snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+				baseName << this->mOutname <<"_";
+				if(mSuffix.length()>0) {
+					baseName << mSuffix<<"_" ;
+				}
+				baseName << nrStr;
+				ppmFn << baseName.str() << ".ppm";
+				debMsg("spluginDumpImage","Writing '"<<ppmFn.str()<<"', resolution="<<mpImg->getSize()<<", convert-to: "<<mConvertTo ); 
+				// invert x,y if axis == 0
+				mpImg->writePpm( ppmFn.str(), 0,0, baseGrid->getSize()[a1], baseGrid->getSize()[a2], false); 
+
+				// call the ImageMagick util
+				const bool abortOnError = false;
+				if (mConvertTo.length()>0) {
+					std::string targetFile = baseName.str() + std::string(".") + mConvertTo;
+
+					std::string convert = std::string("convert \"") + ppmFn.str() + std::string("\" \"") + targetFile + std::string("\"");
+					std::string rmExe = std::string("rm \"") + ppmFn.str() + std::string("\" ");
+					//debMsg("Exe","convert='"<<convert<<"', rm='"<<rmExe<<"' ");
+
+					if (system(convert.c_str()) != 0) {
+						debMsg("spluginDumpImage","convert system call failed! "<<convert);
+						if(abortOnError) errFatal("spluginDumpImage","aborting...", SIMWORLD_GENERICERROR);
+					}
+					if (system(rmExe.c_str()) != 0) debMsg("spluginDumpImage","remove system call failed! "<<rmExe);
+				}
+
+				this->increaseDumpCounter();
+
+			} 
+			myTime_t dumptend = getTime(); 
+			debMsg("spluginDumpImage","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+
+			return true;
+		};
+
+	protected:
+		// grid names to swap
+		std::string mGrid, mVecGrid;
+		// offset?
+		Vec3 mOffset;
+		// map offset to offset+scale to 0-1?
+		Real mMapRange;
+
+		// axis
+		int mAxis;
+		// project onto plane?
+		Real mProject;
+		// if project is off, use res[]*slice for writing a single plane
+		Real mSlice;
+		// normalize? 0=off, 1=normalize max, leave 0; 2=normalize full min/max
+		int  mNormalize;
+		// image
+		SimpleImage *mpImg;
+		// convert ppms to png?
+		std::string mSuffix, mConvertTo;
+};
+
+
+
+
+
+/******************************************************************************/
+// dump scalar field as image, eg for smoke densities
+// largely similar to spluginDumpIsosurf and spluginDumpVelocities
+class spluginDumpFluidVelASCII : public spluginDumperBase {
+public:
+	spluginDumpFluidVelASCII() : spluginDumperBase(),
+		mFlagGrid("-unnamed1-"), 
+		mVelGrid("-unnamed2-"),
+		mObjImmersedGrid("-unnamed3-"),
+		mZAxisPlane(2), 
+		mMaxFrames(100),
+		//mLeftCutoffX(0.),
+		mTotalBorderThickness(0),
+		mStartX(0.),
+		mFilename("spluginDumpFluidVelASCII_") {};
+		
+	~spluginDumpFluidVelASCII() { };
+
+	virtual bool parseParams(const ParamSet& params) {
+		//debMsg("spluginDumpImage","parse");
+		mFlagGrid = params.FindOneString("flaggridname", mFlagGrid );
+		mVelGrid = params.FindOneString("velgridname", mVelGrid );
+		mSDFGrid = params.FindOneString("sdfgridname", mSDFGrid );
+		mObjImmersedGrid = params.FindOneString("immersedgridname", mObjImmersedGrid );
+		mZAxisPlane = params.FindOneInt("zAxisPlane", mZAxisPlane );
+		mMaxFrames = params.FindOneInt("max-frames", mMaxFrames );
+		//mLeftCutoffX = params.FindOneFloat("leftCutoffX", mLeftCutoffX );
+		mTotalBorderThickness = params.FindOneInt("totalBorderThickness", mTotalBorderThickness);
+		mStartX = params.FindOneFloat("leftStartX", mStartX );
+		mFilename = params.FindOneString("filename", mFilename);
+
+		parseParamsDumperBase(params);
+		return true;
+	};
+	virtual bool initPlugin() {
+		mSimTime = 0.;
+		return true;
+	};
+
+	// perform step with given dt, return failure
+	virtual bool performStep(Real org_dt) {
+		Real dt = org_dt * mpPlParams->getDeltaX(); 
+
+
+
+		//debMsg("spluginDumpLayeredSurface2D","dt="<<dt<<" grid:"<<mGrid<<"; simTime="<<
+		//	mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+		// start time
+		myTime_t dumptstart = getTime();
+
+		//inc sim time (needed for dumping)
+		mSimTime += dt;
+
+		//// crude approx if dt is larger than mTimestepAnim, 
+		//// might be better to reduce dt?
+		////
+		while ( this->doDump() ) {
+			mLastAniOutTime += mpPlParams->mTimestepAnim;
+
+			// get grids
+			FlagGrid*  pFlags  = mpPlParams->getGridInt( mFlagGrid );
+			Grid<Vec3>*  pVels  = mpPlParams->getGridVec3( mVelGrid );
+			Grid<Real>* pSDF = mpPlParams->getGridReal(mSDFGrid);
+
+			// get grid size
+			nVec3i gridSize = pFlags->getSize();
+
+			/////////////////////////////////////////////////////////////////////////
+			// return if not immersed yet
+			if (mObjImmersedGrid.size() > 0) {
+				Grid<int>* pObjImmersed = mpPlParams->getGridInt(mObjImmersedGrid);
+				if (pObjImmersed->getGlobal(0,0,0) <= 0) return true;
+			}
+			/////////////////////////////////////////////////////////////////////////
+
+			// compute start x
+			int start_x = (int)round(mStartX * gridSize.x);  // maybe +1
+
+
+			// build file name string
+			std::string baseName, txtFn, melFn; 
+			char nrStr[5]; // nr conversion 
+			snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+			baseName = mFilename + "_" + nrStr;
+			txtFn = baseName + ".txt";
+
+			// write file
+			std::fstream myfile;
+
+			myfile.open (txtFn.c_str(), std::ios::out);
+
+			// write header
+			myfile << "Fluid Velocity File \n"; 
+			myfile << "Version 1.0 \n";
+			myfile << " \n"; 
+
+			// write fluid grid dimensions
+			myfile << "Dimensions " << (int)(gridSize.x) << " " << (int)(gridSize.y) << "\n";
+
+
+			// write data
+			int z = mZAxisPlane; // z = constant: mZAxisPlane
+			for (int x = 0; x < gridSize.x; x++) {
+				for (int y = 0; y < gridSize.y; y++) {
+					
+					// test if x,y,z is fluid
+					//if (pFlags->getGlobal(x,y,z) != FOBSTACLE) {
+					
+						// if so, write position...
+						myfile << (x+1) << " " << (y+1) << " ";
+
+						//         .. SDF value                    ... and velocity values                                                + newline
+						myfile << (pSDF->getGlobal(x,y,z)) << " "<< (pVels->getGlobal(x,y,z)).x << " " <<  (pVels->getGlobal(x,y,z)).y << "\n";
+					//}
+				}
+			}
+
+			// flush and close file
+			myfile << std::endl;
+			myfile.close();
+
+
+
+			if (mMaxFrames>=0) {
+				// signal end
+				if (mAnimOutCounter>=mMaxFrames) mpPlParams->setQuit(true);
+			}
+
+			// inc dump counter
+			this->increaseDumpCounter();
+
+			// end time
+			myTime_t dumptend = getTime(); 
+			debMsg("spluginDumpImage","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+		} 
+
+
+		
+		return true; 
+	};
+
+protected:
+	// grid names to swap
+	std::string mFlagGrid, mVelGrid, mSDFGrid, mObjImmersedGrid;
+	// axis
+	int mZAxisPlane, mMaxFrames, mTotalBorderThickness;
+	// obstacle cutoff
+	float mLeftCutoffX, mStartX;
+	// output 
+	std::string mFilename;
+};
+
+
+
+
+
+/******************************************************************************/
+// dump layered surface (2D only)
+
+class spluginDumpLayeredSurface2D : public spluginDumperBase {
+	public:
+		spluginDumpLayeredSurface2D() : spluginDumperBase(),
+			mGrid("-unnamed1-"), mStartX(0) { };
+		~spluginDumpLayeredSurface2D() { };
+
+		virtual bool parseParams(const ParamSet& params) {
+			//debMsg("spluginDumpLayeredSurface2D","parse params");
+
+			mMaxFrames = params.FindOneInt("max-frames", mMaxFrames );
+			mGrid = params.FindOneString("gridname", mGrid );
+			mObjImmersedGrid = params.FindOneString("immersedgrid", mObjImmersedGrid);
+			mStartX = params.FindOneFloat("startX", mStartX );
+
+			parseParamsDumperBase(params); 
+			return true;
+		};
+		virtual bool initPlugin() {
+			mSimTime = 0.;
+			return true;
+		};
+
+		// perform step with given dt, return failure
+		virtual bool performStep(Real org_dt) {
+			Real dt = org_dt * mpPlParams->getDeltaX(); 
+			 
+			
+			if (gDim != 2) {
+
+				debMsg("WARNING: spluginDumpLayeredSurface2D is only for 2D mode", "no export")
+
+			} else {
+				debMsg("spluginDumpLayeredSurface2D","dt="<<dt<<" grid:"<<mGrid<<"; simTime="<<
+						mSimTime<<", last="<<mLastAniOutTime<<", cnt="<<mAnimOutCounter<<" " ); 
+
+				// start time
+				myTime_t dumptstart = getTime();
+
+				//inc sim time (needed for dumping)
+				mSimTime += dt;
+
+				//// crude approx if dt is larger than mTimestepAnim, 
+				//// might be better to reduce dt?
+				////while(mpPlParams->mTimestepAnim>0. && (mSimTime-mLastAniOutTime > mpPlParams->mTimestepAnim) && (!mpPlParams->getQuit()) ) {
+				while ( this->doDump() ) {
+					mLastAniOutTime += mpPlParams->mTimestepAnim;
+					
+					//nVec3i gridSize = mpPlParams->getFluidSolver()->get gridSize();
+					FlagGrid*  pFlags  = mpPlParams->getGridInt( "flags" );
+					nVec3i gridSize = pFlags->getSize();
+					
+					// get grid
+					Grid<Real>* srcGrid = mpPlParams->getGridReal(mGrid);
+					Grid<int>* objectImmersed = mpPlParams->getGridInt(mObjImmersedGrid);
+	
+					
+					if (objectImmersed->getGlobal(0,0,0) <= 0) return true;
+
+					// compute z dim
+					int z = (int)floor(gridSize.z / 2.0f);
+					
+					// compute start x
+					int start_x = (int)floor(mStartX * gridSize.x) + 1; 
+
+
+					// init level buffers
+					// L0 - L5
+					int arraywidth = gridSize.x - start_x - 1;
+					int layerlength = 8;
+					float* Layers = new float[arraywidth * layerlength];
+					// set layer arrays all zeroes
+					for (int i = 0; i < (arraywidth * layerlength); i++) {
+						Layers[i] = 0.0f;
+					}
+					
+					// start parsing
+					for (int x = 0; x < arraywidth; x++) {
+						int currentLayer = 1; // start with L1 since L0 is zero everywhere
+						
+						for (int y = 2; y < gridSize.y-1; y++) {
+							float val_prev = srcGrid->getGlobal(x + start_x,y-1,z);
+							float val_next = srcGrid->getGlobal(x + start_x,y,z);
+
+							bool v1 = pFlags->getGlobal(x + start_x,y-1,z) == FFLUID;
+							bool v2 = pFlags->getGlobal(x + start_x,y,z) == FFLUID;
+
+
+							//if (SIGNUM(val_prev) != SIGNUM(val_next)) {
+							if (v2 != v1) {
+								// surface found
+								//Layers[get1DIndex(x, currentLayer, arraywidth)] = (y - abs(val_next)) - Layers[get1DIndex(x, currentLayer-1, arraywidth)];
+								Layers[get1DIndex(x, currentLayer, arraywidth)] = y;
+								currentLayer += 1;
+
+								if (currentLayer >= layerlength) {
+									continue;
+								}
+							}
+						}
+					}
+
+
+
+					// compute deltas
+					for (int j = layerlength - 1; j >0; j--) {
+						for (int i = 0; i < arraywidth; i++) {
+							float L = Layers[get1DIndex(i, j, arraywidth)];
+							if (L > 0.0f) Layers[get1DIndex(i, j, arraywidth)] -= Layers[get1DIndex(i, j-1, arraywidth)];	
+						}
+					}
+
+
+					// build filen name string
+					std::string baseName, txtFn, melFn; 
+					char nrStr[5]; // nr conversion 
+					snprintf(nrStr, 5, "%04d", mAnimOutCounter ); 
+					baseName = this->mOutname + "_" + nrStr;
+					txtFn = baseName + ".txt";
+					melFn = baseName + ".mel";
+
+					// write file
+					std::fstream myfile;
+					myfile.open (txtFn.c_str(), std::ios::out);
+					
+					// Layer 0
+					for (int j = 0; j < layerlength; j++) {
+						myfile << "L" << j << " ";
+						for (int i = 0; i < arraywidth; i++) {
+							myfile <<  Layers[get1DIndex(i, j, arraywidth)] << " ";
+						}
+						myfile << std::endl;
+					}
+
+
+					myfile.close();
+
+
+					this->increaseDumpCounter();
+
+
+					// end time
+					myTime_t dumptend = getTime(); 
+					debMsg("spluginDumpImage","took "<< getTimeString(dumptend-dumptstart)<<" for frame "<<mAnimOutCounter );
+				} 
+
+				
+			}
+			return true;
+		}
+
+		private:
+		int get1DIndex(int x, int y, int width) {
+			return x + (y * width);
+		}
+
+		
+
+	protected:
+		// grid names to swap
+		std::string mGrid;
+		std::string mObjImmersedGrid;
+		float mStartX;
+};
+
+
+
+//*****************************************************************************
+
+SolverPlugin* MakeIoPlugin(std::string name) {
+	if (name.compare( string("dump-isosurface") )==0) {
+		return new spluginDumpIsosurf;
+	} else if (name.compare( string("dump-df3") )==0) {
+		return new spluginDumpDf3;
+
+	} else if (name.compare( string("dump-grid-vec3") )==0) { // preferred new name
+		return new spluginDumpVelocities;
+	} else if (name.compare( string("dump-velocities") )==0) {
+		return new spluginDumpVelocities;
+	} else if (name.compare( string("dump-grid-scalar") )==0) {
+		return new spluginDumpScalar;
+
+	} else if (name.compare( string("dump-universal") )==0) {
+		return new spluginDumpUniversal;
+	} else if (name.compare( string("load-universal") )==0) {
+		return new spluginLoadUniversal;
+	} else if (name.compare( string("dump-image") )==0) {
+		return new spluginDumpImage;
+	} else if (name.compare( string("dump-mean") )==0) {
+		return new spluginDumpMean;
+	} else if (name.compare( string("dump-layered-surf-2D") )==0) {
+		return new spluginDumpLayeredSurface2D;
+	} else if (name.compare( string("dump-fluid-vel-ascii") )==0) {
+		return new spluginDumpFluidVelASCII;
+	} else if (name.compare( string("mesh-dump-surface") )==0) {
+		return new spluginDumpMeshSurf;
+	} else if (name.compare( string("print-grid") )==0) {
+		return new spluginPrintGrid;
+	} else if (name.compare( string("print-timing-stats") )==0) {
+		return new spluginPrintTimingStats;
+	} else if (name.compare( string("print-grid-diff") )==0) {
+		return new spluginPrintGridDiff;
+	} else if (name.compare( string("dump-vpart") )==0) {
+		return new spluginDumpVpart;
+	} else if (name.compare( string("dump-pls-parts") )==0) {
+		return new spluginDumpPlsPart;
+	}
+	return NULL;
+}
+
+} // end namespace DDF 
+

@@ -1,0 +1,239 @@
+/******************************************************************************
+ *
+ * El'Beem - Free Surface Fluid Simulation with the Lattice Boltzmann Method
+ * Copyright 2003-2006 Nils Thuerey
+ *
+ * Toms LIC visualization for elbeem
+ * unused...
+ *
+ *****************************************************************************/
+
+#include <math.h>
+#include <iostream>
+#include <fstream>
+#include <stdlib.h>
+
+#include "utillic.h"
+extern ntlVec3d hsv2rgb(ntlVec3d hsv);
+
+using namespace std;
+
+// LIC ------------------------------------------------------------------
+
+inline double LICabs (const double x) {return (x > 0) ? x : -x;}
+
+LIC::LIC (const int dimX, const int dimY, const int oversampling):
+	_dimX (dimX), _dimY (dimY), _os (oversampling) {
+
+	const int totalX = _dimX*_os,
+	          totalY = _dimY*_os;
+	_field = new unsigned char[totalX*totalY];
+	_pic = new ntlVec3d[_dimX*_dimY];
+}
+
+LIC::~LIC () {
+	//leak...?
+	delete [] _field;
+}
+
+
+void LIC::vecFunc (double x, double y, double& dx, double& dy) {
+	x = y = dx = dy = 0.0;
+	//cerr << "You have to overload LIC::vecFunc()!\n";
+}
+
+
+double LIC::hueFunc (const double x, const double y) {
+	//cerr << "You have to overload LIC::hueFunc()!\n";
+	//return 0;
+
+	// default hue implementation
+	double dx=0.0, dy=0.0;
+	vecFunc (x, y, dx, dy);
+	return sqrt (dx*dx+dy*dy);
+}
+
+
+bool LIC::calculate (const double sx, const double sy,
+	                   const double ex, const double ey) {
+	                	 //ntlVec3d *pic ) {
+	                   //const char* filename) {
+	
+	const double maxLineLength = (ex-sx + ey-sy);
+	const int totalX = _dimX*_os,
+	          totalY = _dimY*_os;
+	int v=0, px=0, py=0, dir=0, ix=0, iy=0, oldpx=0, oldpy=0;
+	double ax=0.0, ay=0.0, h=0.0, d=0.0, dx=0.0, dy=0.0, lineLength=0.0, sax=0.0, say=0.0;
+	double k1x=0.0, k1y=0.0, k2x=0.0, k2y=0.0, k3x=0.0, k3y=0.0, k4x=0.0, k4y=0.0;
+	double dist=0.0, maxDist=0.0;
+	bool decreased=false;
+	
+	double maxStep = (ex-sx)/(totalX-1);
+	if (maxStep > (ey-sy)/(totalY-1))
+		maxStep = (ey-sy)/(totalY-1);
+	maxStep *= 1.5;
+	//xray(1).form ("maxStep: %f\n", maxStep);
+	
+	for (ix = 0; ix < totalX*totalY; ix++) _field[ix] = 0;
+
+	srand (0);
+	for (ix = 1; ix < totalX-1; ix += 6*_os) {
+	for (iy = 1; iy < totalY-1; iy += 6*_os) {
+		v = 105 + (((ix+iy)/(6*_os)) & 3) * 50;
+
+			px = ix;
+			py = iy;
+			sax = sx + (ex-sx)*px/(totalX-1);
+			say = sy + (ey-sy)*py/(totalY-1);
+
+		/* turn following test off for high-quality pictures */
+		if (_field[px  + py   *totalX] != 0 ||
+		    _field[px+1+ py   *totalX] != 0 ||
+		    _field[px-1+ py   *totalX] != 0 ||
+		    _field[px  +(py+1)*totalX] != 0 ||
+		    _field[px  +(py-1)*totalX] != 0) continue; // */
+
+		//xray(1).form ("sax: %f; say: %f\n", sax, say);
+		
+		for (dir = 0; dir < 2; dir++) {
+			h = ((dir == 0) ? 0.1 : -0.1);
+			ax = sax;
+			ay = say;
+			oldpx = int ((ax-sx)/(ex-sx)*(totalX-1));
+			oldpy = int ((ay-sy)/(ey-sy)*(totalY-1));
+			lineLength = 0;
+			maxDist = dist = 0;
+			decreased = false;
+			do {
+				//std::cout <<" ax"<<ax<<" ay"<<ay<<std::endl;
+				// NT - vecFunc accesses normalized to 1.0, for these cases...
+				vecFunc ( (ax        )/(ex-sx), (ay        )/(ey-sy), k1x, k1y); k1x *= h; k1y *= h;
+				vecFunc ( (ax+0.5*k1x)/(ex-sx), (ay+0.5*k1y)/(ey-sy), k2x, k2y); k2x *= h; k2y *= h;
+				vecFunc ( (ax+0.5*k2x)/(ex-sx), (ay+0.5*k2y)/(ey-sy), k3x, k3y); k3x *= h; k3y *= h;
+				vecFunc ( (ax+    k3x)/(ex-sx), (ay+    k3y)/(ey-sy), k4x, k4y); k4x *= h; k4y *= h;
+
+				dx = (0.5*k1x + k2x + k3x + 0.5*k4x)/3;
+				dy = (0.5*k1y + k2y + k3y + 0.5*k4y)/3;
+				d  = sqrt (dx*dx + dy*dy);
+
+				if (d > maxStep) { // step was too large
+					//xray(1).form ("-: %f (maxStep: %f; d: %f)\n", h, maxStep, d);
+					if (decreased || LICabs (d) < 1e-10)
+						h *= 0.75;
+					else
+						h *= 0.75*maxStep/d;
+					
+					decreased = true;
+					//xray(1) << "h decreased\n";
+					continue;
+				}
+				decreased = false;
+
+				if (d < 0.5*maxStep) {
+					if (LICabs (d) < 1e-10)
+						h *= 1.5*maxStep;
+					else
+						h *= 0.9*maxStep/d; // increase step size
+				}
+
+				if (LICabs (h) > 1e+5) {
+					break;
+				}
+				if (LICabs (h) < 1e-5) {
+					break;
+				}
+					
+				ax += dx;
+				ay += dy;
+
+				if (ax < sx || ax > ex || ay < sy || ay > ey) break;
+
+				lineLength += d;
+
+				dist = sqrt ((sax-ax)*(sax-ax) + (say-ay)*(say-ay))/maxStep;
+				if (dist > maxDist) maxDist = dist;
+				
+				px = int ((ax-sx)/(ex-sx)*(totalX-1));
+				py = int ((ay-sy)/(ey-sy)*(totalY-1));
+				if (px > 0 && py > 0 && px < totalX-1 && py < totalY-1) {
+					if (px == oldpx && py == oldpy) continue;
+					oldpx = px;
+					oldpy = py;
+#ifdef MRGLWRGL
+					if ((_field[px  + py   *totalX] != v && _field[px  + py   *totalX] != 0) ||
+		        	(_field[px+1+ py   *totalX] != v && _field[px+1+ py   *totalX] != 0) ||
+		        	(_field[px-1+ py   *totalX] != v && _field[px-1+ py   *totalX] != 0) ||
+		        	(_field[px  +(py+1)*totalX] != v && _field[px  +(py+1)*totalX] != 0) ||
+		        	(_field[px  +(py-1)*totalX] != v && _field[px  +(py-1)*totalX] != 0)) {
+						xray(1) << "hit\n";
+						break;
+					}
+#endif
+					_field[px  + py   *totalX] = v;
+					_field[px+1+ py   *totalX] = v;
+					_field[px-1+ py   *totalX] = v;
+					_field[px  +(py+1)*totalX] = v;
+					_field[px  +(py-1)*totalX] = v;
+				}
+				else {
+					//xray(1).form ("LIC: Coords out of bounds: %i, %i\n", px, py);
+				}
+
+				// debug abort for boundary nodes...
+				if( (k1x==0.0) && (k1y==0.0) &&
+						(k2x==0.0) && (k2y==0.0) ) lineLength = maxLineLength;
+
+			} while (lineLength < maxLineLength && (maxDist < 4*_os*maxStep || dist > 3*_os*maxStep));
+			if (dist <= 3*_os*maxStep) {
+				break;
+			}
+		}
+	}
+		//xray(1) << ":";
+	}
+	
+	//PPM ppm (_dimX, _dimY, PPM::binary);
+	int sum;
+	int x, y, ox, oy, hue;
+	// first init hue range
+	double maxHue, minHue, hueOff, hueMult;
+	minHue = maxHue = hueFunc(0.0,0.0);
+	hueOff = 0.0; hueMult = 1.0;
+	for (x = 0; x < _dimX; x++) {
+		ax = sx + (ex-sx)* (double (x) / (_dimX-1));
+		for (y = 0; y < _dimY; y++) {
+			ay = sy + (ey-sy)* (double (y) / (_dimY-1));
+			double dhue = hueFunc (ax/(ex-sx), ay/(ey-sy)); // 0..1
+			//if(dhue>1000.0) std::cout <<" ax"<<(ax/(ex-sx))<<" ay"<<(ay/(ey-sy))<<" hue "<<minHue<<"-"<<maxHue<<" off"<<hueOff<<" mult"<<hueMult <<std::endl;
+			if (dhue > maxHue) maxHue = dhue;
+			if (dhue < minHue) minHue = dhue;
+		}
+	}
+	hueOff = minHue; 
+	hueMult = 170.0/(maxHue-minHue);
+#ifndef WIN32
+	if(!finite(hueMult)) hueMult = 1.0; // no range...?
+#endif // WIN32
+	//std::cout <<" hue "<<minHue<<"-"<<maxHue<<" off"<<hueOff<<" mult"<<hueMult <<std::endl;
+
+	for (x = 0; x < _dimX; x++) {
+		ax = sx + (ex-sx)* (double (x) / (_dimX-1));
+		for (y = 0; y < _dimY; y++) {
+			ay = sy + (ey-sy)* (double (y) / (_dimY-1));
+			sum = 0;
+			for (ox = 0; ox < _os; ox++)
+				for (oy = 0; oy < _os; oy++)
+					sum += _field[x*_os + ox + (y*_os + oy)*totalX];
+			sum /= _os*_os;
+			hue = int ( (hueFunc (ax/(ex-sx), ay/(ey-sy))-hueOff)*hueMult );
+			if (hue > 255) hue = 255;
+			if (hue <   0) hue =   0;
+			//ppm (x, y) = HSV ( (170-hue), 255, sum);
+			ntlVec3d col = hsv2rgb( ntlVec3d( (170.0-hue), 255.0, sum) );
+			_pic[ (_dimX)*y + x ] = col;
+		}
+	}
+
+	return true;
+}
+

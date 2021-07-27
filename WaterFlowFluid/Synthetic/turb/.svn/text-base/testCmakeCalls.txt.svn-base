@@ -1,0 +1,47 @@
+
+--- base options  
+cmake .. -DOPENMP=0 -DPROFILE=0 -DDEBUG=0 -DTWOD=0 -DGLUTGUI=0
+
+--- run cmake with build type (e.g. in comb. with -G Xcode):
+cmake .. -DCMAKE_BUILD_TYPE=Release
+
+--- profile make, manual set...
+CXX="g++ -pg " CC="gcc -pg " cmake .. -DPROFILE=1
+
+--- run from the command line, cmd args, no gui
+DDF_HIDEGUI=1 ./ddf ...
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+-- debug run & compile
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+rm -f ./ddfCmd; cmake ..; VERBOSE=1 make -j 1;  DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib ./ddfCmd simple.pbrt
+DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib gdb --args ./ddfCmd simple.pbrt
+rm -f ./ddfGlutGui; VERBOSE=1 make -j 1;  DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib ./ddfGlutGui simple.pbrt
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--- local openmp:
+rm -f CMakeCache.txt; CXX="/opt/gcc-4.4/usr/local/bin/g++" CC="/opt/gcc-4.4/usr/local/bin/gcc" cmake .. -DOPENMP=1
+DYLD_LIBRARY_PATH=/opt/gcc-4.4/usr/local/lib/ ./ddfCmd
+rm -f ./ddfCmd; VERBOSE=1 make -j 4; DYLD_LIBRARY_PATH=/opt/gcc-4.4/usr/local/lib/ OMP_NUM_THREADS=3 ./ddfCmd
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--- local new gcc 64:
+rm -f CMakeCache.txt; CXX="/opt/gcc-4.4/usr/local/bin/g++" CC="/opt/gcc-4.4/usr/local/bin/gcc" cmake .. -DOPENMP=1 -DGLUTGUI=1
+DYLD_LIBRARY_PATH=/opt/gcc-4.4/usr/local/lib/x86_64 ./ddfGlutGui
+rm -f ./ddfGlutGui; VERBOSE=1 make -j 4; DYLD_LIBRARY_PATH=/opt/gcc-4.4/usr/local/lib/x86_64 OMP_NUM_THREADS=3 ./ddfGlutGui
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--- openmp debug version:
+CXX="/opt/gcc-4.4/usr/local/bin/g++" CC="/opt/gcc-4.4/usr/local/bin/gcc" cmake .. -DOPENMP=1 -DDEBUG=1
+DYLD_LIBRARY_PATH=/opt/gcc-4.4/usr/local/lib/ OMP_NUM_THREADS=2 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib gdb --args ./ddfCmd
+
+
+parser:
+cd ../util/; lex -opbrtlex.cpp pbrtlex.l; bison -d -v -t -o pbrtparse.cpp pbrtparse.y ; mv pbrtparse.cpp.h pbrtparse.h ;  cd ../bld-debug; make 2>&1|head -10
+

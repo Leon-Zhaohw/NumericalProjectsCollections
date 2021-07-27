@@ -1,0 +1,362 @@
+/******************************************************************************
+ *
+ * DDF
+ * Copyright 2007-208 Nils Thuerey
+ *
+ * Image helper functions
+ *
+ *****************************************************************************/
+
+// simplified compilation
+#define NO_CONFIG_H 1
+#include "imageio.h"
+#include "randomstream.h"
+
+namespace DDF {
+
+// write rectangle to ppm
+bool SimpleImage::writePpm(string filename, int minx, int miny, int maxx, int maxy, bool invertXY) {
+	int w = maxx-minx;
+	int h = maxy-miny;
+
+	if (w<=0 || h<=0 || w>mSize[0] || h>mSize[1]) {
+		errMsg("SimpleImage::WritePPM","Invalid rect: w="<<w<<", h="<<h<<", size="<<mSize[0]<<","<<mSize[1]<<" min/max: "<<minx<<","<<miny<<" to "<<maxx<<","<<maxy<<", resetting... " );
+		minx = miny = 0;
+		maxx = mSize[0]-1; 
+		maxy = mSize[1]-1;
+		w = mSize[0]-1;
+		h = mSize[1]-1;
+		//return false; 
+	}
+
+	FILE* fp = fopen(filename.c_str(), "wb");
+	if (fp==NULL) { 
+		errMsg("SimpleImage::WritePPM","Unable to open '"<<filename<<"' for writing");
+		return false; 
+	}
+	fprintf(fp, "P6\n%d %d\n255\n", w, h);
+
+	int pixCnt = 0;
+	for(int j=maxy-1; j>=miny; j--) 
+		for(int i=minx; i<maxx; i++) {
+			unsigned char col[3];
+			for(int l=0; l<3; l++) {
+				float val;
+				if(invertXY) val = (float)get(j,i)[l];
+				else val =(float)get(i,j)[l];
+
+				CLAMP(val, (float)0.,(float)1.);
+				col[l] = (unsigned char)(255. * val );
+			}
+			//col[1] = col[2] = col[0];
+			if (fwrite(col,1,3, fp) != 3) errFatal("SimpleImage::writePpm","fwrite failed",SIMWORLD_INITERROR);
+			pixCnt++;
+			//fprintf(stderr,"%d %d %d \n",col[0],i,j);
+		}
+
+	fclose(fp);
+	debMsg("SimpleImage::WritePPM","Wrote '"<<filename<<"', region="<<minx<<","<<miny<<" to "<<maxx<<","<<maxy<<"; "<<pixCnt);
+
+	return true;
+}
+
+bool SimpleImage::writePpmFull(string filename) {
+	return writePpm(filename, 0,0, getSize()[0], getSize()[1] );
+}
+
+bool SimpleImage::writePng(string filename) {
+	std::ostringstream tmp_filen;
+	tmp_filen << std::string(filename) << "temp.ppm";
+	if(!writePpmFull( tmp_filen.str().c_str() )) {
+		return 0;
+	}
+
+	std::ostringstream exeConv;
+	exeConv << "cat "<< tmp_filen.str() <<" | pnmtopng 2>/dev/null > "<<filename<<" ";
+	if (system( exeConv.str().c_str() ) != 0) {
+		// dont delete if not converted...
+		debMsg("SimpleImage::writePng","system conversion call failed"); // ,SIMWORLD_INITERROR);
+	} else { 
+
+		// convert ok -> del PPM
+		std::ostringstream exeRm;
+		exeRm << "rm "<< tmp_filen.str() <<" ";
+		if (system( exeRm.str().c_str() ) != 0) {
+			debMsg("SimpleImage::writePng","system conversion call failed"); // ,SIMWORLD_INITERROR);
+		}
+	}
+
+	return 1; 
+}
+
+
+bool SimpleImage::initFromFile (std::string filename) { 
+	//const bool abortOnError = false;
+	//std::string tempname = std::string( tempnam("/tmp/","ddfconv_") ); , tempnam seems to be dangerous according to gcc...
+	std::string tempname = std::string( "/tmp/ddfconv_" );
+	RandomStream rnd(778);
+
+	std::string mConvertTo("ppm");
+
+	// call the ImageMagick util
+	if (1) {
+		std::ostringstream targetFileIn;
+		targetFileIn << tempname << "_" <<rnd.getReal();
+		std::string targetFile = targetFileIn.str() + std::string(".") + mConvertTo;
+
+		std::string convert = std::string("convert \"") + filename + std::string("\" \"") + targetFile + std::string("\"");
+		std::string rmExe = std::string("rm \"") + targetFile + std::string("\" ");
+		if (0) debMsg("Exe","convert='"<<convert<<"', rm='"<<rmExe<<"' ");
+
+		// convert!
+		if (system(convert.c_str()) != 0) {
+			debMsg("initFromFile","convert system call failed! "<<convert);
+			if(mAbortOnError) errFatal("initFromFile","aborting...", SIMWORLD_GENERICERROR);
+			return false;
+		}
+
+		// read in ppm image
+		initFromPpm(targetFile);
+
+		// finally, remove temp ppm file
+		if (1 && (system(rmExe.c_str()) != 0)) debMsg("initFromFile","remove system call failed! "<<rmExe);
+	}
+
+	return true;
+}
+
+// read in a ppm file, and init the image accordingly
+bool SimpleImage::initFromPpm (std::string filename) { 
+	// maximum length of a line of text 
+	const int MAXLINE=1024;
+
+	int filetype=0;
+	enum {PGM, PPM};	// possible file types 
+
+	FILE *fp;
+	char line[MAXLINE];
+	int size, rowsize;
+
+	// Read in file type  
+	fp = fopen(filename.c_str(), "rb");
+	if(!fp) {
+		debMsg("SimpleImage","Error - unable to open file '"<< filename<<"' for reading");
+		return 0;
+	}
+
+	// 1st line: PPM or PGM 
+	if (fgets (line, MAXLINE, fp) == NULL) {
+		if(mAbortOnError) errFatal("SimpleImage::initFromPpm","fgets failed",SIMWORLD_INITERROR);
+		return 0;
+	}
+	
+	if (line[1] == '5')
+		filetype = PGM;
+	else if (line[1] == '6')
+		filetype = PPM;
+	else {
+		debMsg("SimpleImage","Error: need PPM or PGM file as input!");
+		return 0;
+	}
+
+	// Read in width and height, & allocate space  
+	 // 2nd line: width height 
+	if (fgets (line, MAXLINE, fp) == NULL) {
+		if(mAbortOnError) errFatal("SimpleImage::initFromPpm","fgets failed",SIMWORLD_INITERROR);
+		return 0;
+	}
+	int windW=0, windH=0;	// size of the window on the screen  
+	int intsFound = sscanf(line, "%d %d", &windW, &windH);
+	if( intsFound == 1) {
+		// only X found, search on next line as well for Y...
+		if( sscanf(line, "%d", &windH) != 1) {
+			if(mAbortOnError) errFatal("initFromPpm","Ppm dimensions not found!"<<windW<<","<<windH, SIMWORLD_INITERROR);
+			return 0; 
+		} else {
+			// ok, found 2 lines
+			//debMsg("initFromPpm","Ppm dimensions found!"<<windW<<","<<windH);
+		}
+	} else if( intsFound == 2) {
+		// ok!
+	} else {
+		if(mAbortOnError) errFatal("initFromPpm","Ppm dimensions not found at all!"<<windW<<","<<windH, SIMWORLD_INITERROR);
+		return 0;
+	}
+	//printf ("Width is %d, height is %d\n", windW, windH);
+
+	if (filetype == PGM) {
+		size = windH * windW;		// greymap: 1 byte per pixel
+		rowsize = windW;
+	} else {
+		// filetype == PPM  
+		size = windH * windW * 3;	// pixmap: 3 bytes per pixel
+		rowsize = windW * 3;
+	}
+
+	unsigned char *pic = new unsigned char[size]; // (GLubyte *)malloc (size);
+
+	// Read in maximum value (ignore) , could be scanned with sscanf as well, but this should be 255...
+	// 3rd line
+	if (fgets (line, MAXLINE, fp) == NULL) {
+		if(mAbortOnError) errFatal("SimpleImage::initFromPpm","fgets failed",SIMWORLD_INITERROR);
+		return 0;
+	}
+
+	// Read in the pixel array row-by-row: 1st row = top scanline */
+	unsigned char *ptr = NULL;
+	ptr = &pic[(windH-1) * rowsize];
+	for (int i = windH; i > 0; i--) {
+		int bytesRead = fread((void *)ptr, 1, rowsize, fp);
+		ptr -= rowsize;
+	}
+
+	// init image
+	initMem(windW, windH);
+	if (filetype == PGM) {
+		// grayscale
+		for(int i=0; i<windW; i++) {
+			for(int j=0; j<windH; j++) {
+				double r = (double)pic[(j*windW+i)*1+0] / 255.;
+				(*this)(i,j) = Vec3(r,r,r);
+			}
+		}
+	} else {
+		// convert grid to RGB vec's
+		for(int i=0; i<windW; i++) {
+			for(int j=0; j<windH; j++) {
+				// return mpData[y*mSize[0]+x];
+				double r = (double)pic[(j*windW+i)*3+0] / 255.;
+				double g = (double)pic[(j*windW+i)*3+1] / 255.;
+				double b = (double)pic[(j*windW+i)*3+2] / 255.;
+				
+				//(*this)(i,j) = Vec3(r,g,b);
+
+				// RGB values have to be rotated to get the right colors!?
+				// this might also be an artifact of photoshop export...?
+				(*this)(i,j) = Vec3(g,b,r);
+			}
+		}
+	}
+
+	delete [] pic;
+	fclose(fp);
+	return 1;
+}
+
+
+// check index is valid
+bool SimpleImage::indexIsValid(int i, int j) 
+{
+	if(i<0) return false;
+	if(j<0) return false;
+	if(i>=mSize[0]) return false;
+	if(j>=mSize[1]) return false;
+	return true;
+}
+
+static Vec3 color2gray(Vec3 c) {
+	double d = c[0] + c[1] + c[2];
+	d /= 3.;
+	return Vec3(d);
+}
+
+// compute difference of two images
+double SimpleImage::computeDifferrenceTo(SimpleImage &dstImg, nVec3i offset, Vec3 scale, SimpleImage &mask)
+{
+	double diff = 0.;
+	double cnt = 0.;
+	const int SJ = mSize[1]; 
+	const bool grayScaleConv = true;
+
+#pragma omp parallel default(shared)  reduction(+:diff,cnt)
+#pragma omp for
+	for (int j=0; j<SJ; j++) 
+		for (int i=0; i<mSize[0]; i++) { 
+			Vec3 src = (*this)(i,j);
+
+			int dstx = (int)(  (double)(i+offset[0])*scale[0] );
+			int dsty = (int)(  (double)(j+offset[1])*scale[1] );
+
+			// skip not matching parts
+			if(!dstImg.indexIsValid(dstx,dsty) ) {
+				// penalize outer regions somewhat
+				diff += 1.0;
+				cnt += 0.1;
+				continue;
+			}
+
+			double weight=0.;
+			if(mask.indexIsValid(dstx,dsty) ) {
+				weight = mask.get(dstx,dsty)[0];
+			}
+
+			Vec3 dst = dstImg.get(dstx,dsty);
+			if(grayScaleConv) {
+				dst = color2gray(dst);
+				src = color2gray(src);
+			}
+			Vec3 delta = dst-src;
+
+			diff += normNoSqrt(delta) * weight;
+			cnt += weight;
+			//debMsg("computeDifferrenceTo","at "<<i<<","<<j<<"  get from "<<dstx<<","<<dsty <<" = "<<diff);
+		}
+
+	if(cnt<=0.) return 1e10;
+	return diff/cnt; 
+}
+
+// paste another image into current one
+bool SimpleImage::pasteImage(SimpleImage &dstImg, nVec3i offset, Vec3 scale)
+{
+	for (int j=0; j<mSize[1]; j++) 
+		for (int i=0; i<mSize[0]; i++) { 
+
+			int dstx = (int)(  (double)(i+offset[0])*scale[0] );
+			int dsty = (int)(  (double)(j+offset[1])*scale[1] );
+
+			if(!dstImg.indexIsValid(dstx,dsty) ) {
+				continue;
+			} 
+			Vec3 dst = dstImg.get(dstx,dsty);
+
+			(*this)(i,j) = dst;
+		}
+
+	// return value unused so far...
+	return true;
+}
+
+// init from downsampling
+void SimpleImage::downsampleFrom(SimpleImage *src)
+{
+	nVec3i offset = nVec3i(0);
+	for (int j=0; j<mSize[1]; j++) 
+		for (int i=0; i<mSize[0]; i++) { 
+
+			int dstx = (int)(  (double)(i+offset[0]) * 2. );
+			int dsty = (int)(  (double)(j+offset[1]) * 2. );
+
+			//?? 
+
+			// add up region
+			Vec3 srcTotal = Vec3(0.);
+			int cnt = 0;
+			for (int dj=0; dj<2; dj++) 
+				for (int di=0; di<2; di++) { 
+					if(!src->indexIsValid( dstx+di, dsty+dj) ) {
+						continue;
+					} 
+					srcTotal += src->get( dstx+di, dsty+dj);
+					cnt++;
+				}
+			if(cnt>0) srcTotal /= (double)cnt;
+
+			(*this)(i,j) = srcTotal;
+		} 
+}
+
+
+
+}; // DDF
+
