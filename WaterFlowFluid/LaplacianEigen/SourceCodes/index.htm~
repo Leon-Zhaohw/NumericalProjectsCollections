@@ -1,0 +1,10 @@
+<HTML>
+<BODY>
+
+Left mouse button to add forces.
+Right mouse button to add to density field.
+
+<applet code="WebContainer",height="600" width="800">
+</applet>
+</BODY>
+</HTML>

@@ -6,6 +6,40 @@
 
 以下是简短的介绍。
 
+# 本仓库收录代码【重新整理】
+
+### 【WaterFluidFlow】
+
+[eigenFluid]
+
+论文名称：Scalable laplacian eigenfluids.
+
+项目网站： http://www.tkim.graphics/    
+
+值得一看：用余弦傅里叶变换解泊松方程[未完成]，用modified imcomplete cholesky decomposition 解泊松方程[python]。粒子没有速度这个属性，需要前进的时候，直接插值网格。
+
+源代码：本仓库已收录
+
+构建指南：未成功，GLUT_glut_LIBRARY找不到
+
+学习指南：未完成。主体看不懂建议直接看LaplaicanEigen，逻辑相似而更简洁。
+
+相似代码：LaplacianEigen 
+
+[LaplacianEigen]
+
+论文名称：Fluid Dynamics using Laplacian Eigenfunctions
+
+项目网站： http://www.dgp.toronto.edu/~tyler/fluids/
+
+值得一看：用余弦傅里叶变换解泊松方程[未完成]，用modified imcomplete cholesky decomposition 解泊松方程[python]。粒子没有速度这个属性，需要前进的时候，直接插值网格。
+
+源代码：本仓库已收录
+
+构建指南：java，不打算构建
+
+
+
 # 本仓库收录的代码
 
 ### Deformation
@@ -245,7 +279,15 @@ http://graphics.stanford.edu/courses/cs348c-16-fall/ Robert Bridson, Jim Houriha
 
 waveletsTurbulence
 
-Wavelet Turbulence for Fluid Simulationhttps://www.cs.cornell.edu/~tedkim/WTURB/
+论文名称：Wavelet Turbulence for Fluid Simulation
+
+项目地址： https://www.cs.cornell.edu/~tedkim/WTURB/
+
+值得一看：比perlinNoise更好的turbulenceNoise。heatEquation计算方法。三维Voritity计算方法。共轭梯度解算压力
+
+构建指南：我把noiseFFT从项目中移除了，并且注释掉image.h中的几个函数内容。即可成功运行。
+
+复刻进度：主体部分完成，turbulenceNoise没写完，因为涉及到一大堆LU分解，特征值计算，我还不熟悉
 
 FEMFluid
 
@@ -269,7 +311,9 @@ close
 
 eigenFluid
 
-http://www.tkim.graphics/**Scalable laplacian eigenfluids.**
+http://www.tkim.graphics/    **Scalable laplacian eigenfluids.**
+
+构建指南：我直接cmakeLists.txt里的find glut package删除了。
 
 ### Lights&Shadow
 
@@ -795,6 +839,8 @@ IEEE Transactions on Pattern Analysis and Machine Intelligence (PAMI), 2019
 
 代码地址：https://github.com/zhxx1987/tbb_liquid_amgpcg
 
+构建指南：未成功，提示应用程序错误
+
 论文名称：Interpolations of Smoke and Liquid Simulations
 
 项目地址：http://www.ntoken.com/proj_ofblend.html
@@ -895,9 +941,13 @@ ACM Transactions on Graphics 37(4) Article 80 (SIGGRAPH 2018)
 
 # 还有一些代码没下载的
 
-有的是我觉得暂时用不着，但以后有用。有的是会遗漏掉一些。
+代码实在太多啦，还没来得及看呢
 
 https://www.cs.ubc.ca/~rbridson/
+
+http://isgwww.cs.uni-magdeburg.de/graphics/#publications
+
+https://www.cs.ubc.ca/~greif/Publications/Greif_Publications.html
 
 http://people.csail.mit.edu/fredo/ 这些代码都是关于光照阴影的
 
