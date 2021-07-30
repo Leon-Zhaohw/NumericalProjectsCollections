@@ -22,7 +22,7 @@
 
 构建指南：未成功，GLUT_glut_LIBRARY找不到
 
-学习指南：未完成。主体看不懂建议直接看LaplaicanEigen，逻辑相似而更简洁。
+学习指南：代码文件多而复杂。未完成。主体看不懂建议直接看LaplaicanEigen，逻辑相似而更简洁。
 
 相似代码：LaplacianEigen 
 
@@ -35,6 +35,8 @@
 值得一看：用余弦傅里叶变换解泊松方程[未完成]，用modified imcomplete cholesky decomposition 解泊松方程[python]。粒子没有速度这个属性，需要前进的时候，直接插值网格。
 
 源代码：本仓库已收录
+
+学习指南：主代码只有几百行，非常容易。主体部分完成。
 
 构建指南：java，不打算构建
 
