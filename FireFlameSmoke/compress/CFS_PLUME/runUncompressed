@@ -1,3 +1,0 @@
-#!/bin/bash
-
-./bin/reduced3D ./cfg/stam.64.cfg

@@ -1,5 +1,0 @@
-#!/bin/bash
-
-rm -rf ./data/reduced.stam.64/*
-rm -rf ./data/snapshots.stam.64/*
-rm -rf ./scratch/*

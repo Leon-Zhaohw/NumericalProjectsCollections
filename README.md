@@ -2,13 +2,92 @@
 
 这个库专门用于搜集那些难于搜集的代码，这些代码大部分存在于个人网站或教授主页或项目主页上，网站随时会挂掉。
 
-没想到都2021年了，搜索引擎还是这么垃圾，一点都不智能。
+这是我经历半年的惨痛失败后得来的，只读论文，绞尽脑汁也想不出它是怎么实现了。自己写个的话连大方向都把握不对。因此我更改策略，不如先广泛阅读源码。不是每篇论文都能找到源码，因此对于找不到源码的论文，我就先当其不存在了。
 
-以下是简短的介绍。
+有的源码是matlab，运行起来很简单。而有的c++代码依赖各种库，不容易运行起来。而后者才是占这些源码中的多数。
+
+另外有的项目代码实在太多了，一下子看懂不可能。于是只好化整为零，把原代码的几小部分实现出来。卡住超过半天的话立马换下一个项目。
 
 # 本仓库收录代码【重新整理】
 
+### 【Deformation】
+
+[dynamicDeformables]
+
+论文名称：**Dynamic Deformables:
+Implementation and Production Practicalities**
+
+项目网站：http://www.tkim.graphics/DYNAMIC_DEFORMABLES/
+
+值得一看：
+
+源代码：已收录
+
+学习指南：*SIGGRAPH Courses, 2020*。先看很不错的Courses Notes再看代码。文风形式很有趣。
+
+构建指南：matlab
+
+### 【Graphics】
+
+[proceduralShadrBandlimiting]
+
+论文名称： Approximate Program Smoothing Using Mean-Variance Statistics, with Application to Procedural Shader Bandlimiting
+
+项目网站：https://www.cs.princeton.edu/~yutingy/docs/eg_2018.html
+
+值得一看：
+
+源代码：https://github.com/yyuting/approximate_program_smoothing
+
+构建指南：c++
+
+### 【FireFlameSmoke】
+
+[compress]
+
+论文名称：**Compressing Fluid Subspaces**
+
+项目网站： http://www.tkim.graphics/COMPRESSING/source.html
+
+值得一看：用三维余弦变换压缩三维数据，waveletNoise其实就是waveTurbulenceNoise
+
+源代码：本仓库已收录
+
+构建指南：c++，未成功
+
+学习指南：
+
+### 【Image】
+
+[melding]
+
+论文名称：**Image Melding: Combining Inconsistent Images**
+**using Patch-based Synthesis**
+
+项目网站：https://web.ece.ucsb.edu/~psen/melding
+
+值得一看：
+
+源代码：本仓库已收录
+
+构建指南：matlab
+
+[NeuralTextureSynthesis]
+
+论文名称：**Image Melding: Combining Inconsistent Images**
+**using Patch-based Synthesis**
+
+项目网站：**Stable and Controllable Neural Texture Synthesis and Style Transfer Using Histogram Losses**
+
+值得一看：
+
+源代码：https://github.com/pierre-wilmot/NeuralTextureSynthesis
+
+构建指南：python
+
 ### 【WaterFluidFlow】
+
+
 
 [eigenFluid]
 
@@ -32,7 +111,7 @@
 
 项目网站： http://www.dgp.toronto.edu/~tyler/fluids/
 
-值得一看：用余弦傅里叶变换解泊松方程[未完成]，用modified imcomplete cholesky decomposition 解泊松方程[python]。粒子没有速度这个属性，需要前进的时候，直接插值网格。
+值得一看：涡量输运方程求解
 
 源代码：本仓库已收录
 

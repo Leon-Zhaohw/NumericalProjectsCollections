@@ -1,7 +1,0 @@
-#!/bin/bash
-
-./bin/fluid3D ./cfg/stam.64.cfg
-./bin/svdOutOfCoreMultiple ./cfg/stam.64.cfg
-./bin/cubatureGeneratorStamStaged ./cfg/stam.64.cfg
-./bin/buildProducts ./cfg/stam.64.cfg
-./bin/compressMatrices ./cfg/stam.64.cfg
