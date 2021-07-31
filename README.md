@@ -2,11 +2,13 @@
 
 这个库专门用于搜集那些难于搜集的代码，这些代码大部分存在于个人网站或教授主页或项目主页上，网站随时会挂掉。
 
-这是我经历半年的惨痛失败后得来的，只读论文，绞尽脑汁也想不出它是怎么实现了。自己写个的话连大方向都把握不对。因此我更改策略，不如先广泛阅读源码。不是每篇论文都能找到源码，因此对于找不到源码的论文，我就先当其不存在了。
+我发现，只看论文或书本，很可能绞尽脑汁也想不出到底是怎么实现的，自己写一个甚至可能连大方向都错了。但有了源码参考后，难度瞬间下降99%。至于那些没配套源码的论文或书本，就先暂时当它们不存在了。
 
 有的源码是matlab，运行起来很简单。而有的c++代码依赖各种库，不容易运行起来。而后者才是占这些源码中的多数。
 
-另外有的项目代码实在太多了，一下子看懂不可能。于是只好化整为零，把原代码的几小部分实现出来。卡住超过半天的话立马换下一个项目。
+另外有的项目代码实在太多了，一下子看懂不可能。于是只好化整为零，把原代码的几小部分实现出来。卡住超过半天的话立马换下一个项目。反正项目多的是。
+
+预计这个项目将会很大，目前已超过200MB了。短时间会超过1GB。我尽量不解压。
 
 # 本仓库收录代码【重新整理】
 
@@ -23,9 +25,35 @@ Implementation and Production Practicalities**
 
 源代码：已收录
 
-学习指南：*SIGGRAPH Courses, 2020*。先看很不错的Courses Notes再看代码。文风形式很有趣。
+学习指南：*SIGGRAPH Courses, 2020*。先看很不错的Courses Notes再看代码。文风形式很有趣。详细地推导了St. Venant-Kirchhoff 和很多公式。
 
 构建指南：matlab
+
+[interactive]
+
+论文名称：Interactive Deformation Using Modal Analysis with Constraints
+
+项目网站：http://graphics.berkeley.edu/papers/Hauser-IDU-2003-06/
+
+值得一看：
+
+源代码：已收录,6MB
+
+学习指南：还没来得及学
+
+构建指南：c++
+
+[]
+
+论文名称：Strain Limiting for Clustered Shape Matching
+
+项目网站：https://cal.cs.umbc.edu/Papers/Bargteil-2014-SLF/
+
+值得一看：
+
+源代码：https://github.com/benjones/strainLimitingForClusteredShapeMatching
+
+学习指南：还没来得及学
 
 ### 【Graphics】
 
@@ -57,6 +85,22 @@ Implementation and Production Practicalities**
 
 学习指南：
 
+### 【FrontTracking】
+
+[skin]
+
+论文名称：A Level-set Method for Skinning Animated Particle Data
+
+项目网站： https://cal.cs.umbc.edu/Papers/Bhattacharya-2015-ALM/
+
+值得一看：
+
+源代码：本仓库已收录
+
+构建指南：只有很少的c++文件
+
+学习指南：
+
 ### 【Image】
 
 [melding]
@@ -85,9 +129,47 @@ Implementation and Production Practicalities**
 
 构建指南：python
 
+### 【Physics】
+
+[PhysicsBasedAnimation]
+
+论文名称：**An Introduction to Physics-based Animation**
+
+项目网站：https://cal.cs.umbc.edu/Courses/PhysicsBasedAnimation/
+
+值得一看：
+
+源代码：本仓库已收录2019版的。2018版需自行下载。
+
+构建指南：c++，只用了Eigen库，直接拉到Eigen库中去。读取文件的文件名用绝对路径，.json里读取网格的路径也要改成绝对路径。花了一个小时终于搞定。
+
+[]
+
+论文名称：**ARCSim: Adaptive Refining and Coarsening Simulator**
+
+项目网站：http://graphics.berkeley.edu/resources/ARCSim/
+
+值得一看：开源的小巧物理模拟软件
+
+源代码：未收录
+
+构建指南：
+
+### 【Plastic】
+
+[localRemehing]
+
+论文名称：**Dynamic Local Remeshing for Elastoplastic Simulation**
+
+项目网站：http://graphics.berkeley.edu/papers/Wicke-DLR-2010-07/
+
+值得一看：
+
+源代码：已收录
+
+构建指南：c++，构建非常简单，CMake一遍过，只需解决win10下没用sys/time.h的问题
+
 ### 【WaterFluidFlow】
-
-
 
 [eigenFluid]
 
@@ -119,7 +201,15 @@ Implementation and Production Practicalities**
 
 构建指南：java，不打算构建
 
+[**Clebsch**]
 
+论文名称：Clebsch Gauge Fluid
+
+项目网站： https://y-sq.github.io/proj/clebsch_gauge_fluid/
+
+值得一看：
+
+源代码：本仓库已收录，不过少了许多文件
 
 # 本仓库收录的代码
 
@@ -1023,6 +1113,8 @@ ACM Transactions on Graphics 37(4) Article 80 (SIGGRAPH 2018)
 # 还有一些代码没下载的
 
 代码实在太多啦，还没来得及看呢
+
+http://graphics.berkeley.edu/resources/index.html
 
 https://www.cs.ubc.ca/~rbridson/
 

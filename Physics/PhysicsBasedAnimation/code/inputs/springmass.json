@@ -1,0 +1,12 @@
+{
+	"dt" : 0.000333333,
+	"total_time" : 5.0,
+	"stiffness" : 1e5,
+	"damping" : 0.05,
+	"objects" : [
+		{
+			"filename" : "inputs/input.sm"
+		}
+	],
+        "output_fname" : "sm-%02d.%03d.obj"
+}
