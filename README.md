@@ -1,14 +1,18 @@
 # NumericalProjectsCollections
 
-这个库专门用于搜集那些难于搜集的代码，这些代码大部分存在于个人网站或教授主页或项目主页上，网站随时会挂掉。
+这个库专门用于搜集那些难于搜集的代码，这些代码大部分存在于个人网站或教授主页或项目主页上，网站很难找，并且随时会挂掉。
 
-我发现，只看论文或书本，很可能绞尽脑汁也想不出到底是怎么实现的，自己写一个甚至可能连大方向都错了。但有了源码参考后，难度瞬间下降99%。至于那些没配套源码的论文或书本，就先暂时当它们不存在了。
+我发现，只看论文或书本，很可能绞尽脑汁也想不出到底是怎么实现的，自己写一个甚至可能连大方向都错了。但有了源码参考后，难度瞬间下降90%。如果还能把源码运行起来，那么难度已经约等于零了。至于那些没配套源码的论文或书本，就先暂时当它们不存在了。
 
-有的源码是matlab，运行起来很简单。而有的c++代码依赖各种库，不容易运行起来。而后者才是占这些源码中的多数。
+有的源码是matlab，运行起来很简单。而有的c++代码依赖各种库，不容易运行起来。而后者才是占这些源码中的多数。很多代码都是论文中实现的简化版。
+
+我学习的方法主要是，把这些c++的,matlab的,julia的,fortran的代码，手工翻译成python代码，也就是用python重写一遍，这样就能理解代码的50%，剩下的数学原理之后再慢慢思考。
 
 另外有的项目代码实在太多了，一下子看懂不可能。于是只好化整为零，把原代码的几小部分实现出来。卡住超过半天的话立马换下一个项目。反正项目多的是。
 
 预计这个项目将会很大，目前已超过200MB了。短时间会超过1GB。我尽量不解压。
+
+持续更新维护中...
 
 # 本仓库收录代码【重新整理】
 
@@ -129,6 +133,32 @@ Implementation and Production Practicalities**
 
 构建指南：python
 
+### 【LightShadow】
+
+[photonbeam]
+
+论文名称：Photon Beam Diffusion: A Hybrid Monte Carlo Method for Subsurface Scattering
+
+项目网站：**https://graphics.pixar.com/library/**
+
+值得一看：
+
+源代码：已收录
+
+构建指南：matlab
+
+### 【Math】
+
+[Eigen]
+
+项目网站：https://eigen.tuxfamily.org/index.php?title=Main_Page
+
+值得一看：被很多c++项目使用的超受欢迎的数学库，里面有很多数值算法的实现
+
+源代码：gitlab
+
+构建指南：c++，无外部依赖，cmake一遍成功
+
 ### 【Physics】
 
 [PhysicsBasedAnimation]
@@ -137,9 +167,11 @@ Implementation and Production Practicalities**
 
 项目网站：https://cal.cs.umbc.edu/Courses/PhysicsBasedAnimation/
 
-值得一看：
+值得一看：显式有限元，隐式有限元，及对比。
 
 源代码：本仓库已收录2019版的。2018版需自行下载。
+
+学习指南：比较简单，已写成相应版本的python代码。
 
 构建指南：c++，只用了Eigen库，直接拉到Eigen库中去。读取文件的文件名用绝对路径，.json里读取网格的路径也要改成绝对路径。花了一个小时终于搞定。
 
@@ -167,7 +199,53 @@ Implementation and Production Practicalities**
 
 源代码：已收录
 
-构建指南：c++，构建非常简单，CMake一遍过，只需解决win10下没用sys/time.h的问题
+构建指南：c++，构建非常简单，CMake一遍过，只需解决win10下没用sys/time.h的问题。然而还没解决
+
+[sharpKevlinlets]
+
+论文名称：Sharp Kelvinlets: Elastic Deformations with Cusps and Localized Falloffs
+
+Dynamic Kelvinlets: Secondary Motions based on Fundamental Solutions of Elastodynamics
+
+项目网站：http://fernandodegoes.org/ 
+
+值得一看：代码挺简单的，仅仅是平板变个形。如何做到文章里的效果还需要思考。以及如何把顶点数据输出成obj三维文件。
+
+源代码：已收录。此库已包含了dynamicKevlinlets 的代码
+
+构建指南：只用了Eigen库。外加从网上下载个getopt.h和getopt.c即可解决编译问题。运行输出成功。
+
+[**anisotropicHyperelasticity**]
+
+论文名称：Anisotropic Elasticity for Inversion-Safety and Element Rehabilitation
+
+项目网站：https://graphics.pixar.com/library/indexAuthorFernando_de_Goes.html
+
+值得一看：first Piola-Kirchhoff stress解析解和数值解
+
+源代码：已收录
+
+构建指南：matlab
+
+### 【SkinSkeletonBone】
+
+[**NeoHookeanFlesh**]
+
+论文名称：Stable Neo-Hookean Flesh Simulation
+
+项目网站： https://graphics.pixar.com/library/indexAuthorFernando_de_Goes.html
+
+值得一看：c++ 项目结构和注释写得很简洁易懂。
+
+源代码：本仓库已收录
+
+构建指南：只用了Eigen库，无其他依赖。一遍构建成功。
+
+学习指南：代码文件居然用模型网格的是立方体，比某些二维项目好多了。代码所作的就是拉伸了这个立方体，导致立方体中间截面变小，就像在拉面团。记得看Readme.md手动写命令参数。改编成python很有挑战性。目前写了一半，弄不懂的地方太多了。
+
+
+
+
 
 ### 【WaterFluidFlow】
 
@@ -219,27 +297,17 @@ Implementation and Production Practicalities**
 
 Optimizing Cubature for Efficient Integration of Subspace Deformationshttps://www.cs.cornell.edu/~stevenan。构建难度：高。这是个c++项目，有十几个文件，却连main函数都没有。
 
-**dynamicKevlinlets**
 
-http://fernandodegoes.org/ Dynamic Kelvinlets: Secondary Motions based on Fundamental Solutions of Elastodynamics
-de Goes, James
 
-sharp **Kevlinlets**
 
-http://fernandodegoes.org/ Sharp Kelvinlets: Elastic Deformations with Cusps and Localized Falloffs
-de Goes, James
 
-**anisotropicHyperelasticity**
 
-Anisotropic Elasticity for Inversion-Safety and Element Rehabilitationhttps://graphics.pixar.com/library/indexAuthorFernando_de_Goes.html
 
 **Analytic Eigensystems**
 
 Analytic Eigensystems for Isotropic Distortion Energieshttps://graphics.pixar.com/library/indexAuthorFernando_de_Goes.html
 
-**NeoHookeanFlesh**
 
-Stable Neo-Hookean Flesh Simulationhttps://graphics.pixar.com/library/indexAuthorFernando_de_Goes.html
 
 **boundedBiharmonic**
 
